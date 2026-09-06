@@ -1,0 +1,4 @@
+{
+  "name": "developer-docs-mcp",
+  "description": "MCP servers for fetching official documentation for FastMCP, LangGraph, FastAPI, Qdrant, E2B, Firecrawl, and LiteLLM"
+}

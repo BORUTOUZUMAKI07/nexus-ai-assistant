@@ -1,0 +1,53 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  nightly-backend:
+    name: Nightly Backend Suite
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: uv sync --group dev
+      - name: Run full backend test suite (unit + integration + e2e)
+        shell: bash
+        run: |
+          uv run pytest tests/ -q -p no:cacheprovider 2>&1 | tee /tmp/nightly_output.log
+          uv run pytest tests/e2e -q -p no:cacheprovider -m e2e 2>&1 | tee -a /tmp/nightly_output.log
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-backend-log
+          path: /tmp/nightly_output.log
+
+  nightly-frontend:
+    name: Nightly Frontend Suite
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ./frontend/package-lock.json
+      - run: npm ci --legacy-peer-deps
+      - run: npm run test -- --coverage
