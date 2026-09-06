@@ -1,0 +1,38 @@
+version: "1.0"
+
+# Evidence Gate Thresholds (Harness Layer 5)
+thresholds:
+  faithfulness_min: 0.70
+  answer_relevance_min: 0.70
+  context_precision_min: 0.70
+  context_recall_min: 0.70
+  hallucination_max: 0.30
+  toxicity_max: 0.10
+
+# G-Eval LLM-as-a-Judge Criteria Rubrics
+g_eval_rubrics:
+  code_quality:
+    criteria: "Evaluate the generated code based on correctness, type safety, error handling, and clean code principles."
+    evaluation_steps:
+      - "Check if the code handles edge cases and invalid inputs."
+      - "Verify all type hints and docstrings are accurate."
+      - "Confirm that no security vulnerabilities (eval, exec, injection) exist."
+    threshold: 0.80
+
+  research_thoroughness:
+    criteria: "Evaluate if the research synthesis is comprehensive, unbiased, and properly grounded with verified citations."
+    evaluation_steps:
+      - "Verify that all assertions have matching citations."
+      - "Check if alternative perspectives or limitations are stated."
+      - "Ensure there is no repetitive or filler content."
+    threshold: 0.75
+
+# Guardrail Probes & Action Tiers
+guardrail_tiers:
+  block_and_notify:
+    - "prompt_injection"
+    - "jailbreak_attempt"
+    - "pii_unmasked_in_output"
+  sanitize_and_continue:
+    - "pii_in_input" # auto-redact SSN, phone, email
+    - "profanity"

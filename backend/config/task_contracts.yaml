@@ -1,0 +1,49 @@
+version: "1.0"
+
+# Task Contract Templates (Harness Layer 1)
+task_contracts:
+  code_generation_task:
+    description: "Generate executable, bug-free, type-safe code"
+    constraints:
+      - "do not modify database schema directly"
+      - "maintain backwards compatibility with existing APIs"
+      - "ensure all new functions have docstrings and type annotations"
+    done_when:
+      - "code executes in E2B sandbox without errors"
+      - "all syntax and typecheck passes"
+      - "output matches required response schema"
+    escalate_when:
+      - "execution fails 3 times with the same traceback"
+      - "external network access is required by the script"
+      - "destructive file deletion is attempted"
+
+  research_task:
+    description: "Multi-step web and document research with citations"
+    constraints:
+      - "only cite sources retrieved in current run"
+      - "minimum 2 corroborating sources for factual claims"
+      - "no uncited statements"
+    done_when:
+      - "retrieved at least 3 high-relevance chunks"
+      - "citation verification score >= 0.8"
+      - "no unsupported claims detected by critic"
+    escalate_when:
+      - "search queries return zero relevant results after 3 attempts"
+      - "contradictory facts found in trusted sources"
+
+  document_qa_task:
+    description: "Question answering over uploaded user documents (RAG)"
+    constraints:
+      - "rely strictly on provided document chunks"
+      - "do not hallucinate beyond the provided context"
+    done_when:
+      - "context relevance score >= 0.7"
+      - "answer faithfulness score >= 0.75"
+    escalate_when:
+      - "document does not contain sufficient information to answer"
+
+# Attention Budget & Compaction Thresholds (Harness Layer 2)
+context_budget:
+  warning_threshold_ratio: 0.60 # Trigger background context compression
+  compaction_threshold_ratio: 0.85 # Trigger auto-compaction (Cursor pattern)
+  hard_limit_ratio: 0.95 # Truncate oldest message turns

@@ -1,0 +1,78 @@
+version: "1.0"
+routing_strategy: "cost_optimized_quality_first"
+
+# Primary & Fallback Models (All Free Tier Supported)
+models:
+  fast_chat:
+    primary: "groq/llama-3.1-8b-instant"
+    fallbacks:
+      - "openrouter/meta-llama/llama-3.1-8b-instruct:free"
+      - "openrouter/google/gemini-flash-1.5:free"
+    context_window: 8192
+    max_tokens: 4096
+    temperature: 0.7
+
+  complex_reasoning:
+    primary: "groq/llama-3.3-70b-versatile"
+    fallbacks:
+      - "openrouter/meta-llama/llama-3.3-70b-instruct:free"
+      - "openrouter/qwen/qwen-2.5-7b-instruct:free"
+      - "openrouter/google/gemini-flash-1.5:free"
+    context_window: 8192
+    max_tokens: 4096
+    temperature: 0.6
+
+  large_context:
+    primary: "groq/mixtral-8x7b-32768"
+    fallbacks:
+      - "openrouter/google/gemini-flash-1.5:free" # 1M context
+    context_window: 32768
+    max_tokens: 4096
+    temperature: 0.5
+
+  vision_analysis:
+    primary: "groq/llama-3.2-11b-vision-preview"
+    fallbacks:
+      - "openrouter/google/gemini-flash-1.5:free"
+    context_window: 8192
+    max_tokens: 4096
+    temperature: 0.2
+
+  audio_transcription:
+    primary: "groq/whisper-large-v3"
+    fallbacks:
+      - "groq/whisper-large-v3-turbo"
+
+# 3-Tier Fallback Rules
+fallback_tiers:
+  # General error or 429 rate limit fallback
+  general_fallbacks:
+    groq/llama-3.3-70b-versatile:
+      - "openrouter/meta-llama/llama-3.3-70b-instruct:free"
+      - "openrouter/qwen/qwen-2.5-7b-instruct:free"
+    groq/llama-3.1-8b-instant:
+      - "openrouter/meta-llama/llama-3.1-8b-instruct:free"
+
+  # Automatic escalation when context window is exceeded
+  context_window_fallbacks:
+    groq/llama-3.3-70b-versatile:
+      - "groq/mixtral-8x7b-32768"
+      - "openrouter/google/gemini-flash-1.5:free"
+    groq/llama-3.1-8b-instant:
+      - "groq/llama-3.3-70b-versatile"
+      - "groq/mixtral-8x7b-32768"
+      - "openrouter/google/gemini-flash-1.5:free"
+
+  # Content policy block fallback
+  content_policy_fallbacks:
+    groq/llama-3.3-70b-versatile:
+      - "openrouter/qwen/qwen-2.5-7b-instruct:free"
+
+# Router Configuration
+router_settings:
+  cooldown_time_seconds: 60
+  max_retries_per_model: 2
+  retry_after_header: true
+  enable_prompt_caching: true
+  cache_control_headers:
+    cache-control: "ephemeral"
