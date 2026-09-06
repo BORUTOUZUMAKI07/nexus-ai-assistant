@@ -1,0 +1,87 @@
+version: "1.0"
+policy_name: "nexus_tool_permission_ladder"
+
+# Global Tool Defaults
+defaults:
+  timeout_seconds: 30
+  max_retries: 2
+  rate_limit_per_minute: 60
+
+# Tool Permission Ladder
+tools:
+  web_search:
+    description: "Search the public web and extract clean markdown using Firecrawl"
+    mode: "automatic"
+    timeout_seconds: 15
+    max_calls_per_run: 5
+    poka_yoke:
+      clamp_max_results: 10
+      sanitize_query: true
+    required_roles: ["user", "admin", "moderator"]
+
+  calculator:
+    description: "Safely evaluate mathematical expressions"
+    mode: "automatic"
+    timeout_seconds: 5
+    required_roles: ["user", "admin", "moderator"]
+
+  web_scrape:
+    description: "Scrape and clean a specific URL content using Firecrawl"
+    mode: "automatic"
+    timeout_seconds: 20
+    max_calls_per_run: 5
+    poka_yoke:
+      block_internal_ips: true
+      block_private_subnets: true
+    required_roles: ["user", "admin", "moderator"]
+
+  file_parser:
+    description: "Parse PDF, DOCX, and image documents into structured text"
+    mode: "automatic"
+    timeout_seconds: 30
+    max_file_size_bytes: 52428800 # 50MB
+    required_roles: ["user", "admin", "moderator"]
+
+  code_interpreter:
+    description: "Execute Python code inside an isolated E2B microVM sandbox"
+    mode: "automatic"
+    timeout_seconds: 30
+    memory_limit_mb: 512
+    poka_yoke:
+      block_network: true
+      detect_infinite_loops: true
+      detect_fork_bombs: true
+    requires_approval_if:
+      - contains_system_commands
+      - contains_socket_calls
+      - execution_time_exceeds_20s
+    required_roles: ["user", "admin", "moderator"]
+
+  database_query:
+    description: "Execute read-only SQL queries against user data"
+    mode: "automatic"
+    poka_yoke:
+      readonly_enforced: true
+      disallow_mutations: true # DROP, DELETE, ALTER, UPDATE, INSERT forbidden
+    required_roles: ["user", "admin"]
+
+  delete_conversation:
+    description: "Permanently delete a conversation thread and its message history"
+    mode: "approval_required"
+    risk_level: "high"
+    requires:
+      - user_confirmation
+      - conversation_ownership_verified
+    required_roles: ["user", "admin"]
+
+  export_user_data:
+    description: "Export all user conversations, files, and memories as a ZIP archive"
+    mode: "approval_required"
+    risk_level: "medium"
+    required_roles: ["user", "admin"]
+
+  system_admin_config:
+    description: "Update system settings or provider credentials"
+    mode: "approval_required"
+    risk_level: "critical"
+    required_roles: ["admin"]

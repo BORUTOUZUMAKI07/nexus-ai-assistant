@@ -1,0 +1,138 @@
+[project]
+name = "nexus-ai-backend"
+version = "0.1.0"
+description = "Production-grade AI Assistant backend following DDD, SOLID, and Harness Engineering"
+authors = [{ name = "Nexus Team" }]
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+    # Web Framework & Server
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "gunicorn>=22.0.0",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27.0",
+    "aiofiles>=23.2.0",
+    
+    # Database & ORM
+    "sqlmodel>=0.0.21",
+    "alembic>=1.13.0",
+    "asyncpg>=0.29.0",
+    "psycopg2-binary>=2.9.9",
+    "psycopg[binary,pool]>=3.1.0",
+    
+    # Caching & Background Queues
+    "redis>=5.0.0",
+    "celery>=5.3.0",
+    "flower>=2.0.0",
+    
+    # Authentication & Security
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt,argon2]>=1.7.4",
+    "authlib>=1.3.0",
+    "pyotp>=2.9.0",
+    "cryptography>=42.0.0",
+    
+    # Model Context Protocol & Agents
+    "fastmcp>=0.1.0",
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "langchain-core>=0.2.0",
+    
+    # LLM Routing, Structured Output & Tools
+    "litellm>=1.40.0",
+    "instructor>=1.3.0",
+    "openai>=1.30.0",
+    "anthropic>=0.28.0",
+    "tiktoken>=0.7.0",
+    
+    # Vector DB & Embeddings & RAG
+    "qdrant-client>=1.9.0",
+    "sentence-transformers>=3.0.0",
+    "rank-bm25>=0.2.2",
+    "flashrank>=0.2.0",
+    "pymupdf>=1.24.0",
+    "python-docx>=1.1.0",
+    "pillow>=10.4.0",
+    
+    # Sandboxing & Web Research
+    "e2b-code-interpreter>=0.0.10",
+    "firecrawl-py>=0.0.16",
+    "ddgs>=9.16",
+    
+    # Observability & Evaluation
+    "deepeval>=1.0.0",
+    "ragas>=0.1.0",
+    "garak>=0.9.0",
+    "guardrails-ai>=0.5.0",
+    "structlog>=24.0.0",
+    "sentry-sdk>=2.7.0",
+    
+    # Memory Management
+    "mem0ai>=0.1.0",
+
+    # Utilities
+    "pydantic[email]>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "pyyaml>=6.0.1",
+    "tenacity>=8.3.0",
+    "cachetools>=5.3.0",
+    "msgspec>=0.18.0",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "testcontainers[postgres]>=4.0.0",
+    "psycopg2-binary>=2.9.9",
+    "black>=24.4.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+    "isort>=5.13.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501", "E712"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F401"]
+"app/api/deps.py" = ["F821"]
+"app/core/exceptions.py" = ["N818"]
+"tests/integration/conftest.py" = ["E402"]
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+  asyncio_mode = "auto"
+  asyncio_default_test_loop_scope = "session"
+  asyncio_default_fixture_loop_scope = "session"
+  addopts = "-v -p no:deepeval -m 'not e2e'"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests that exercise repositories/routes against a real (test) database",
+    "e2e: marks full-stack tests that boot a live uvicorn server (deselect by default; run with '-m e2e')",
+]
