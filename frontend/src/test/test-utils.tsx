@@ -13,7 +13,7 @@ function AppWrapper({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 
-interface CustomRenderOptions extends Omit<RenderOptions, "wrapper"> {}
+type CustomRenderOptions = Omit<RenderOptions, "wrapper">
 
 function customRender(ui: ReactElement, options?: CustomRenderOptions) {
   return render(ui, { wrapper: AppWrapper, ...options })

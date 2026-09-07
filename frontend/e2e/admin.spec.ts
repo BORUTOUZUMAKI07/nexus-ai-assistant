@@ -1,4 +1,5 @@
 import { test, expect, NexusAppPage, setupConversationMocks, setAuthState, mockApi } from "./fixtures"
+import type { Page } from "@playwright/test"
 
 const USERS = [
   {
@@ -27,7 +28,7 @@ test.describe("Admin Center", () => {
     await setupConversationMocks(page).setup()
   })
 
-  async function openAdmin(page) {
+  async function openAdmin(page: Page) {
     const app = new NexusAppPage(page)
     await app.goto()
     await page.getByText("Admin Center").click()

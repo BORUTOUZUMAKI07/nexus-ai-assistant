@@ -11,8 +11,6 @@ import {
   ThumbsUp,
   ThumbsDown,
   Terminal,
-  Search,
-  ExternalLink,
   BookOpen,
   Sparkles,
 } from "lucide-react";
@@ -26,8 +24,8 @@ export interface CitationItem {
 
 export interface ToolCallItem {
   name: string;
-  args?: any;
-  result?: any;
+  args?: unknown;
+  result?: unknown;
   status: string;
 }
 
@@ -143,7 +141,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ messages, isLoading, onFeedb
                             {t.status}
                           </span>
                         </div>
-                        {t.result && (
+                        {t.result !== undefined && (
                           <pre className="text-[10px] text-neutral-300 max-h-32 overflow-y-auto mt-1 bg-transparent p-0 border-0">
                             {typeof t.result === "string" ? t.result : JSON.stringify(t.result, null, 2)}
                           </pre>

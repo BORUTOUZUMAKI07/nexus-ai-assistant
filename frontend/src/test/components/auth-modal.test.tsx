@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { AuthModal } from "@/components/AuthModal"
 import { TOKEN_COOKIE } from "@/lib/auth"

@@ -4,7 +4,6 @@ import React from "react";
 import {
   MessageSquare,
   Plus,
-  Compass,
   FileText,
   Sliders,
   BarChart2,
