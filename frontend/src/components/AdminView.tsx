@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   ShieldAlert,
   Users,
@@ -50,7 +50,7 @@ export const AdminView: React.FC = () => {
   });
   const [loading, setLoading] = useState(false);
 
-  const fetchAdminData = async () => {
+  const fetchAdminData = useCallback(async () => {
     setLoading(true);
     try {
       if (activeTab === "users") {
@@ -118,12 +118,12 @@ export const AdminView: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeTab]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchAdminData();
-  }, [activeTab]);
+  }, [fetchAdminData]);
 
   const toggleUser = async (userId: string) => {
     try {
