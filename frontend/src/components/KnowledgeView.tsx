@@ -1,51 +1,61 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Upload, FileText, Trash2, Search, CheckCircle2, AlertCircle, Database, Loader2 } from "lucide-react";
+import { Upload, FileText, Trash2, Search, CheckCircle2, Database, Loader2 } from "lucide-react";
 import { fetchKnowledgeFiles, uploadFile, deleteFile, KnowledgeFile } from "@/lib/api";
+
+interface SearchResultItem {
+  filename?: string;
+  chunk_index?: number;
+  score?: number;
+  content_snippet?: string;
+  snippet?: string;
+}
 
 export const KnowledgeView: React.FC = () => {
   const [files, setFiles] = useState<KnowledgeFile[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const loadFiles = async () => {
-    setIsLoading(true);
-    try {
-      const data = await fetchKnowledgeFiles();
-      setFiles(data);
-    } catch (err) {
-      console.warn("Could not fetch knowledge files from backend, using fallback items:", err);
-      // Retain sample files if backend isn't ready
-      setFiles([
-        {
-          id: "demo-1",
-          filename: "Nexus_Architecture_Master_Spec.pdf",
-          chunk_count: 42,
-          size_bytes: 145200,
-          status: "indexed",
-          created_at: new Date().toLocaleDateString(),
-        },
-        {
-          id: "demo-2",
-          filename: "Production_AI_Design_Patterns.md",
-          chunk_count: 88,
-          size_bytes: 298000,
-          status: "indexed",
-          created_at: new Date().toLocaleDateString(),
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   useEffect(() => {
-    loadFiles();
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await fetchKnowledgeFiles();
+        if (!cancelled) setFiles(data);
+      } catch (err) {
+        if (cancelled) return;
+        console.warn("Could not fetch knowledge files from backend, using fallback items:", err);
+        // Retain sample files if backend isn't ready
+        setFiles([
+          {
+            id: "demo-1",
+            filename: "Nexus_Architecture_Master_Spec.pdf",
+            chunk_count: 42,
+            size_bytes: 145200,
+            status: "indexed",
+            created_at: new Date().toLocaleDateString(),
+          },
+          {
+            id: "demo-2",
+            filename: "Production_AI_Design_Patterns.md",
+            chunk_count: 88,
+            size_bytes: 298000,
+            status: "indexed",
+            created_at: new Date().toLocaleDateString(),
+          },
+        ]);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {

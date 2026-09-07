@@ -1,14 +1,14 @@
 "use client";
 
 import React, { useState } from "react";
-import { X, Lock, Mail, User, ArrowRight, ShieldCheck, Sparkles, Loader2 } from "lucide-react";
+import { X, Lock, Mail, User, ArrowRight, Sparkles, Loader2 } from "lucide-react";
 import { registerUser, loginUser } from "@/lib/api";
 import { setAccessToken } from "@/lib/auth";
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (user: any) => void;
+  onSuccess: (user: { access_token: string }) => void;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => {
@@ -39,8 +39,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       const tokenRes = await loginUser({ email, password });
       setAccessToken(tokenRes.access_token);
       onSuccess(tokenRes);
-    } catch (err: any) {
-      setError(err.message || "Authentication failed. Please check your credentials.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");
     } finally {
       setLoading(false);
     }
@@ -165,7 +165,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         <div className="mt-6 pt-4 border-t border-white/5 text-center text-xs text-zinc-400">
           {mode === "login" ? (
             <span>
-              Don't have an account?{" "}
+              Don&apos;t have an account?{" "}
               <button
                 onClick={() => setMode("register")}
                 className="font-medium text-violet-400 hover:text-violet-300 hover:underline"

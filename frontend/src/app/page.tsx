@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Sidebar, ConversationItem } from "@/components/Sidebar";
-import { ChatArea, MessageItem } from "@/components/ChatArea";
+import { ChatArea, MessageItem, CitationItem, ToolCallItem } from "@/components/ChatArea";
 import { ChatInput } from "@/components/ChatInput";
 import { KnowledgeView } from "@/components/KnowledgeView";
 import { UsageView } from "@/components/UsageView";
@@ -183,8 +183,8 @@ export default function Home() {
       const decoder = new TextDecoder();
       let streamContent = "";
       let thoughtProcess = "";
-      let citations: any[] = [];
-      let toolCalls: any[] = [];
+      const citations: CitationItem[] = [];
+      const toolCalls: ToolCallItem[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -250,8 +250,9 @@ export default function Home() {
           );
         }
       }
-    } catch (err: any) {
-      if (err.name !== "AbortError") {
+    } catch (err) {
+      const isAbort = err instanceof Error && err.name === "AbortError";
+      if (!isAbort) {
         console.warn("Chat stream failed, using offline fallback response:", err);
         setMessages((prev) =>
           prev.map((msg) =>

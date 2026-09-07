@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json(await res.json());
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to reach backend" },
       { status: 503 }

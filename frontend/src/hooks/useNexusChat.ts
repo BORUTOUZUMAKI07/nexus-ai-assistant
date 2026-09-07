@@ -67,16 +67,13 @@ interface UseNexusChatOptions {
   conversationId?: string;
   userId?: string;
   mode?: "normal" | "agent" | "code" | "research";
-  onHITLRequest?: (data: HITLRequestAnnotation["data"]) => void;
 }
 
-export function useNexusChat({
-  onHITLRequest,
-}: UseNexusChatOptions = {}) {
+export function useNexusChat({}: UseNexusChatOptions = {}) {
   const [messages, setMessages] = useState<NexusMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const [error] = useState<Error | null>(null);
   const [pendingHITL, setPendingHITL] = useState<
     HITLRequestAnnotation["data"] | null
   >(null);

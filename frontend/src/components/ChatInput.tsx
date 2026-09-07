@@ -6,7 +6,6 @@ import {
   Paperclip,
   Globe,
   Code,
-  Sparkles,
   X,
   FileText,
   StopCircle,

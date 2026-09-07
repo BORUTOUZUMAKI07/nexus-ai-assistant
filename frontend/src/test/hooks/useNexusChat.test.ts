@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { renderHook, act, waitFor } from "@/test/test-utils"
+import { renderHook, act } from "@/test/test-utils"
 import { useNexusChat } from "@/hooks/useNexusChat"
 
 describe("useNexusChat", () => {

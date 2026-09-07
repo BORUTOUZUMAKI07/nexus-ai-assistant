@@ -56,7 +56,7 @@ export const handlers = [
       email = params.get("username") ?? ""
       password = params.get("password") ?? ""
     } else {
-      const body = await request.json()
+      const body = (await request.json()) as { email?: string; password?: string }
       email = body.email ?? ""
       password = body.password ?? ""
     }

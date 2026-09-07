@@ -8,12 +8,10 @@ import {
   FileCheck,
   CheckCircle2,
   XCircle,
-  AlertTriangle,
   RefreshCw,
   Server,
   Database,
   Cpu,
-  Lock,
 } from "lucide-react";
 
 interface AdminUser {
@@ -35,20 +33,22 @@ interface AuditLogItem {
   created_at: string | null;
 }
 
+interface SystemHealth {
+  status: string;
+  database: string;
+  redis_cache: string;
+}
+
 export const AdminView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"users" | "health" | "audit">("users");
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
-  const [systemHealth, setSystemHealth] = useState<any>({
+  const [systemHealth, setSystemHealth] = useState<SystemHealth>({
     status: "healthy",
     database: "connected",
     redis_cache: "connected",
   });
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    fetchAdminData();
-  }, [activeTab]);
 
   const fetchAdminData = async () => {
     setLoading(true);
@@ -119,6 +119,11 @@ export const AdminView: React.FC = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchAdminData();
+  }, [activeTab]);
 
   const toggleUser = async (userId: string) => {
     try {
