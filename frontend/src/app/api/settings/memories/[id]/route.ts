@@ -5,5 +5,5 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const { id } = await params;
-  return proxyJson(`/files/${id}`, { method: "DELETE" });
+  return proxyJson(`/settings/memories/${id}`, { method: "DELETE" });
 }

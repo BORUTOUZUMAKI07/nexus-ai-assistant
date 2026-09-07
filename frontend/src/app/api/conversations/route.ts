@@ -2,8 +2,9 @@ import { NextRequest } from "next/server";
 import { proxyJson } from "@/lib/proxy";
 
 export async function GET(req: NextRequest) {
-  const search = req.nextUrl.search;
-  return proxyJson(`/conversations${search}`);
+  const { searchParams } = new URL(req.url);
+  const query = searchParams.toString();
+  return proxyJson(`/conversations${query ? `?${query}` : ""}`);
 }
 
 export async function POST(req: NextRequest) {

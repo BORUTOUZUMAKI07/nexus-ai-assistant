@@ -4,10 +4,12 @@ export const mockConversations = [
   {
     id: "conv-100",
     title: "Project kickoff",
-    mode: "normal",
+    model: "llama-3.3-70b-versatile",
+    is_pinned: true,
+    is_archived: false,
+    token_count: 12850,
     created_at: "2026-09-01T10:00:00Z",
     updated_at: "2026-09-02T10:00:00Z",
-    message_count: 5,
   },
 ]
 
@@ -25,6 +27,46 @@ export const mockUser = {
   is_active: true,
   created_at: "2026-09-01T10:00:00Z",
 }
+
+export const mockSettings = {
+  id: "st-1",
+  user_id: "user-1",
+  theme: "dark",
+  default_model: "llama-3.3-70b-versatile",
+  system_prompt_override: "You are Nexus AI, a precise production assistant.",
+  temperature: 0.7,
+  max_tokens: 8192,
+  stream_response: true,
+  enable_memory: true,
+  enable_tools: true,
+  custom_settings: {},
+}
+
+export const mockMemories = [
+  {
+    id: "mem-1",
+    user_id: "user-1",
+    content: "Prefers Python and TypeScript for backend work",
+    category: "preference",
+    confidence: 0.9,
+    source_conversation_id: null,
+    is_active: true,
+    created_at: "2026-09-01T10:00:00Z",
+    updated_at: "2026-09-01T10:00:00Z",
+  },
+]
+
+export const mockAPIKeys = [
+  {
+    id: "key-1",
+    user_id: "user-1",
+    provider: "groq",
+    key_preview: "gsk_• • • • 1234",
+    label: "Groq production",
+    is_active: true,
+    created_at: "2026-09-01T10:00:00Z",
+  },
+]
 
 // Vercel AI SDK data-stream protocol body for /api/chat
 export function chatStreamBody(
@@ -86,11 +128,57 @@ export const handlers = [
     return HttpResponse.json({
       id: "conv-new-1",
       title: "New Conversation",
-      mode: "normal",
+      model: "llama-3.3-70b-versatile",
+      is_pinned: false,
+      is_archived: false,
+      token_count: 0,
       created_at: "2026-09-06T00:00:00Z",
       updated_at: "2026-09-06T00:00:00Z",
-      message_count: 0,
     })
+  }),
+
+  http.get("/api/conversations/:id", () =>
+    HttpResponse.json({
+      ...mockConversations[0],
+      system_prompt: null,
+      messages: [
+        {
+          id: "msg-1",
+          role: "user",
+          content: "Tell me about RAG",
+          thought_process: null,
+          model: null,
+          prompt_tokens: 12,
+          completion_tokens: 0,
+          total_tokens: 12,
+          citations: [],
+          tool_calls: [],
+          user_feedback: null,
+          created_at: "2026-09-02T10:00:00Z",
+        },
+        {
+          id: "msg-2",
+          role: "assistant",
+          content: "RAG grounds answers in your indexed documents.",
+          thought_process: "Use hybrid search to find relevant chunks.",
+          model: "llama-3.3-70b-versatile",
+          prompt_tokens: 12,
+          completion_tokens: 8,
+          total_tokens: 20,
+          citations: [],
+          tool_calls: [],
+          user_feedback: null,
+          created_at: "2026-09-02T10:00:01Z",
+        },
+      ],
+    })
+  ),
+
+  http.patch("/api/conversations/:id", ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ detail: "Not authenticated" }, { status: 401 })
+    }
+    return HttpResponse.json(mockConversations[0])
   }),
 
   http.delete("/api/conversations/:id", () =>
@@ -142,13 +230,45 @@ export const handlers = [
   http.get("/api/usage/summary", () =>
     HttpResponse.json({
       total_tokens: 142850,
-      input_tokens: 98420,
-      output_tokens: 44430,
-      total_cost_usd: 0,
-      request_count: 42,
-      period: "30d",
+      prompt_tokens: 98420,
+      completion_tokens: 44430,
+      cached_tokens: 25110,
+      total_cost_usd: 0.0417,
+      total_requests: 42,
+      average_latency_ms: 872,
     })
   ),
+
+  // ── Settings ────────────────────────────────────────────────────────────
+  http.get("/api/settings", () => HttpResponse.json(mockSettings)),
+  http.put("/api/settings", async ({ request }) => {
+    const body = (await request.json()) as Partial<typeof mockSettings>
+    return HttpResponse.json({ ...mockSettings, ...body })
+  }),
+  http.get("/api/settings/memories", () => HttpResponse.json(mockMemories)),
+  http.post("/api/settings/memories", async ({ request }) => {
+    const body = (await request.json()) as { content: string; category?: string }
+    return HttpResponse.json({
+      ...mockMemories[0],
+      id: "mem-new-1",
+      content: body.content,
+      category: body.category ?? "preference",
+    })
+  }),
+  http.delete("/api/settings/memories/:id", () =>
+    HttpResponse.json(null, { status: 204 })
+  ),
+  http.get("/api/settings/keys", () => HttpResponse.json(mockAPIKeys)),
+  http.post("/api/settings/keys", async ({ request }) => {
+    const body = (await request.json()) as { provider: string; label?: string }
+    return HttpResponse.json({
+      ...mockAPIKeys[0],
+      id: "key-new-1",
+      provider: body.provider,
+      key_preview: "• • • • 0000",
+      label: body.label ?? null,
+    })
+  }),
 
   // ── HITL ────────────────────────────────────────────────────────────────
   http.post("/api/hitl", () => HttpResponse.json({ status: "received" })),

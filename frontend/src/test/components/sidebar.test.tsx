@@ -44,7 +44,7 @@ describe("Sidebar", () => {
 
   it("renders the brand and model selector with the current model", () => {
     renderSidebar()
-    expect(screen.getByText("NEXUS AI")).toBeInTheDocument()
+    expect(screen.getByText("Nexus AI")).toBeInTheDocument()
     expect(screen.getByRole("combobox")).toHaveValue("llama-3.3-70b-versatile")
     expect(screen.getByRole("option", { name: /Llama 3.3 70B/ })).toBeInTheDocument()
     expect(screen.getByRole("option", { name: /DeepSeek R1/ })).toBeInTheDocument()
@@ -54,7 +54,7 @@ describe("Sidebar", () => {
     renderSidebar()
     expect(screen.getByText("Pinned")).toBeInTheDocument()
     expect(screen.getByText("Pinned project")).toBeInTheDocument()
-    expect(screen.getByText("Recent Conversations")).toBeInTheDocument()
+    expect(screen.getByText("Recent conversations")).toBeInTheDocument()
     expect(screen.getByText("Recent chat")).toBeInTheDocument()
   })
 
@@ -76,15 +76,15 @@ describe("Sidebar", () => {
 
   it("fires the new chat callback", () => {
     const props = renderSidebar()
-    fireEvent.click(screen.getByText("New Conversation"))
+    fireEvent.click(screen.getByText("New conversation"))
     expect(props.onNewChat).toHaveBeenCalled()
   })
 
   it("switches active tab through the bottom navigation", () => {
     const props = renderSidebar()
-    fireEvent.click(screen.getByText("Usage & Free Tier Budget"))
+    fireEvent.click(screen.getByText("Usage"))
     expect(props.setActiveTab).toHaveBeenCalledWith("usage")
-    fireEvent.click(screen.getByText("Admin Center"))
+    fireEvent.click(screen.getByText("Admin"))
     expect(props.setActiveTab).toHaveBeenCalledWith("admin")
   })
 
@@ -96,6 +96,6 @@ describe("Sidebar", () => {
 
   it("shows an empty state when there are no recent conversations", () => {
     renderSidebar({ conversations: [] })
-    expect(screen.getByText("No recent chats")).toBeInTheDocument()
+    expect(screen.getByText("No recent conversations")).toBeInTheDocument()
   })
 })

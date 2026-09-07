@@ -5,8 +5,8 @@ import { UsageView } from "@/components/UsageView"
 import { AdminView } from "@/components/AdminView"
 import { setAccessToken } from "@/lib/auth"
 
-describe("resilience - degraded API fallbacks", () => {
-  it("KnowledgeView falls back to sample documents when /api/files returns 500", async () => {
+describe("resilience - real error states (no fabricated fallbacks)", () => {
+  it("KnowledgeView shows an error state with retry when /api/files returns 500", async () => {
     setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
@@ -14,10 +14,12 @@ describe("resilience - degraded API fallbacks", () => {
 
     render(<KnowledgeView />)
 
-    expect(await screen.findByText("Nexus_Architecture_Master_Spec.pdf")).toBeInTheDocument()
+    expect(await screen.findByText("Fetch files failed: 500")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Retry/ })).toBeInTheDocument()
+    expect(screen.queryByText("Nexus_Architecture_Master_Spec.pdf")).not.toBeInTheDocument()
   })
 
-  it("KnowledgeView falls back to sample documents on network error", async () => {
+  it("KnowledgeView shows an error state on network error", async () => {
     setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
@@ -25,10 +27,11 @@ describe("resilience - degraded API fallbacks", () => {
 
     render(<KnowledgeView />)
 
-    expect(await screen.findByText("Production_AI_Design_Patterns.md")).toBeInTheDocument()
+    expect(await screen.findByText(/Failed to fetch/)).toBeInTheDocument()
+    expect(screen.queryByText("Production_AI_Design_Patterns.md")).not.toBeInTheDocument()
   })
 
-  it("KnowledgeView RAG search degrades to sample citations on backend error", async () => {
+  it("KnowledgeView surfaces a search error without inventing citations", async () => {
     setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
@@ -39,19 +42,16 @@ describe("resilience - degraded API fallbacks", () => {
     render(<KnowledgeView />)
     await screen.findByText("nexus-spec.pdf")
     fireEvent.change(
-      screen.getByPlaceholderText("Test a query against Qdrant (e.g., 'What is Hybrid Search?')"),
+      screen.getByPlaceholderText("Ask a question about your documents…"),
       { target: { value: "Hybrid Search" } }
     )
     fireEvent.click(screen.getByText("Search"))
 
-    await waitFor(() =>
-      expect(
-        screen.getByText(/Native Hybrid Search uses multi-stage prefetch/)
-      ).toBeInTheDocument()
-    )
+    await waitFor(() => expect(screen.getByText("RAG query failed: 503")).toBeInTheDocument())
+    expect(screen.queryByText(/Native Hybrid Search uses multi-stage prefetch/)).not.toBeInTheDocument()
   })
 
-  it("KnowledgeView shows a local preview item when upload fails", async () => {
+  it("KnowledgeView reports an upload error instead of a local preview", async () => {
     setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
@@ -66,10 +66,11 @@ describe("resilience - degraded API fallbacks", () => {
     const file = new File(["content"], "offline.txt", { type: "text/plain" })
     fireEvent.change(fileInput, { target: { files: [file] } })
 
-    await waitFor(() => expect(screen.getByText("offline.txt")).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText("Upload failed: 500")).toBeInTheDocument())
+    expect(screen.queryByText("offline.txt")).not.toBeInTheDocument()
   })
 
-  it("KnowledgeView removes the row optimistically when delete fails", async () => {
+  it("KnowledgeView keeps the row when delete fails and reports the error", async () => {
     setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
@@ -81,10 +82,11 @@ describe("resilience - degraded API fallbacks", () => {
     await screen.findByText("nexus-spec.pdf")
     fireEvent.click(screen.getByTitle("Delete document"))
 
-    await waitFor(() => expect(screen.queryByText("nexus-spec.pdf")).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText("Delete file failed: 500")).toBeInTheDocument())
+    expect(screen.getByText("nexus-spec.pdf")).toBeInTheDocument()
   })
 
-  it("UsageView shows free-tier estimates when the usage endpoint fails", async () => {
+  it("UsageView shows an error banner when the usage endpoint fails", async () => {
     setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
@@ -94,24 +96,24 @@ describe("resilience - degraded API fallbacks", () => {
 
     render(<UsageView />)
 
-    expect(await screen.findByText("142,850")).toBeInTheDocument()
-    expect(screen.getByText("$0.00")).toBeInTheDocument()
-    expect(screen.getByText("Protected")).toBeInTheDocument()
-    expect(screen.getByText("Zero API Expense")).toBeInTheDocument()
+    expect(await screen.findByText("Fetch usage failed: 500")).toBeInTheDocument()
+    expect(screen.queryByText("142,850")).not.toBeInTheDocument()
   })
 
-  it("AdminView falls back to mock users when the users endpoint returns non-ok", async () => {
+  it("AdminView shows an error banner when the users endpoint fails", async () => {
+    setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(http.get("/api/v1/admin/users", () => HttpResponse.json({}, { status: 500 })))
 
     render(<AdminView />)
 
-    expect(await screen.findByText("Staff Engineer")).toBeInTheDocument()
-    expect(screen.getByText("developer@nexus.ai")).toBeInTheDocument()
+    expect(await screen.findByText("Users endpoint failed: 500")).toBeInTheDocument()
+    expect(screen.queryByText("Staff Engineer")).not.toBeInTheDocument()
   })
 
-  it("AdminView falls back to sample audit logs when the audit endpoint fails", async () => {
+  it("AdminView shows an error banner when the audit endpoint fails", async () => {
+    setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(
@@ -119,8 +121,9 @@ describe("resilience - degraded API fallbacks", () => {
     )
 
     render(<AdminView />)
-    fireEvent.click(screen.getByText("Compliance Audit Logs"))
+    fireEvent.click(screen.getByText("Audit logs"))
 
-    expect(await screen.findByText("FILE_UPLOAD")).toBeInTheDocument()
+    expect(await screen.findByText("Audit logs failed: 500")).toBeInTheDocument()
+    expect(screen.queryByText("FILE_UPLOAD")).not.toBeInTheDocument()
   })
 })
