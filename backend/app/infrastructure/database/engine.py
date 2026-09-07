@@ -1,5 +1,6 @@
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import SQLModel
 
@@ -24,6 +25,9 @@ engine: AsyncEngine = create_async_engine(
     max_overflow=10,
     pool_pre_ping=True,
     pool_recycle=3600,
+    # Hosted Postgres (Supabase) uses pgbouncer transaction pooling, which can
+    # conflict with asyncpg's prepared-statement cache (DuplicatePreparedStatementError).
+    connect_args={"statement_cache_size": 0, "max_cached_statement_lifetime": 0},
 )
 
 
@@ -48,7 +52,7 @@ async def check_database_health() -> bool:
     """Performs a lightweight pre-ping select query to verify database health."""
     try:
         async with engine.connect() as conn:
-            await conn.execute("SELECT 1")
+            await conn.execute(text("SELECT 1"))
         return True
     except Exception as e:
         logger.error("database_health_check_failed", error=str(e))

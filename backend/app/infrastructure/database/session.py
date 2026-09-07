@@ -1,8 +1,8 @@
 from collections.abc import AsyncGenerator
 
 from backend.app.infrastructure.database.engine import engine
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 # Async session factory
 async_session_factory = sessionmaker(
