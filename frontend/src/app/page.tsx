@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Sidebar, ConversationItem } from "@/components/Sidebar";
 import { ChatArea, MessageItem, CitationItem, ToolCallItem } from "@/components/ChatArea";
 import { ChatInput } from "@/components/ChatInput";
@@ -35,7 +35,7 @@ export default function Home() {
     if (!getAccessToken()) setIsAuthOpen(true);
   }, []);
 
-  const handleNewChat = async () => {
+  const handleNewChat = useCallback(async () => {
     const tempId = `conv-${Date.now()}`;
     try {
       const created = await createConversation("New Conversation", "normal");
@@ -61,7 +61,7 @@ export default function Home() {
     }
     setMessages([]);
     setActiveTab("chat");
-  };
+  }, [currentModel]);
 
   // Load conversations from backend once the user is authenticated
   useEffect(() => {
@@ -86,7 +86,7 @@ export default function Home() {
       .catch((err) => {
         console.warn("Backend conversation list unavailable, using local session:", err);
       });
-  }, [isAuthOpen]);
+  }, [isAuthOpen, handleNewChat]);
 
   const handleSignOut = () => {
     clearAccessToken();
