@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { renderHook, act } from "@/test/test-utils"
+import { renderHook, act, waitFor } from "@/test/test-utils"
 import { useNexusChat } from "@/hooks/useNexusChat"
+import { server } from "@/test/mocks/server"
+import { chatStreamBody } from "@/test/mocks/handlers"
+import { http, HttpResponse } from "msw"
 
 describe("useNexusChat", () => {
   const submitEvent = () => ({ preventDefault: vi.fn() }) as unknown as React.FormEvent
@@ -87,7 +90,65 @@ describe("useNexusChat", () => {
     expect(annotations?.[0].type).toBe("hitl_request")
   })
 
-  it("stop clears the loading flag", () => {
+  it("streams text deltas and surfaces them on the assistant message", async () => {
+    const { result } = renderHook(() => useNexusChat())
+
+    await act(async () => {
+      await result.current.sendMessage("Hello!")
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    const assistant = result.current.messages.find((m) => m.role === "assistant")
+    expect(assistant?.content).toBe("Hello from Nexus.")
+    expect(result.current.messages[0].role).toBe("user")
+    expect(result.current.messages[0].content).toBe("Hello!")
+  })
+
+  it("surfaces hitl_request annotations as pendingHITL", async () => {
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse(
+          chatStreamBody(["Requesting approval"], [
+            {
+              type: "hitl_request",
+              data: {
+                thread_id: "thread-9",
+                request: "Approve deploying the change?",
+                plan: ["Deploy", "Verify"],
+              },
+            },
+          ]),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        )
+      )
+    )
+    const { result } = renderHook(() => useNexusChat())
+
+    await act(async () => {
+      await result.current.sendMessage("Deploy it")
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.pendingHITL?.thread_id).toBe("thread-9")
+  })
+
+  it("records an error state when the chat endpoint fails", async () => {
+    server.use(
+      http.post("/api/chat", () =>
+        HttpResponse.json({ detail: "boom" }, { status: 503 })
+      )
+    )
+    const { result } = renderHook(() => useNexusChat())
+
+    await act(async () => {
+      await result.current.sendMessage("Hello!")
+    })
+
+    await waitFor(() => expect(result.current.error).not.toBeNull())
+    expect(result.current.isLoading).toBe(false)
+  })
+
+  it("stop aborts an in-flight request and clears the loading flag", () => {
     const { result } = renderHook(() => useNexusChat())
     act(() => result.current.stop())
     expect(result.current.isLoading).toBe(false)

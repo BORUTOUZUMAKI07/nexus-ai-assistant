@@ -1,8 +1,7 @@
 /**
- * Next.js 14 App Router – Chat API Route
- * Proxies to FastAPI SSE endpoint with Vercel AI SDK StreamData protocol.
+ * Chat API Route – proxies to FastAPI SSE and frames it as a Vercel AI SDK
+ * data-stream (0: text deltas, 8: annotations, 3: errors).
  *
- * Protocol: data-stream (text chunks + structured data annotations)
  * Reference: https://sdk.vercel.ai/docs/ai-sdk-ui/stream-protocol
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -32,7 +31,7 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       try {
         const backendRes = await fetch(
-          `${BACKEND_URL}/api/v1/conversations/${conversationId ?? "new"}/stream`,
+          `${BACKEND_URL}/api/v1/conversations/${conversationId || "new"}/stream`,
           {
             method: "POST",
             headers: {
@@ -108,10 +107,25 @@ export async function POST(req: NextRequest) {
                 });
                 controller.enqueue(encoder.encode(`8:[${annotation}]\n`));
               } else if (eventType === "hitl_request") {
-                // Human-in-the-loop interrupt signal
+                // Human-in-the-loop interrupt signal. Inject the thread id
+                // (the conversation id) and a readable request string so the
+                // client can render an approval card without backend context.
+                const interrupted = Array.isArray(parsed?.state?.next)
+                  ? parsed.state.next
+                  : [];
+                const data = {
+                  ...parsed,
+                  type: "hitl_request",
+                  thread_id: parsed.thread_id ?? conversationId ?? "new",
+                  request:
+                    parsed.reason ??
+                    (interrupted.length > 0
+                      ? `The agent is waiting for your approval before continuing with "${interrupted[0]}".`
+                      : "The agent is waiting for your approval before continuing."),
+                };
                 const annotation = JSON.stringify({
                   type: "hitl_request",
-                  data: parsed,
+                  data,
                 });
                 controller.enqueue(encoder.encode(`8:[${annotation}]\n`));
               } else if (eventType === "error") {

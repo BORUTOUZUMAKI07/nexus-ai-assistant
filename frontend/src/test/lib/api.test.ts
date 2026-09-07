@@ -97,10 +97,12 @@ describe("api client", () => {
     ).rejects.toThrow("Incorrect email or password.")
   })
 
-  it("fetches usage summary with a default period fallback", async () => {
-    const usage = await fetchUsage("7d")
-    expect(usage.request_count).toBe(42)
-    expect(usage.period).toBe("30d")
+  it("fetches the usage summary envelope", async () => {
+    const usage = await fetchUsage()
+    expect(usage.total_tokens).toBe(142850)
+    expect(usage.total_requests).toBe(42)
+    expect(usage.prompt_tokens).toBe(98420)
+    expect(usage.cached_tokens).toBe(25110)
   })
 
   it("lists knowledge files", async () => {

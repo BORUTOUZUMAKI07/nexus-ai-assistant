@@ -1,5 +1,5 @@
 /**
- * Next.js 14 App Router – HITL Feedback Route
+ * HITL Feedback Route
  * Sends human-in-the-loop approval/rejection back to LangGraph via FastAPI.
  */
 import { NextRequest, NextResponse } from "next/server";

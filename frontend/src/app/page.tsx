@@ -1,8 +1,13 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Sidebar, ConversationItem } from "@/components/Sidebar";
-import { ChatArea, MessageItem, CitationItem, ToolCallItem } from "@/components/ChatArea";
+import {
+  ChatArea,
+  MessageItem,
+  CitationItem,
+  ToolCallItem,
+} from "@/components/ChatArea";
 import { ChatInput } from "@/components/ChatInput";
 import { KnowledgeView } from "@/components/KnowledgeView";
 import { UsageView } from "@/components/UsageView";
@@ -11,22 +16,54 @@ import { AdminView } from "@/components/AdminView";
 import { AuthModal } from "@/components/AuthModal";
 import {
   fetchConversations,
+  fetchConversation,
   createConversation,
   deleteConversation,
   uploadFile,
+  ConversationMessage,
 } from "@/lib/api";
 import { getAccessToken, clearAccessToken } from "@/lib/auth";
+import { useNexusChat, NexusMessage } from "@/hooks/useNexusChat";
+
+function mapServerMessage(m: ConversationMessage): MessageItem {
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    thought_process: m.thought_process ?? undefined,
+    model: m.model ?? undefined,
+    citations: (m.citations ?? []).map(
+      (c): CitationItem => ({
+        filename: c.filename ?? c.source ?? "source",
+        chunk_index: c.chunk_index ?? 0,
+        score: c.score ?? 0,
+        content_snippet: c.content_snippet ?? c.snippet ?? "",
+      })
+    ),
+    tool_calls: (m.tool_calls ?? []).map(
+      (t): ToolCallItem => ({
+        name: t.tool_name ?? t.name ?? "tool",
+        args: t.tool_input ?? t.args,
+        result: t.result,
+        status: t.status ?? "completed",
+      })
+    ),
+    created_at: m.created_at,
+  };
+}
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<"chat" | "files" | "settings" | "usage" | "admin">("chat");
   const [currentModel, setCurrentModel] = useState("llama-3.3-70b-versatile");
-  const [isLoading, setIsLoading] = useState(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
-
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string>("");
-  const [messages, setMessages] = useState<MessageItem[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+
+  const chat = useNexusChat({
+    conversationId: activeConversationId,
+    model: currentModel,
+  });
 
   // Open the login gate when no session token exists (client-side check only,
   // so the server render and hydration always agree on a closed modal).
@@ -36,32 +73,44 @@ export default function Home() {
   }, []);
 
   const handleNewChat = useCallback(async () => {
-    const tempId = `conv-${Date.now()}`;
     try {
-      const created = await createConversation("New Conversation", "normal");
+      const created = await createConversation("New Conversation", "normal", currentModel);
       const newConv: ConversationItem = {
         id: created.id,
         title: created.title || "New Conversation",
         model: currentModel,
-        is_pinned: false,
-        updated_at: "Just now",
+        is_pinned: created.is_pinned,
+        updated_at: new Date(created.updated_at).toLocaleDateString(),
       };
       setConversations((prev) => [newConv, ...prev]);
       setActiveConversationId(created.id);
+      chat.clearMessages();
     } catch {
-      const newConv: ConversationItem = {
-        id: tempId,
-        title: "New Conversation",
-        model: currentModel,
-        is_pinned: false,
-        updated_at: "Just now",
-      };
-      setConversations((prev) => [newConv, ...prev]);
-      setActiveConversationId(tempId);
+      // Without a reachable backend we cannot create durable conversations;
+      // keep the sidebar empty rather than inventing local state.
+      chat.clearMessages();
     }
-    setMessages([]);
     setActiveTab("chat");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentModel]);
+
+  const loadHistory = useCallback(
+    async (conversationId: string) => {
+      if (!conversationId) return;
+      setHistoryLoading(true);
+      try {
+        const detail = await fetchConversation(conversationId);
+        chat.setMessages(detail.messages.map(mapServerMessage));
+      } catch (err) {
+        console.warn("Could not load conversation history:", err);
+        chat.setMessages([]);
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
 
   // Load conversations from backend once the user is authenticated
   useEffect(() => {
@@ -72,28 +121,35 @@ export default function Home() {
           const mapped: ConversationItem[] = page.items.map((item) => ({
             id: item.id,
             title: item.title,
-            model: "llama-3.3-70b-versatile",
-            is_pinned: false,
+            model: item.model,
+            is_pinned: item.is_pinned,
             updated_at: new Date(item.updated_at).toLocaleDateString(),
           }));
           setConversations(mapped);
           setActiveConversationId(mapped[0].id);
+          void loadHistory(mapped[0].id);
         } else {
-          // Auto-create initial conversation if user has none
+          // Auto-create a first conversation so the chat surface is usable
           handleNewChat();
         }
       })
       .catch((err) => {
-        console.warn("Backend conversation list unavailable, using local session:", err);
+        console.warn("Backend conversation list unavailable:", err);
       });
-  }, [isAuthOpen, handleNewChat]);
+  }, [isAuthOpen, loadHistory, handleNewChat]);
 
   const handleSignOut = () => {
     clearAccessToken();
     setConversations([]);
     setActiveConversationId("");
-    setMessages([]);
+    chat.clearMessages();
     setIsAuthOpen(true);
+  };
+
+  const handleSelectConversation = (id: string) => {
+    setActiveConversationId(id);
+    setActiveTab("chat");
+    void loadHistory(id);
   };
 
   const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
@@ -101,13 +157,14 @@ export default function Home() {
     try {
       await deleteConversation(id);
     } catch {
-      // Ignored for offline/local state
+      // Ignored — the list will refresh from the backend on next load.
     }
     setConversations((prev) => prev.filter((c) => c.id !== id));
     if (activeConversationId === id) {
       const remaining = conversations.filter((c) => c.id !== id);
       if (remaining.length > 0) {
         setActiveConversationId(remaining[0].id);
+        void loadHistory(remaining[0].id);
       } else {
         handleNewChat();
       }
@@ -115,18 +172,14 @@ export default function Home() {
   };
 
   const handleStop = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setIsLoading(false);
+    chat.stop();
   };
 
   const handleSendMessage = async (
     content: string,
     options: { enableWeb: boolean; enableCode: boolean; attachments: File[] }
   ) => {
-    // 1. Upload any attachments first
+    // Upload any attachments first
     if (options.attachments && options.attachments.length > 0) {
       for (const file of options.attachments) {
         try {
@@ -137,141 +190,35 @@ export default function Home() {
       }
     }
 
-    const userMsgId = `msg-${Date.now()}`;
-    const userMsg: MessageItem = {
-      id: userMsgId,
-      role: "user",
-      content,
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setIsLoading(true);
-
-    const assistantMsgId = `msg-${Date.now() + 1}`;
-    const initialAssistantMsg: MessageItem = {
-      id: assistantMsgId,
-      role: "assistant",
-      model: currentModel,
-      content: "",
-    };
-
-    setMessages((prev) => [...prev, initialAssistantMsg]);
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          messages: [...messages, userMsg].map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          conversationId: activeConversationId,
-          mode: options.enableCode ? "code" : options.enableWeb ? "research" : "normal",
-        }),
-      });
-
-      if (!response.ok || !response.body) {
-        throw new Error(`Chat API error: ${response.statusText}`);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let streamContent = "";
-      let thoughtProcess = "";
-      const citations: CitationItem[] = [];
-      const toolCalls: ToolCallItem[] = [];
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
-
-        for (const line of lines) {
-          if (!line) continue;
-
-          // Vercel AI SDK text-stream protocol
-          if (line.startsWith("0:")) {
-            try {
-              const textDelta = JSON.parse(line.slice(2));
-              streamContent += textDelta;
-            } catch {
-              streamContent += line.slice(2);
-            }
-          } else if (line.startsWith("8:")) {
-            // Annotations (tool_call, citation, reasoning, hitl)
-            try {
-              const annotations = JSON.parse(line.slice(2));
-              if (Array.isArray(annotations)) {
-                for (const ann of annotations) {
-                  if (ann.type === "reasoning") {
-                    thoughtProcess += ann.data?.content || "";
-                  } else if (ann.type === "citation") {
-                    citations.push(ann.data);
-                  } else if (ann.type === "tool_call") {
-                    toolCalls.push({
-                      name: ann.data?.tool_name || "tool",
-                      args: ann.data?.tool_input,
-                      status: "running",
-                    });
-                  } else if (ann.type === "tool_result") {
-                    const call = toolCalls.find((c) => c.name === ann.data?.tool_name);
-                    if (call) {
-                      call.status = "completed";
-                      call.result = ann.data?.result;
-                    }
-                  }
-                }
-              }
-            } catch {
-              // Ignore annotation parse failure
-            }
-          }
-
-          // Live state update for streaming UI
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantMsgId
-                ? {
-                    ...msg,
-                    content: streamContent || msg.content,
-                    thought_process: thoughtProcess || msg.thought_process,
-                    citations: citations.length > 0 ? citations : msg.citations,
-                    tool_calls: toolCalls.length > 0 ? toolCalls : msg.tool_calls,
-                  }
-                : msg
-            )
-          );
-        }
-      }
-    } catch (err) {
-      const isAbort = err instanceof Error && err.name === "AbortError";
-      if (!isAbort) {
-        console.warn("Chat stream failed, using offline fallback response:", err);
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMsgId
-              ? {
-                  ...msg,
-                  content:
-                    `I received your message: "${content}".\n\n` +
-                    `*The backend API server or Docker services are currently running in standalone/offline mode.* All agents, tools, and endpoints are configured and ready.`,
-                }
-              : msg
-          )
-        );
-      }
-    } finally {
-      setIsLoading(false);
-      abortControllerRef.current = null;
-    }
+    const mode = options.enableCode ? "code" : options.enableWeb ? "research" : "normal";
+    void chat.sendMessage(content, { mode });
   };
+
+  const messages: MessageItem[] = chat.messages.map((m: NexusMessage) => {
+    const thoughts = chat.getReasoningBlocks(m).map((a) => a.data.content).join("\n");
+    const citations: CitationItem[] = chat.getCitations(m).map((a) => ({
+      filename: a.data.filename ?? a.data.source ?? a.data.url ?? "source",
+      chunk_index: (a.data as { chunk_index?: number }).chunk_index ?? 0,
+      score: a.data.score ?? 0,
+      content_snippet: a.data.content_snippet ?? a.data.snippet ?? "",
+    }));
+    const toolCalls: ToolCallItem[] = chat.getToolCalls(m).map((a) => ({
+      name: a.data.tool_name,
+      args: a.data.tool_input,
+      result: a.data.result,
+      status: a.data.status ?? "running",
+    }));
+    return {
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      model: m.model,
+      thought_process: thoughts || undefined,
+      citations: citations.length > 0 ? citations : undefined,
+      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      created_at: m.createdAt,
+    };
+  });
 
   const handleFeedback = (messageId: string, feedback: "thumbs_up" | "thumbs_down") => {
     console.log("Feedback recorded:", messageId, feedback);
@@ -283,10 +230,7 @@ export default function Home() {
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
-        onSelectConversation={(id) => {
-          setActiveConversationId(id);
-          setActiveTab("chat");
-        }}
+        onSelectConversation={handleSelectConversation}
         onNewChat={handleNewChat}
         onDeleteConversation={handleDeleteConversation}
         activeTab={activeTab}
@@ -309,14 +253,33 @@ export default function Home() {
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
         {activeTab === "chat" && (
           <>
-            <ChatArea
-              messages={messages}
-              isLoading={isLoading}
-              onFeedback={handleFeedback}
-            />
+            {historyLoading ? (
+              <div className="flex-1 flex items-center justify-center text-sm text-[var(--text-muted)]">
+                Loading conversation…
+              </div>
+            ) : (
+              <ChatArea
+                messages={messages}
+                isLoading={chat.isLoading}
+                error={chat.error?.message ?? null}
+                onRetry={chat.error ? chat.reload : undefined}
+                pendingHITL={
+                  chat.pendingHITL
+                    ? {
+                        thread_id: chat.pendingHITL.thread_id,
+                        request: chat.pendingHITL.request,
+                        plan: chat.pendingHITL.plan,
+                        tool_name: chat.pendingHITL.tool_name,
+                      }
+                    : null
+                }
+                onResolveHITL={chat.resolveHITL}
+                onFeedback={handleFeedback}
+              />
+            )}
             <ChatInput
               onSendMessage={handleSendMessage}
-              isLoading={isLoading}
+              isLoading={chat.isLoading}
               onStop={handleStop}
             />
           </>

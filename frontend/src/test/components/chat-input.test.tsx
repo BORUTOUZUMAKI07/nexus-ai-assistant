@@ -49,8 +49,8 @@ describe("ChatInput", () => {
 
   it("includes enabled web/code toggles in the options", () => {
     render(<ChatInput onSendMessage={onSendMessage} isLoading={false} />)
-    fireEvent.click(screen.getByTitle("Firecrawl Live Web Search"))
-    fireEvent.click(screen.getByTitle("E2B Code Interpreter microVM"))
+    fireEvent.click(screen.getByTitle("Live web search"))
+    fireEvent.click(screen.getByTitle("Code interpreter sandbox"))
 
     const textarea = screen.getByPlaceholderText(
       "Ask Nexus anything, write code, search live web..."

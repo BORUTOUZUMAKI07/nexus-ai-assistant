@@ -1,29 +1,56 @@
-import { describe, it, expect, vi } from "vitest"
-import { render, screen, fireEvent } from "@/test/test-utils"
+import { describe, it, expect } from "vitest"
+import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { SettingsView } from "@/components/SettingsView"
+import { setAccessToken } from "@/lib/auth"
 
 describe("SettingsView", () => {
-  it("renders BYOK vault, system prompt, and persistent memories", () => {
+  it("loads agent config, BYOK keys, and persistent memories from the API", async () => {
+    setAccessToken("tok")
     render(<SettingsView />)
-    expect(screen.getByText("Bring Your Own Key (BYOK) Encryption Vault")).toBeInTheDocument()
-    expect(screen.getByText("Global System Instructions")).toBeInTheDocument()
-    expect(screen.getByText("Persistent User Memories")).toBeInTheDocument()
-    expect(screen.getByDisplayValue(/You are Nexus AI/)).toBeInTheDocument()
+
+    expect(await screen.findByText("Agent configuration")).toBeInTheDocument()
+    expect(screen.getByText("Bring-Your-Own-Key providers")).toBeInTheDocument()
+    expect(screen.getByText("Persistent memories")).toBeInTheDocument()
+    expect(screen.getByText(/Prefers Python and TypeScript/)).toBeInTheDocument()
+    expect(screen.getByText("gsk_• • • • 1234")).toBeInTheDocument()
   })
 
-  it("shows a saved confirmation after saving", () => {
-    vi.useFakeTimers()
+  it("shows a saved confirmation after saving", async () => {
+    setAccessToken("tok")
     render(<SettingsView />)
-    fireEvent.click(screen.getByRole("button", { name: /Save Settings/ }))
-    expect(screen.getByText("Saved!")).toBeInTheDocument()
-    vi.useRealTimers()
+    await screen.findByText("Agent configuration")
+
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/ }))
+
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument())
   })
 
-  it("deletes a memory row", () => {
+  it("deletes a memory row", async () => {
+    setAccessToken("tok")
     render(<SettingsView />)
-    const memory = screen.getByText(/Prefers Python and TypeScript/)
-    const deleteBtn = memory.closest("div")!.parentElement!.querySelector("button")!
+    const memory = await screen.findByText(/Prefers Python and TypeScript/)
+    const deleteBtn = memory
+      .closest("div")!
+      .parentElement!
+      .querySelector("button")!
     fireEvent.click(deleteBtn)
-    expect(screen.queryByText(/Prefers Python and TypeScript/)).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.queryByText(/Prefers Python and TypeScript/)).not.toBeInTheDocument()
+    )
+  })
+
+  it("adds a memory through the API", async () => {
+    setAccessToken("tok")
+    render(<SettingsView />)
+    await screen.findByText("Agent configuration")
+
+    fireEvent.change(screen.getByPlaceholderText("E.g. Always respond with TypeScript examples"), {
+      target: { value: "Likes concise summaries" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Add" }))
+
+    await waitFor(() =>
+      expect(screen.getByText("Likes concise summaries")).toBeInTheDocument()
+    )
   })
 })

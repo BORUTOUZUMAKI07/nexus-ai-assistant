@@ -1,146 +1,423 @@
 "use client";
 
-import React, { useState } from "react";
-import { Sliders, Key, Brain, Save, Trash2, CheckCircle2 } from "lucide-react";
+import React, { useState, useEffect, useCallback } from "react";
+import {
+  Sliders,
+  Key,
+  Brain,
+  Save,
+  Trash2,
+  CheckCircle2,
+  Loader2,
+  Plus,
+  AlertCircle,
+} from "lucide-react";
+import {
+  fetchSettings,
+  updateSettings,
+  fetchMemories,
+  createMemory,
+  deleteMemory,
+  fetchAPIKeys,
+  addAPIKey,
+  UserSettings,
+  UserMemory,
+  APIKey,
+} from "@/lib/api";
+
+const MODELS = [
+  { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B" },
+  { id: "deepseek-r1-distill-llama-70b", name: "DeepSeek R1 Distill" },
+  { id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" },
+];
 
 export const SettingsView: React.FC = () => {
-  const [groqKey, setGroqKey] = useState("gsk_••••••••••••••••");
-  const [openrouterKey, setOpenrouterKey] = useState("");
-  const [firecrawlKey, setFirecrawlKey] = useState("");
-  const [e2bKey, setE2bKey] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState(
-    "You are Nexus AI, an advanced, highly capable, and transparent AI assistant. Strictly adhere to factual accuracy, domain expertise, and rigorous logic."
-  );
+  const [settings, setSettings] = useState<UserSettings | null>(null);
+  const [memories, setMemories] = useState<UserMemory[]>([]);
+  const [keys, setKeys] = useState<APIKey[]>([]);
 
-  const [memories, setMemories] = useState([
-    { id: "1", category: "preference", content: "Prefers Python and TypeScript for code examples." },
-    { id: "2", category: "role", content: "Software architect building high-performance distributed systems." },
-  ]);
-
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
 
-  const handleSave = () => {
-    setSavedNotice(true);
-    setTimeout(() => setSavedNotice(false), 2500);
+  const [memoryContent, setMemoryContent] = useState("");
+  const [memoryCategory, setMemoryCategory] = useState("preference");
+  const [memoryBusy, setMemoryBusy] = useState(false);
+
+  const [keyProvider, setKeyProvider] = useState("groq");
+  const [keyValue, setKeyValue] = useState("");
+  const [keyLabel, setKeyLabel] = useState("");
+  const [keyBusy, setKeyBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [settingsData, memoriesData, keysData] = await Promise.all([
+        fetchSettings(),
+        fetchMemories(),
+        fetchAPIKeys(),
+      ]);
+      setSettings(settingsData);
+      setMemories(memoriesData);
+      setKeys(keysData);
+    } catch (err) {
+      setLoadError(
+        err instanceof Error ? err.message : "Could not load settings"
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
+  }, [load]);
+
+  const patch = (next: Partial<UserSettings>) =>
+    setSettings((prev) => (prev ? { ...prev, ...next } : prev));
+
+  const handleSave = async () => {
+    if (!settings || saving) return;
+    setSaving(true);
+    try {
+      const updated = await updateSettings({
+        system_prompt_override: settings.system_prompt_override,
+        default_model: settings.default_model,
+        enable_memory: settings.enable_memory,
+        enable_tools: settings.enable_tools,
+        temperature: settings.temperature,
+        max_tokens: settings.max_tokens,
+      });
+      setSettings(updated);
+      setSavedNotice(true);
+      setTimeout(() => setSavedNotice(false), 2500);
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const deleteMemory = (id: string) => {
-    setMemories((prev) => prev.filter((m) => m.id !== id));
+  const handleAddMemory = async () => {
+    if (!memoryContent.trim() || memoryBusy) return;
+    setMemoryBusy(true);
+    try {
+      const created = await createMemory({
+        content: memoryContent.trim(),
+        category: memoryCategory,
+      });
+      setMemories((prev) => [created, ...prev]);
+      setMemoryContent("");
+    } finally {
+      setMemoryBusy(false);
+    }
   };
+
+  const handleDeleteMemory = async (id: string) => {
+    try {
+      await deleteMemory(id);
+      setMemories((prev) => prev.filter((m) => m.id !== id));
+    } catch (err) {
+      console.warn("Delete memory failed:", err);
+    }
+  };
+
+  const handleAddKey = async () => {
+    if (!keyValue.trim() || keyBusy) return;
+    setKeyBusy(true);
+    try {
+      const created = await addAPIKey({
+        provider: keyProvider,
+        key_value: keyValue.trim(),
+        label: keyLabel.trim() || null,
+      });
+      setKeys((prev) => [created, ...prev]);
+      setKeyValue("");
+      setKeyLabel("");
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center gap-2 text-sm text-[var(--text-muted)]">
+        <Loader2 className="w-4 h-4 animate-spin" />
+        Loading settings…
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
+        <AlertCircle className="w-5 h-5 text-[var(--status-danger)]" />
+        <p className="text-sm text-[var(--text-muted)]">{loadError}</p>
+        <button
+          onClick={load}
+          className="rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-white transition-colors"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-white flex items-center gap-2">
-            <Sliders className="w-5 h-5 text-violet-400" /> Settings & Personalization
+          <h2 className="text-xl font-semibold tracking-tight text-white flex items-center gap-2">
+            <Sliders className="w-5 h-5 text-[var(--accent)]" /> Settings
           </h2>
-          <p className="text-xs text-neutral-400 mt-1">
-            Manage your Bring-Your-Own-Key (BYOK) secrets, system prompt, and persistent memories.
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            Agent configuration, Bring-Your-Own-Key providers, and persistent
+            memories.
           </p>
         </div>
         <button
           onClick={handleSave}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium transition-all shadow-md shadow-violet-600/20"
+          disabled={saving}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-50 text-white text-xs font-medium transition-all"
         >
-          {savedNotice ? <CheckCircle2 className="w-4 h-4 text-emerald-300" /> : <Save className="w-4 h-4" />}
-          <span>{savedNotice ? "Saved!" : "Save Settings"}</span>
+          {savedNotice ? (
+            <CheckCircle2 className="w-4 h-4 text-white" />
+          ) : saving ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Save className="w-4 h-4" />
+          )}
+          <span>{savedNotice ? "Saved" : "Save changes"}</span>
         </button>
       </div>
 
-      {/* BYOK API Keys */}
+      {/* Agent configuration */}
       <div className="glass-panel p-6 space-y-4">
-        <h3 className="text-sm font-medium text-white flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2">
-          <Key className="w-4 h-4 text-violet-400" /> Bring Your Own Key (BYOK) Encryption Vault
+        <h3 className="text-sm font-medium text-white border-b border-[var(--border-subtle)] pb-2">
+          Agent configuration
         </h3>
-        <p className="text-xs text-neutral-400">
-          Keys are encrypted client-side and at rest using AES-256-GCM. Free-tier accounts have built-in shared keys.
-        </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="text-[11px] font-medium text-neutral-300 block mb-1">Groq API Key (Primary)</label>
-            <input
-              type="password"
-              value={groqKey}
-              onChange={(e) => setGroqKey(e.target.value)}
-              placeholder="gsk_..."
-              className="w-full bg-[#080a11] border border-[var(--border-subtle)] rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-violet-500 font-mono"
-            />
+            <label className="text-[11px] font-medium text-[var(--text-secondary)] block mb-1.5">
+              Default model
+            </label>
+            <select
+              value={settings?.default_model ?? ""}
+              onChange={(e) => patch({ default_model: e.target.value })}
+              className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+            >
+              {MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
-            <label className="text-[11px] font-medium text-neutral-300 block mb-1">OpenRouter Key (Fallback)</label>
+            <label className="text-[11px] font-medium text-[var(--text-secondary)] block mb-1.5">
+              Temperature
+            </label>
             <input
-              type="password"
-              value={openrouterKey}
-              onChange={(e) => setOpenrouterKey(e.target.value)}
-              placeholder="sk-or-..."
-              className="w-full bg-[#080a11] border border-[var(--border-subtle)] rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-violet-500 font-mono"
-            />
-          </div>
-
-          <div>
-            <label className="text-[11px] font-medium text-neutral-300 block mb-1">Firecrawl Key (Web Search)</label>
-            <input
-              type="password"
-              value={firecrawlKey}
-              onChange={(e) => setFirecrawlKey(e.target.value)}
-              placeholder="fc-..."
-              className="w-full bg-[#080a11] border border-[var(--border-subtle)] rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-violet-500 font-mono"
-            />
-          </div>
-
-          <div>
-            <label className="text-[11px] font-medium text-neutral-300 block mb-1">E2B API Key (Code Sandbox)</label>
-            <input
-              type="password"
-              value={e2bKey}
-              onChange={(e) => setE2bKey(e.target.value)}
-              placeholder="e2b_..."
-              className="w-full bg-[#080a11] border border-[var(--border-subtle)] rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-violet-500 font-mono"
+              type="number"
+              min={0}
+              max={2}
+              step={0.1}
+              value={settings?.temperature ?? 0.7}
+              onChange={(e) =>
+                patch({ temperature: Number(e.target.value) })
+              }
+              className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] font-mono"
             />
           </div>
         </div>
-      </div>
 
-      {/* System Prompt Custom Instructions */}
-      <div className="glass-panel p-6 space-y-3">
-        <h3 className="text-sm font-medium text-white border-b border-[var(--border-subtle)] pb-2">
-          Global System Instructions
-        </h3>
-        <textarea
-          rows={3}
-          value={systemPrompt}
-          onChange={(e) => setSystemPrompt(e.target.value)}
-          className="w-full bg-[#080a11] border border-[var(--border-subtle)] rounded-xl p-3 text-xs text-neutral-200 outline-none focus:border-violet-500 leading-relaxed resize-none"
-        />
-      </div>
+        <div>
+          <label className="text-[11px] font-medium text-[var(--text-secondary)] block mb-1.5">
+            Global system instructions
+          </label>
+          <textarea
+            rows={3}
+            value={settings?.system_prompt_override ?? ""}
+            onChange={(e) => patch({ system_prompt_override: e.target.value })}
+            placeholder="Optional instructions applied to every conversation."
+            className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] p-3 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] leading-relaxed resize-none placeholder:text-[var(--text-faint)]"
+          />
+        </div>
 
-      {/* Persistent User Memories */}
-      <div className="glass-panel p-6 space-y-4">
-        <h3 className="text-sm font-medium text-white flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2">
-          <Brain className="w-4 h-4 text-cyan-400" /> Persistent User Memories
-        </h3>
-        <p className="text-xs text-neutral-400">
-          Nexus automatically remembers your key preferences across sessions.
-        </p>
-
-        <div className="space-y-2">
-          {memories.map((m) => (
-            <div key={m.id} className="p-3 rounded-xl bg-[#080a11] border border-[var(--border-subtle)] flex items-center justify-between text-xs">
-              <div>
-                <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-400 font-mono mr-2">
-                  {m.category}
-                </span>
-                <span className="text-neutral-200">{m.content}</span>
-              </div>
-              <button onClick={() => deleteMemory(m.id)} className="text-neutral-400 hover:text-rose-400 p-1">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
+        <div className="flex flex-wrap gap-4 pt-1">
+          {(
+            [
+              ["enable_memory", "Persistent memory"],
+              ["enable_tools", "Agent tools"],
+            ] as const
+          ).map(([field, label]) => (
+            <label
+              key={field}
+              className="flex items-center gap-2 text-xs text-[var(--text-secondary)] cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                checked={Boolean(settings?.[field])}
+                onChange={(e) => patch({ [field]: e.target.checked })}
+                className="w-3.5 h-3.5 rounded border border-[var(--border-subtle)] bg-[var(--bg-main)] accent-[var(--accent)]"
+              />
+              {label}
+            </label>
           ))}
         </div>
+      </div>
+
+      {/* BYOK API keys */}
+      <div className="glass-panel p-6 space-y-4">
+        <h3 className="text-sm font-medium text-white flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2">
+          <Key className="w-4 h-4 text-[var(--accent)]" /> Bring-Your-Own-Key
+          providers
+        </h3>
+        <p className="text-xs text-[var(--text-muted)]">
+          Add provider keys to use alongside the built-in free tier. Keys are
+          stored encrypted and only a preview is ever shown.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <select
+            value={keyProvider}
+            onChange={(e) => setKeyProvider(e.target.value)}
+            className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+          >
+            <option value="groq">Groq</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="firecrawl">Firecrawl</option>
+            <option value="e2b">E2B</option>
+          </select>
+          <input
+            type="password"
+            value={keyValue}
+            onChange={(e) => setKeyValue(e.target.value)}
+            placeholder="Provider API key"
+            className="md:col-span-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] font-mono placeholder:text-[var(--text-faint)]"
+          />
+          <button
+            onClick={handleAddKey}
+            disabled={keyBusy || !keyValue.trim()}
+            className="flex items-center justify-center gap-1.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-40 px-3 py-2 text-xs font-medium text-white transition-colors"
+          >
+            {keyBusy ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Plus className="w-3.5 h-3.5" />
+            )}
+            Add key
+          </button>
+        </div>
+
+        {keys.length > 0 && (
+          <div className="space-y-2">
+            {keys.map((k) => (
+              <div
+                key={k.id}
+                className="flex items-center justify-between rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-mono text-[var(--accent)]">
+                    {k.provider}
+                  </span>
+                  {k.label && (
+                    <span className="text-[var(--text-muted)] truncate">
+                      {k.label}
+                    </span>
+                  )}
+                  <span className="font-mono text-[var(--text-faint)]">
+                    {k.key_preview}
+                  </span>
+                </div>
+                <span
+                  className={`flex items-center gap-1 text-[10px] font-mono ${
+                    k.is_active
+                      ? "text-[var(--status-success)]"
+                      : "text-[var(--status-danger)]"
+                  }`}
+                >
+                  <CheckCircle2 className="w-3 h-3" />
+                  {k.is_active ? "active" : "inactive"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Persistent memories */}
+      <div className="glass-panel p-6 space-y-4">
+        <h3 className="text-sm font-medium text-white flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2">
+          <Brain className="w-4 h-4 text-[var(--accent)]" /> Persistent memories
+        </h3>
+        <p className="text-xs text-[var(--text-muted)]">
+          Facts and preferences Nexus remembers across conversations.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <select
+            value={memoryCategory}
+            onChange={(e) => setMemoryCategory(e.target.value)}
+            className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+          >
+            <option value="preference">Preference</option>
+            <option value="role">Role</option>
+            <option value="fact">Fact</option>
+            <option value="skill">Skill</option>
+          </select>
+          <input
+            value={memoryContent}
+            onChange={(e) => setMemoryContent(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleAddMemory()}
+            placeholder="E.g. Always respond with TypeScript examples"
+            className="md:col-span-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] placeholder:text-[var(--text-faint)]"
+          />
+          <button
+            onClick={handleAddMemory}
+            disabled={memoryBusy || !memoryContent.trim()}
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-secondary)] hover:text-white hover:border-[var(--border-strong)] disabled:opacity-40 transition-colors"
+          >
+            {memoryBusy ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Plus className="w-3.5 h-3.5" />
+            )}
+            Add
+          </button>
+        </div>
+
+        {memories.length === 0 ? (
+          <p className="text-xs text-[var(--text-muted)]">
+            No memories stored yet.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {memories.map((m) => (
+              <div
+                key={m.id}
+                className="p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] flex items-center justify-between text-xs"
+              >
+                <div className="min-w-0">
+                  <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent-hover)] font-mono mr-2">
+                    {m.category}
+                  </span>
+                  <span className="text-[var(--text-secondary)]">{m.content}</span>
+                </div>
+                <button
+                  onClick={() => handleDeleteMemory(m.id)}
+                  className="text-[var(--text-faint)] hover:text-[var(--status-danger)] p-1 transition-colors"
+                  title="Delete memory"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

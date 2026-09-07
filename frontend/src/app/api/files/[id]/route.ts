@@ -1,9 +1,9 @@
 import { NextRequest } from "next/server";
 import { proxyJson } from "@/lib/proxy";
 
-type Params = { params: Promise<{ id: string }> };
+type Ctx = { params: Promise<{ id: string }> };
 
-export async function DELETE(_req: NextRequest, ctx: Params) {
-  const { id } = await ctx.params;
+export async function DELETE(_req: NextRequest, { params }: Ctx) {
+  const { id } = await params;
   return proxyJson(`/files/${id}`, { method: "DELETE" });
 }

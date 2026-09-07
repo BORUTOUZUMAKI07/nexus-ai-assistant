@@ -44,9 +44,9 @@ describe("ChatArea", () => {
   it("displays a thought process drawer that toggles open", () => {
     render(<ChatArea messages={[assistant]} isLoading={false} />)
     expect(screen.queryByText("DeepSeek reasoning steps...")).not.toBeInTheDocument()
-    fireEvent.click(screen.getByText("Thought Process"))
+    fireEvent.click(screen.getByText("Thought process"))
     expect(screen.getByText("DeepSeek reasoning steps...")).toBeInTheDocument()
-    fireEvent.click(screen.getByText("Thought Process"))
+    fireEvent.click(screen.getByText("Thought process"))
     expect(screen.queryByText("DeepSeek reasoning steps...")).not.toBeInTheDocument()
   })
 
@@ -54,7 +54,7 @@ describe("ChatArea", () => {
     render(<ChatArea messages={[assistant]} isLoading={false} />)
     expect(screen.getByText("web_search")).toBeInTheDocument()
     expect(screen.getByText("completed")).toBeInTheDocument()
-    expect(screen.getByText("Grounding Sources")).toBeInTheDocument()
+    expect(screen.getByText("Grounding sources")).toBeInTheDocument()
     expect(screen.getByText("nexus-spec.pdf")).toBeInTheDocument()
     expect(screen.getByText("llama-3.3-70b-versatile")).toBeInTheDocument()
   })
@@ -78,6 +78,6 @@ describe("ChatArea", () => {
 
   it("shows the reasoning indicator while loading", () => {
     render(<ChatArea messages={[]} isLoading={true} />)
-    expect(screen.getByText("Nexus is reasoning...")).toBeInTheDocument()
+    expect(screen.getByText("Nexus is working…")).toBeInTheDocument()
   })
 })

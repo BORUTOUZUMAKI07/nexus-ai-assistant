@@ -19,14 +19,14 @@ describe("AdminView", () => {
 
   it("switches to the system health tab", async () => {
     render(<AdminView />)
-    fireEvent.click(screen.getByText("System Health"))
+    fireEvent.click(screen.getByText("System health"))
     await waitFor(() => expect(screen.getByText("PostgreSQL")).toBeInTheDocument())
     expect(screen.getAllByText("connected").length).toBeGreaterThanOrEqual(2)
   })
 
   it("switches to audit logs and shows entries", async () => {
     render(<AdminView />)
-    fireEvent.click(screen.getByText("Compliance Audit Logs"))
+    fireEvent.click(screen.getByText("Audit logs"))
     await waitFor(() => expect(screen.getByText("AUTH_LOGIN")).toBeInTheDocument())
     expect(screen.getByText("user")).toBeInTheDocument()
   })

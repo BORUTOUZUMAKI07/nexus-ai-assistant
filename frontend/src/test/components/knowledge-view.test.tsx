@@ -45,7 +45,7 @@ describe("KnowledgeView", () => {
     await screen.findByText("nexus-spec.pdf")
 
     fireEvent.change(
-      screen.getByPlaceholderText("Test a query against Qdrant (e.g., 'What is Hybrid Search?')"),
+      screen.getByPlaceholderText("Ask a question about your documents…"),
       { target: { value: "Hybrid Search" } }
     )
     fireEvent.click(screen.getByText("Search"))
