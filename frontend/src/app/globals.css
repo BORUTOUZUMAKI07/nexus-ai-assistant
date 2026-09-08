@@ -2,44 +2,45 @@
 
 /*
  * Nexus AI design system
- * Inspired by the Linear "midnight precision instrument" system:
- * near-black surfaces, hairline borders instead of shadows, a compact
- * radius vocabulary (6px controls / 12px cards), and a single brand
- * accent kept for primary actions. All other colors are status-only.
+ * Tokens follow the shadcn-style system used across the sibling projects
+ * (ai-civic-issue-monitoring, url-shortner): near-black neutral surfaces,
+ * hairline oklab-friendly borders, a muted radius vocabulary (6px controls /
+ * 12px cards), and a single emerald accent reserved for primary actions.
+ * Status colors are the only other hues in play.
  */
 :root {
   /* Surfaces */
   --bg-main: #08090a;
-  --bg-surface: #0f1011;
-  --bg-surface-elevated: #161718;
-  --bg-glass: rgba(15, 16, 17, 0.9);
-  --bg-glass-hover: rgba(22, 23, 24, 0.96);
+  --bg-surface: #11131a;
+  --bg-surface-elevated: #1b1e27;
+  --bg-glass: rgba(17, 19, 26, 0.82);
+  --bg-glass-hover: rgba(27, 30, 39, 0.92);
 
   /* Borders */
-  --border-subtle: #23252a;
-  --border-strong: #383b3f;
-  --border-active: #6366f1;
+  --border-subtle: #23262f;
+  --border-strong: #353a46;
+  --border-active: #10b981;
 
   /* Text */
-  --text-primary: #ffffff;
-  --text-secondary: #d0d6e0;
-  --text-muted: #8a8f98;
-  --text-faint: #62666d;
+  --text-primary: #f2f2f2;
+  --text-secondary: #d7dbe3;
+  --text-muted: #9aa0ae;
+  --text-faint: #6b7280;
 
   /* Brand accent (single source of truth for primary actions) */
-  --accent: #6366f1;
-  --accent-hover: #818cf8;
-  --accent-soft: rgba(99, 102, 241, 0.16);
-  --accent-violet: #8b5cf6;
-  --accent-cyan: #02b8cc;
+  --accent: #10b981;
+  --accent-hover: #34d399;
+  --accent-soft: rgba(16, 185, 129, 0.14);
+  --accent-violet: #2dd4bf;
+  --accent-cyan: #38bdf8;
 
   /* Status only */
-  --status-success: #27a644;
-  --status-danger: #eb5757;
+  --status-success: #10b981;
+  --status-danger: #ef4444;
   --status-warning: #f59e0b;
 
   /* Reserved for the product mark only, never chrome */
-  --grad-brand: linear-gradient(135deg, #6366f1 0%, #8b5cf6 45%, #02b8cc 100%);
+  --grad-brand: linear-gradient(135deg, #10b981 0%, #2dd4bf 50%, #38bdf8 100%);
 }
 
 * {
@@ -197,4 +198,133 @@ body {
   color: var(--accent-hover);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+/* ---- Landing page helpers ---- */
+
+/* Fine dot grid used behind hero / CTA sections */
+.landing-grid {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 40%, transparent 100%);
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 40%, transparent 100%);
+}
+
+/* Drifting aurora blobs behind the hero headline */
+@keyframes aurora-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(2%, 3%, 0) scale(1.08) rotate(8deg);
+  }
+}
+
+.landing-aurora {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  will-change: transform;
+  animation: aurora-drift 14s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Shimmer used on the hero CTA and model chips */
+@keyframes shimmer-slide {
+  from {
+    background-position: 200% center;
+  }
+  to {
+    background-position: -200% center;
+  }
+}
+
+.landing-shimmer {
+  background-size: 200% auto;
+  animation: shimmer-slide 6s linear infinite;
+}
+
+/* Slow auto-scrolling logos strip */
+@keyframes logo-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.landing-marquee {
+  animation: logo-scroll 30s linear infinite;
+}
+
+/* Staggered reveal used by the hero chat mockup so output reads as streaming in */
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reveal-up {
+  opacity: 0;
+  animation: reveal-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Blinking caret shown on the last line of the mock reply */
+@keyframes caret-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.stream-caret::after {
+  content: "";
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 2px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: caret-blink 1s steps(1) infinite;
+}
+
+/* Streaming dots chip (mock "live" status) */
+@keyframes stream-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.stream-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 9999px;
+  background: var(--accent);
+  animation: stream-dot 1.4s ease-in-out infinite;
+}
+.stream-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.stream-dot:nth-child(3) {
+  animation-delay: 0.4s;
 }

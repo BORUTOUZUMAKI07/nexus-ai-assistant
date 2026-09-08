@@ -27,7 +27,7 @@ test.describe("Conversation management", () => {
     await app.goto()
     await expect(page.getByText("Project kickoff")).toBeVisible()
 
-    await page.getByRole("button", { name: /New Conversation/ }).click()
+    await page.getByRole("button", { name: /New conversation/ }).click()
 
     await expect(page.getByText("Brand new chat")).toBeVisible()
   })

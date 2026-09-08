@@ -1,4 +1,4 @@
-import { test, expect, NexusAppPage, setupConversationMocks, setupFilesMock, setupChatMock, setAuthState } from "./fixtures"
+import { test, expect, NexusAppPage, setupConversationMocks, setupFilesMock, setupSettingsMock, setupChatMock, setAuthState } from "./fixtures"
 
 test.describe("Chat & Workspace", () => {
   test.beforeEach(async ({ page }) => {
@@ -24,7 +24,7 @@ test.describe("Chat & Workspace", () => {
     const app = new NexusAppPage(page)
     await app.goto()
 
-    await page.getByTitle("Firecrawl Live Web Search").click()
+    await page.getByTitle("Live web search").click()
     await app.sendMessage("Search the live web")
 
     await expect(page.getByText("Hello from Nexus.")).toBeVisible()
@@ -37,19 +37,21 @@ test.describe("Chat & Workspace", () => {
     const app = new NexusAppPage(page)
     await app.goto()
 
-    await page.getByText("Knowledge & RAG").click()
+    await page.getByRole("button", { name: "Knowledge", exact: true }).click()
 
+    await expect(page.getByText("Knowledge base")).toBeVisible()
     await expect(page.getByText("nexus-spec.pdf")).toBeVisible()
-    await expect(page.getByText("Indexed Documents (1)")).toBeVisible()
+    await expect(page.getByText("Indexed documents")).toBeVisible()
   })
 
-  test("settings tab shows the BYOK vault and memories", async ({ page }) => {
+  test("settings tab shows BYOK providers and persistent memories", async ({ page }) => {
+    await setupSettingsMock(page).setup()
     const app = new NexusAppPage(page)
     await app.goto()
 
-    await page.getByText("Settings & BYOK Keys").click()
+    await page.getByRole("button", { name: "Settings", exact: true }).click()
 
-    await expect(page.getByText("Bring Your Own Key (BYOK) Encryption Vault")).toBeVisible()
-    await expect(page.getByText(/Persistent User Memories/)).toBeVisible()
+    await expect(page.getByRole("heading", { name: "Bring-Your-Own-Key providers" })).toBeVisible()
+    await expect(page.getByRole("heading", { name: "Persistent memories" })).toBeVisible()
   })
 })
