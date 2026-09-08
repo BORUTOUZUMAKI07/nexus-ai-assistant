@@ -2,8 +2,17 @@
 Main FastAPI Application Entrypoint for Nexus AI Assistant.
 Configures Lifespan, CORS, Middleware, FastMCP SSE Mount, and API v1 Routes.
 """
+import asyncio
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+
+# psycopg (used by the LangGraph AsyncPostgresSaver checkpointer) cannot run in
+# async mode on Windows' default ProactorEventLoop, which uvicorn would otherwise
+# create. Switching to the SelectorEventLoop at import time — before uvicorn
+# builds its loop — makes the durable Postgres checkpointer work on Windows dev.
+if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from backend.app.agents.orchestrator.graph import lifespan_graph
 from backend.app.api.v1.api import api_router

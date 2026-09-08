@@ -2,8 +2,19 @@
 Application Settings — loaded from environment / .env file.
 All optional keys default to None (free-tier compatible).
 """
+from pathlib import Path
+
+from dotenv import load_dotenv
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load backend/.env into os.environ as well as into Settings. Several internal
+# consumers read the process environment directly — mem0 (MEM0_API_KEY),
+# LangSmith (LANGSMITH_API_KEY), and the LangGraph Postgres checkpointer
+# (DATABASE_URL in orchestrator/graph.py) — and would otherwise miss the same
+# values pydantic-settings loads below. `override=False` keeps real deployment
+# env vars higher-priority than the local .env file.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 
 class Settings(BaseSettings):
