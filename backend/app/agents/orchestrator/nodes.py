@@ -29,6 +29,15 @@ from pydantic import BaseModel
 
 logger = structlog.get_logger(__name__)
 
+# Short, instructional/conversational messages skip the planner LLM round-trip.
+# The orchestrator still routes research/code requests via a structured call.
+_STEP_TRIGGER_KEYWORDS = (
+    "write ", "search", "code", "analy", "summar", "compare", "generate",
+    "create", "build", "list ", "run ", "execute", "debug", "deploy",
+    "install", "what files", "read ", "show me", "update ", "web",
+    "research", "fetch", "lookup", "translat", "email", "draft", "fix",
+)
+
 _FALLBACK_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 
@@ -96,6 +105,17 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             logger.info("mem0_memories_loaded_for_planner", user_id=user_id)
 
     # Determine if planning is needed
+    # Cheap pre-check: skip the planner LLM round-trip entirely for short,
+    # instructional/conversational messages (the orchestrator still routes
+    # research/code via a structured call). Prevents a redundant model call
+    # (~5-25s on free-tier) for every ordinary chat turn.
+    _short_instruction = (
+        len(last_user_msg) <= 400
+        and not any(tok in last_user_msg.lower() for tok in _STEP_TRIGGER_KEYWORDS)
+    )
+    if _short_instruction:
+        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else []}
+
     plan_prompt = (
         f"Analyze this user request:\n'{last_user_msg}'\n\n"
         "If this request requires multiple actions (e.g. searching, writing code, executing data analysis), "
@@ -279,6 +299,7 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
         user_id = UUID(_FALLBACK_USER_ID)
 
     # 1. Local RAG retrieval (multi-query + conditional HyDE + child→parent)
+    retrieval_ok = False
     try:
         result = await rag_service.query(
             query=query,
@@ -287,6 +308,7 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
             score_threshold=0.35,
         )
         citations = [c.model_dump() for c in result.citations]
+        retrieval_ok = True
     except Exception as exc:
         # Retrieval infrastructure unavailable → treat as no grounding and
         # fall through to CRAG web search instead of failing the whole turn.
@@ -294,12 +316,27 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
         result = None
         citations = []
 
-    # 2. Grade retrieved context
-    if result is None:
+    # 2. Grade retrieved context.
+    # Distinguish "RAG is down" (still CRAG) from "RAG is healthy but the
+    # index is empty" (ordinary chat should answer directly instead of scraping
+    # the web). Only explicit recency signals (news/today/latest/...) or
+    # present-but-weak grounding trigger the CRAG supplement.
+    query_lower = query.lower()
+    wants_recency = any(
+        tok in query_lower
+        for tok in ("today", "latest", "news", "current", "recent", "update", "weather", "live", " as of")
+    )
+    if not retrieval_ok:
+        # Vector store unreachable → keep the CRAG fallback (regression guard).
         verdict, score = VERDICT_UNRELATED, 0.0
+        needs_web_search = True
+    elif not getattr(result, "citations", None):
+        # Healthy empty index (no user docs): no slow web scrape for general chat.
+        verdict, score = VERDICT_UNRELATED, 0.0
+        needs_web_search = wants_recency
     else:
         verdict, score = retrieval_critique_service.grade(result.citations)
-    needs_web_search = verdict in ("insufficient", "unrelated")
+        needs_web_search = verdict in ("insufficient", "unrelated") or wants_recency
 
     update: dict[str, Any] = {
         "citations": citations,
@@ -392,7 +429,13 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     final_messages = [{"role": "system", "content": system_prompt}]
 
     for m in messages[:-1]:
-        final_messages.append({"role": m.type, "content": m.content})
+        if isinstance(m, dict):
+            m_role = m.get("role", "user")
+            m_content = m.get("content", "")
+        else:
+            m_role = m.type
+            m_content = m.content
+        final_messages.append({"role": {"human": "user", "ai": "assistant"}.get(m_role, m_role), "content": m_content})
 
     last_user_content = messages[-1].content if messages else ""
     if extra_context:

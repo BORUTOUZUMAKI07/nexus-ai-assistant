@@ -11,87 +11,166 @@ from litellm import Router, completion_cost
 litellm.drop_params = True
 litellm.telemetry = False
 
-# Construct model deployment list for LiteLLM Router
+# Construct model deployment list for LiteLLM Router.
+# Primary tier: Groq, live-verified after the VPN was turned off. Groq's current
+# catalog uses provider-prefixed ids (e.g. `groq/compound-mini`, `qwen/qwen3.8-27b`)
+# and its legacy `llama-*` ids are gone, so deployments use the generic `openai/`
+# provider against Groq's OpenAI-compatible base URL (litellm's `groq/` provider
+# strips the prefix and would send the wrong model id).
+# OpenRouter free-tier models remain as redundant fallbacks (shared-pool 429s).
 model_list = [
-    # Primary Groq Models (Ultra-fast, Free Tier)
     {
         "model_name": "fast_chat",
         "litellm_params": {
-            "model": "groq/llama-3.1-8b-instant",
+            "model": "openai/groq/compound-mini",
+            "api_base": "https://api.groq.com/openai/v1",
             "api_key": settings.GROQ_API_KEY,
             "max_tokens": 4096,
             "temperature": 0.7,
+            "timeout": 20,
         },
     },
     {
         "model_name": "complex_reasoning",
         "litellm_params": {
-            "model": "groq/llama-3.3-70b-versatile",
+            "model": "openai/qwen/qwen3.8-27b",
+            "api_base": "https://api.groq.com/openai/v1",
             "api_key": settings.GROQ_API_KEY,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "temperature": 0.6,
+            "timeout": 25,
         },
     },
     {
         "model_name": "large_context",
         "litellm_params": {
-            "model": "groq/mixtral-8x7b-32768",
-            "api_key": settings.GROQ_API_KEY,
-            "max_tokens": 4096,
+            "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+            "api_key": settings.OPENROUTER_API_KEY,
+            "max_tokens": 8192,
             "temperature": 0.5,
-        },
-    },
-    # OpenRouter Fallback Models (Free Tier Failover)
-    {
-        "model_name": "openrouter_llama_8b",
-        "litellm_params": {
-            "model": "openrouter/meta-llama/llama-3.1-8b-instruct:free",
-            "api_key": settings.OPENROUTER_API_KEY,
-        },
-    },
-    {
-        "model_name": "openrouter_qwen_7b",
-        "litellm_params": {
-            "model": "openrouter/qwen/qwen-2.5-7b-instruct:free",
-            "api_key": settings.OPENROUTER_API_KEY,
+            "timeout": 30,
         },
     },
     {
         "model_name": "vision_analysis",
         "litellm_params": {
-            "model": "groq/llama-3.2-11b-vision-preview",
-            "api_key": settings.GROQ_API_KEY,
+            "model": "openrouter/inclusionai/ling-3.0-flash-sante:free",
+            "api_key": settings.OPENROUTER_API_KEY,
             "max_tokens": 4096,
             "temperature": 0.2,
+            "timeout": 20,
         },
     },
+    # OpenRouter multimodal fallback (Vision-specific capability).
     {
-        "model_name": "openrouter_gemini_flash",
+        "model_name": "openrouter_gemma",
         "litellm_params": {
-            "model": "openrouter/google/gemini-flash-1.5:free",
+            "model": "openrouter/google/gemma-4-31b-it:free",
             "api_key": settings.OPENROUTER_API_KEY,
+            "max_tokens": 4096,
+            "temperature": 0.2,
+            "timeout": 20,
         },
     },
 ]
 
-# Initialize LiteLLM Router with 3 Specialized Fallback Tiers
+# Model group aliases: bare model names and provider-prefixed strings used
+# throughout the codebase, mapped to the Router model_group they belong to.
+_MODEL_GROUP_ALIASES = {
+    "qwen3.8-27b": "complex_reasoning",
+    "qwen/qwen3.8-27b": "complex_reasoning",
+    "groq/qwen3.8-27b": "complex_reasoning",
+    "compound-mini": "fast_chat",
+    "groq/compound-mini": "fast_chat",
+    "llama-3.1-8b-instant": "fast_chat",
+    "meta-llama/llama-3.1-8b-instruct:free": "fast_chat",
+    "minimax-m3": "fast_chat",
+    "qwen/qwen-2.5-7b-instruct:free": "fast_chat",
+    "google/gemini-flash-1.5:free": "fast_chat",
+    "openrouter_llama_8b": "fast_chat",
+    "openrouter_gemini_flash": "fast_chat",
+    "gpt-oss-120b": "complex_reasoning",
+    "openai/gpt-oss-120b": "complex_reasoning",
+    "llama-3.3-70b-versatile": "complex_reasoning",
+    "openrouter_qwen_7b": "complex_reasoning",
+    "openai/gpt-oss-20b": "large_context",
+    "mixtral-8x7b-32768": "large_context",
+    "gemma-4-26b-a4b-it": "openrouter_gemma",
+    "gemma-4-31b-it": "openrouter_gemma",
+    "llama-3.2-11b-vision-preview": "openrouter_gemma",
+}
+
+# Router model_group → provider/model string for direct litellm calls (tokens, cost).
+_GROUP_TO_MODEL = {
+    "fast_chat": "groq/compound-mini",
+    "complex_reasoning": "qwen/qwen3.8-27b",
+    "large_context": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+    "vision_analysis": "openrouter/inclusionai/ling-3.0-flash-sante:free",
+    "openrouter_gemma": "openrouter/google/gemma-4-31b-it:free",
+}
+
+_GROUP_NAMES = set(_GROUP_TO_MODEL)
+
+# OpenAI-compatible APIs reject LangChain-style role names. Guard at the
+# provider boundary so any BaseMessage/dict leakage is normalized.
+_ROLE_ALIASES = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}
+
+
+def _normalize_messages(messages: list[Any]) -> list[dict[str, str]]:
+    cleaned: list[dict[str, str]] = []
+    for m in messages:
+        if hasattr(m, "type") and hasattr(m, "content"):
+            role = _ROLE_ALIASES.get(m.type, m.type)
+            cleaned.append({"role": role, "content": m.content})
+        elif isinstance(m, dict):
+            role = _ROLE_ALIASES.get(str(m.get("role", "user")), "user")
+            content = m.get("content", "")
+            cleaned.append({"role": role, "content": content})
+        else:
+            cleaned.append({"role": "user", "content": str(m)})
+    return cleaned
+
+
+def resolve_model_group(model: str) -> str:
+    """Return the Router model_group for any accepted model identifier."""
+    if model in _GROUP_NAMES:
+        return model
+    bare = model.split("/", 1)[-1] if "/" in model else model
+    return _MODEL_GROUP_ALIASES.get(bare, model)
+
+
+def resolve_provider_model(model: str) -> str:
+    """Return a provider/model string for direct litellm calls (token/cost math)."""
+    if model in _GROUP_NAMES:
+        return _GROUP_TO_MODEL[model]
+    bare = model.split("/", 1)[-1] if "/" in model else model
+    group = _MODEL_GROUP_ALIASES.get(bare)
+    if group:
+        return _GROUP_TO_MODEL[group]
+    return model
+
+
+# Initialize LiteLLM Router with 3 Specialized Fallback Tiers.
+# Fallbacks rotate across distinct OpenRouter free-tier models so a shared-pool
+# 429 on one model hands off to another provider instead of ending the stream.
 router = Router(
     model_list=model_list,
     fallbacks=[
-        {"fast_chat": ["openrouter_llama_8b"]},
-        {"complex_reasoning": ["openrouter_qwen_7b", "openrouter_gemini_flash"]},
-        {"vision_analysis": ["openrouter_gemini_flash"]},
+        {"fast_chat": ["complex_reasoning", "large_context", "openrouter_gemma", "vision_analysis"]},
+        {"complex_reasoning": ["fast_chat", "large_context", "openrouter_gemma"]},
+        {"large_context": ["complex_reasoning", "fast_chat", "openrouter_gemma"]},
+        {"vision_analysis": ["fast_chat", "complex_reasoning"]},
     ],
     context_window_fallbacks=[
-        {"fast_chat": ["large_context", "openrouter_gemini_flash"]},
-        {"complex_reasoning": ["large_context", "openrouter_gemini_flash"]},
+        {"fast_chat": ["large_context", "complex_reasoning"]},
+        {"complex_reasoning": ["large_context", "fast_chat"]},
     ],
     content_policy_fallbacks=[
-        {"complex_reasoning": ["openrouter_qwen_7b"]},
+        {"complex_reasoning": ["fast_chat"]},
     ],
-    cooldown_time=60,
-    num_retries=2,
-    timeout=30,
+    cooldown_time=30,
+    num_retries=1,
+    timeout=25,
 )
 
 
@@ -122,17 +201,46 @@ class LiteLLMService:
             )
         )
 
-        response = await self.router.acompletion(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            extra_headers=extra_headers if extra_headers else None,
-        )
+        group = resolve_model_group(model)
+        import time as _time
 
-        cost = completion_cost(completion_response=response)
+        _start = _time.perf_counter()
+        try:
+            response = await self.router.acompletion(
+                model=group,
+                messages=_normalize_messages(messages),
+                temperature=temperature,
+                max_tokens=max_tokens,
+                extra_headers=extra_headers if extra_headers else None,
+            )
+        except Exception as exc:
+            logger.warning(
+                "llm_completion_failed",
+                model=group,
+                error=str(exc),
+                duration_ms=int((_time.perf_counter() - _start) * 1000),
+            )
+            raise
+        _duration_ms = int((_time.perf_counter() - _start) * 1000)
+
+        cost = 0.0
+        try:
+            cost = completion_cost(completion_response=response) or 0.0
+        except Exception:
+            # Cost lookup is best-effort: new provider model slugs (e.g.
+            # groq/qwen/qwen3.8-27b) may not be in litellm's cost map, and cost
+            # accounting must never fail the actual generation.
+            logger.warning("completion_cost_lookup_failed", model=getattr(response, "model", ""))
         input_tokens = response.usage.prompt_tokens if response.usage else 0
         output_tokens = response.usage.completion_tokens if response.usage else 0
+        logger.info(
+            "llm_completion_ok",
+            model=group,
+            resolved=getattr(response, "model", ""),
+            duration_ms=_duration_ms,
+            tokens_input=input_tokens,
+            tokens_output=output_tokens,
+        )
 
         return {
             "content": response.choices[0].message.content or "",
@@ -151,12 +259,31 @@ class LiteLLMService:
         user_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Streams token-by-token chunks over async generator."""
-        response = await self.router.acompletion(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=True,
+        group = resolve_model_group(model)
+        import time as _time
+
+        _start = _time.perf_counter()
+        try:
+            response = await self.router.acompletion(
+                model=group,
+                messages=_normalize_messages(messages),
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "llm_stream_start_failed",
+                model=group,
+                error=str(exc),
+                duration_ms=int((_time.perf_counter() - _start) * 1000),
+            )
+            raise
+        logger.info(
+            "llm_stream_started",
+            model=group,
+            resolved=getattr(response, "model", ""),
+            first_chunk_latency_ms=int((_time.perf_counter() - _start) * 1000),
         )
         async for chunk in response:
             delta = chunk.choices[0].delta.content or ""
@@ -166,7 +293,7 @@ class LiteLLMService:
     async def completion(
         self,
         messages: list[dict[str, str]],
-        model: str = "llama-3.3-70b-versatile",
+        model: str = "complex_reasoning",
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
@@ -182,7 +309,7 @@ class LiteLLMService:
     async def stream_completion(
         self,
         messages: list[dict[str, str]],
-        model: str = "llama-3.3-70b-versatile",
+        model: str = "complex_reasoning",
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> AsyncGenerator[str, None]:
@@ -212,10 +339,11 @@ class LiteLLMService:
             logger.error("audio_transcription_failed", error=str(exc))
             raise
 
-    def count_tokens(self, text: str, model: str = "llama-3.3-70b-versatile") -> int:
+    def count_tokens(self, text: str, model: str = "complex_reasoning") -> int:
         """Estimates token count using litellm encoder."""
         try:
-            return len(litellm.encode(model=model, text=text))
+            provider_model = resolve_provider_model(model)
+            return len(litellm.encode(model=provider_model, text=text))
         except Exception:
             return max(1, len(text.split()))
 
