@@ -7,9 +7,12 @@ from collections.abc import AsyncGenerator
 from typing import Any, TypeVar
 
 import instructor
-import litellm
 import structlog
 from backend.app.core.config import settings
+from backend.app.infrastructure.ai.litellm_client import (
+    resolve_model_group,
+    router,
+)
 from pydantic import BaseModel
 
 logger = structlog.get_logger(__name__)
@@ -24,8 +27,9 @@ class StructuredOutputService:
     """
 
     def __init__(self):
-        # Patch litellm with instructor in async mode
-        self.client = instructor.from_litellm(litellm.acompletion)
+        # Patch the LiteLLM Router (not raw litellm) with instructor in async
+        # mode so model_group names and per-deployment API keys apply here too.
+        self.client = instructor.from_litellm(router.acompletion)
 
     async def generate_structured(
         self,
@@ -41,7 +45,7 @@ class StructuredOutputService:
         If validation fails, Instructor automatically re-prompts the model
         with the validation error up to `max_retries` times.
         """
-        target_model = model or settings.DEFAULT_MODEL
+        target_model = resolve_model_group(model or settings.DEFAULT_MODEL)
         logger.info(
             "generating_structured_output",
             model=target_model,
@@ -75,7 +79,7 @@ class StructuredOutputService:
         Stream partial structured JSON chunks as they arrive from the LLM,
         validating incomplete Pydantic objects progressively.
         """
-        target_model = model or settings.DEFAULT_MODEL
+        target_model = resolve_model_group(model or settings.DEFAULT_MODEL)
         logger.info("streaming_partial_structured_output", model=target_model, response_model=response_model.__name__)
 
         try:

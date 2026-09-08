@@ -15,6 +15,20 @@ from backend.app.services.rag.base import IRetriever
 
 logger = structlog.get_logger(__name__)
 
+# TextEmbedding downloads the ONNX model on first construction and would
+# otherwise re-load it on every call. Cache one instance per model name.
+_fastembed_model_cache: dict[str, Any] = {}
+
+
+def _get_fastembed_model(model_name: str) -> Any:
+    from fastembed import TextEmbedding
+
+    cached = _fastembed_model_cache.get(model_name)
+    if cached is None:
+        cached = TextEmbedding(model_name=model_name)
+        _fastembed_model_cache[model_name] = cached
+    return cached
+
 
 class RetrievalService(IRetriever):
     """
@@ -36,11 +50,9 @@ class RetrievalService(IRetriever):
         synthetic vector — silently indexing garbage poisons retrieval.
         """
         try:
-            from fastembed import TextEmbedding
-
             # Fastembed runs locally on CPU/free without API cost,
             # dimension must match settings.EMBEDDING_DIMENSION / the Qdrant collection.
-            model = TextEmbedding(model_name=self.embedding_model)
+            model = _get_fastembed_model(self.embedding_model)
             embeddings = list(model.embed([text]))
             vector = embeddings[0].tolist()
             if len(vector) != settings.EMBEDDING_DIMENSION:

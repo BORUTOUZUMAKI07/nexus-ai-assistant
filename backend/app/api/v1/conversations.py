@@ -149,6 +149,31 @@ async def stream_conversation(
     """
     thread_id = str(conversation_id)
     user_messages = body.messages
+
+    # Resolve the thread: invalid/"new" ids get a real conversation created on
+    # the fly so fresh chats persist their messages with real data.
+    convo_uuid: UUID | None = None
+    try:
+        convo_uuid = UUID(thread_id)
+    except (ValueError, AttributeError, TypeError):
+        convo_uuid = None
+    if convo_uuid is None:
+        last_user = ""
+        if user_messages:
+            last_in = user_messages[-1]
+            last_user = last_in.get("content") if isinstance(last_in, dict) else str(last_in)
+        conv = await conv_svc.create_conversation(
+            user_id=current_user.id,
+            conv_in=ConversationCreate(
+                title=(last_user or "New Chat")[:120],
+                model=settings.DEFAULT_MODEL,
+                system_prompt=None,
+            ),
+        )
+        convo_uuid = conv.id
+        thread_id = str(convo_uuid)
+        logger.info("conversation_created_from_stream", conversation_id=thread_id)
+
     config = {
         "configurable": {
             "thread_id": thread_id,
@@ -166,7 +191,7 @@ async def stream_conversation(
             last_in = user_messages[-1]
             user_content = last_in.get("content") if isinstance(last_in, dict) else str(last_in)
             user_msg = await conv_svc.add_message(
-                conversation_id=UUID(conversation_id),
+                conversation_id=convo_uuid,
                 role="user",
                 content=user_content,
             )
@@ -257,7 +282,7 @@ async def stream_conversation(
                     )
 
                     assistant_msg = await conv_svc.add_message(
-                        conversation_id=UUID(conversation_id),
+                        conversation_id=convo_uuid,
                         role="assistant",
                         content=emitted_text,
                         parent_message_id=user_msg.id if user_msg else None,
@@ -266,7 +291,7 @@ async def stream_conversation(
                     await usage_svc._repo.log_usage(
                         UsageLogCreate(
                             user_id=current_user.id,
-                            conversation_id=UUID(conversation_id),
+                            conversation_id=convo_uuid,
                             message_id=assistant_msg.id,
                             model=settings.DEFAULT_MODEL,
                             prompt_tokens=prompt_tok,
