@@ -11,6 +11,35 @@ from litellm import Router, completion_cost
 litellm.drop_params = True
 litellm.telemetry = False
 
+# Register per-token cost info for the deployed provider model slugs. Groq is on
+# its free tier (all $0/token) so usage accounting reports accurate USD while
+# silencing litellm's `model not in built-in cost map, cost fields default to 0`
+# warnings at startup. Provider-prefixed variants all appear in responses/cost
+# lookups depending on the call path.
+_DEPLOYED_MODEL_COSTS: dict[str, tuple[float, float]] = {
+    "openai/groq/compound-mini": (0.0, 0.0),
+    "groq/compound-mini": (0.0, 0.0),
+    "compound-mini": (0.0, 0.0),
+    "openai/qwen/qwen3.8-27b": (0.0, 0.0),
+    "groq/qwen/qwen3.8-27b": (0.0, 0.0),
+    "qwen/qwen3.8-27b": (0.0, 0.0),
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free": (0.0, 0.0),
+    "openrouter/inclusionai/ling-3.0-flash-sante:free": (0.0, 0.0),
+    "openrouter/google/gemma-4-31b-it:free": (0.0, 0.0),
+}
+litellm.register_model(
+    {
+        model_slug: {
+            "max_tokens": 8192,
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": output_cost,
+            "cache_creation_input_token_cost": 0.0,
+            "cache_read_input_token_cost": 0.0,
+        }
+        for model_slug, (input_cost, output_cost) in _DEPLOYED_MODEL_COSTS.items()
+    }
+)
+
 # Construct model deployment list for LiteLLM Router.
 # Primary tier: Groq, live-verified after the VPN was turned off. Groq's current
 # catalog uses provider-prefixed ids (e.g. `groq/compound-mini`, `qwen/qwen3.8-27b`)

@@ -158,7 +158,7 @@ async def test_synthesizer_revises_draft_until_critic_approves(monkeypatch):
 
     calls = {"completion": 0, "critic": 0}
 
-    async def fake_completion(messages, model, temperature):
+    async def fake_completion(messages, model, temperature, **kwargs):
         calls["completion"] += 1
         return "final draft answer"
 
@@ -200,7 +200,7 @@ async def test_synthesizer_revises_draft_until_critic_approves(monkeypatch):
 async def test_synthesizer_bounds_revisions_when_critic_keeps_rejecting(monkeypatch):
     from backend.app.agents.orchestrator import nodes
 
-    async def fake_completion(messages, model, temperature):
+    async def fake_completion(messages, model, temperature, **kwargs):
         return "draft"
 
     async def always_reject(user_request, candidate_response):

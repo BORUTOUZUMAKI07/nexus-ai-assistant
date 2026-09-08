@@ -493,7 +493,7 @@ async def test_synthesizer_handles_list_shaped_web_results(monkeypatch):
     """
     from backend.app.agents.orchestrator import nodes
 
-    async def fake_completion(messages, model, temperature):
+    async def fake_completion(messages, model, temperature, **kwargs):
         return "Answer referencing [1]."
 
     monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
