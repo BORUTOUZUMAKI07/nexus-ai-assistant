@@ -158,6 +158,35 @@ export function setupFilesMock(page: Page) {
   return mocks
 }
 
+export function setupSettingsMock(page: Page) {
+  const mocks = mockApi(page)
+
+  mocks.route(/\/api\/settings\/memories(\?|$)/, (route) => {
+    route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
+  })
+
+  mocks.route(/\/api\/settings\/keys(\?|$)/, (route) => {
+    route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
+  })
+
+  mocks.route(/\/api\/settings(\?|$)/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        system_prompt_override: null,
+        default_model: "llama-3.3-70b-versatile",
+        enable_memory: true,
+        enable_tools: true,
+        temperature: 0.7,
+        max_tokens: 4096,
+      }),
+    })
+  })
+
+  return mocks
+}
+
 export function setupChatMock(page: Page, streamBody: string = CHAT_STREAM) {
   const mocks = mockApi(page)
 
@@ -178,7 +207,7 @@ export class NexusAppPage {
   constructor(public page: Page) {}
 
   async goto() {
-    await this.page.goto("/")
+    await this.page.goto("/app")
   }
 
   async login(email: string, password: string) {

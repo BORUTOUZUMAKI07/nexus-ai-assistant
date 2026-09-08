@@ -212,8 +212,9 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let streamContent = "";
+        let streamError: string | null = null;
 
-        while (true) {
+        readLoop: while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
@@ -222,6 +223,17 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
 
           for (const line of lines) {
             if (!line) continue;
+
+            // Structured stream error (Vercel AI SDK 3: prefix)
+            if (line.startsWith("3:")) {
+              const raw = line.slice(2);
+              try {
+                streamError = JSON.parse(raw);
+              } catch {
+                streamError = raw;
+              }
+              break readLoop;
+            }
 
             // Text delta
             if (line.startsWith("0:")) {
@@ -304,7 +316,13 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           ),
           ...annotations.filter((a) => a.type === "hitl_request"),
         ];
+        // Even on a mid-stream error keep whatever already streamed so a failed
+        // answer is never silently replaced by a blank bubble.
         patchAssistant(streamContent, finalAnnotations);
+        if (streamError) {
+          setError(new Error(streamError));
+          return;
+        }
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") return;
         setError(err instanceof Error ? err : new Error("Chat stream failed"));

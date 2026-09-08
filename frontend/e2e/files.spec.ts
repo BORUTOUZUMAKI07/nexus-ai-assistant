@@ -24,12 +24,12 @@ test.describe("Knowledge & RAG", () => {
 
     const app = new NexusAppPage(page)
     await app.goto()
-    await page.getByText("Knowledge & RAG").click()
+    await page.getByRole("button", { name: "Knowledge", exact: true }).click()
 
-    await expect(page.getByText("Knowledge Base & RAG Index")).toBeVisible()
+    await expect(page.getByText("Knowledge base")).toBeVisible()
     await expect(page.getByText("nexus-spec.pdf")).toBeVisible()
     await expect(page.getByText("141.8 KB • 42 chunks")).toBeVisible()
-    await expect(page.getByText("Indexed Documents (1)")).toBeVisible()
+    await expect(page.getByText("Indexed documents")).toBeVisible()
   })
 
   test("runs a semantic search against the RAG testbed", async ({ page }) => {
@@ -57,15 +57,16 @@ test.describe("Knowledge & RAG", () => {
 
     const app = new NexusAppPage(page)
     await app.goto()
-    await page.getByText("Knowledge & RAG").click()
+    await page.getByRole("button", { name: "Knowledge", exact: true }).click()
 
     await page
-      .getByPlaceholder("Test a query against Qdrant (e.g., 'What is Hybrid Search?')")
+      .getByPlaceholder("Ask a question about your documents…")
       .fill("What is Hybrid Search?")
     await page.getByRole("button", { name: "Search" }).click()
 
     await expect(page.getByText("Native Hybrid Search uses multi-stage prefetch.")).toBeVisible()
     await expect(page.getByText(/Score: 0.94/)).toBeVisible()
+    await expect(page.getByText("nexus-spec.pdf (Chunk 4)")).toBeVisible()
   })
 
   test("deletes a document from the index", async ({ page }) => {
@@ -80,7 +81,7 @@ test.describe("Knowledge & RAG", () => {
 
     const app = new NexusAppPage(page)
     await app.goto()
-    await page.getByText("Knowledge & RAG").click()
+    await page.getByRole("button", { name: "Knowledge", exact: true }).click()
 
     await expect(page.getByText("nexus-spec.pdf")).toBeVisible()
     await page.getByTitle("Delete document").click()
@@ -112,7 +113,7 @@ test.describe("Knowledge & RAG", () => {
 
     const app = new NexusAppPage(page)
     await app.goto()
-    await page.getByText("Knowledge & RAG").click()
+    await page.getByRole("button", { name: "Knowledge", exact: true }).click()
 
     await page.setInputFiles("input[type=file]", {
       name: "spec.md",
@@ -121,10 +122,10 @@ test.describe("Knowledge & RAG", () => {
     })
 
     await expect(page.getByText("spec.md")).toBeVisible()
-    await expect(page.getByText("Indexed Documents (2)")).toBeVisible()
+    await expect(page.getByText("5.0 KB • 3 chunks")).toBeVisible()
   })
 
-  test("falls back to sample documents when the index is unavailable", async ({ page }) => {
+  test("shows a readable error when the index backend is unavailable", async ({ page }) => {
     const mocks = mockApi(page)
     mocks.route(/\/api\/files(\?|$)/, (route) => {
       route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({}) })
@@ -133,9 +134,9 @@ test.describe("Knowledge & RAG", () => {
 
     const app = new NexusAppPage(page)
     await app.goto()
-    await page.getByText("Knowledge & RAG").click()
+    await page.getByRole("button", { name: "Knowledge", exact: true }).click()
 
-    await expect(page.getByText("Nexus_Architecture_Master_Spec.pdf")).toBeVisible()
-    await expect(page.getByText("Production_AI_Design_Patterns.md")).toBeVisible()
+    await expect(page.getByText(/failed/i)).toBeVisible()
+    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible()
   })
 })

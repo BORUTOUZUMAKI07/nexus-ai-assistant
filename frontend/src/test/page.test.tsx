@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
-import Home from "@/app/page"
+import Home from "@/app/app/page"
 
 function clearCookie() {
   document.cookie.split(";").forEach((c) => {

@@ -37,8 +37,9 @@ async def tree_of_thoughts_node(state: AgentState) -> dict[str, Any]:
     try:
         raw_candidates = await ai_client.completion(
             messages=generate_prompt,
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             temperature=0.8,
+            max_tokens=700,
         )
         approaches = [app.strip() for app in raw_candidates.split("---APPROACH---") if app.strip()]
 
@@ -60,8 +61,9 @@ async def tree_of_thoughts_node(state: AgentState) -> dict[str, Any]:
 
         synthesized_best = await ai_client.completion(
             messages=eval_prompt,
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             temperature=0.4,
+            max_tokens=700,
         )
 
         logger.info("tot_exploration_complete", candidate_count=len(approaches))

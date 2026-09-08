@@ -31,8 +31,8 @@ test.describe("Admin Center", () => {
   async function openAdmin(page: Page) {
     const app = new NexusAppPage(page)
     await app.goto()
-    await page.getByText("Admin Center").click()
-    await expect(page.getByText("Admin Control Center")).toBeVisible()
+    await page.getByRole("button", { name: "Admin", exact: true }).click()
+    await expect(page.getByText("Users, system health, and security audit trails")).toBeVisible()
   }
 
   test("lists the user directory with roles and status", async ({ page }) => {
@@ -49,6 +49,8 @@ test.describe("Admin Center", () => {
     await expect(page.getByText("Staff Engineer")).toBeVisible()
     await expect(page.getByText("admin", { exact: true })).toBeVisible()
     await expect(page.getByText("user", { exact: true })).toBeVisible()
+    await expect(page.getByText("Active")).toBeVisible()
+    await expect(page.getByText("Disabled")).toBeVisible()
   })
 
   test("disables and re-enables a user", async ({ page }) => {
@@ -82,10 +84,10 @@ test.describe("Admin Center", () => {
     await mocks.setup()
     await openAdmin(page)
 
-    await page.getByRole("button", { name: "System Health" }).click()
+    await page.getByRole("button", { name: "System health" }).click()
     await expect(page.getByText("PostgreSQL")).toBeVisible()
     await expect(page.getByText("Redis Cache")).toBeVisible()
-    await expect(page.getByText("Vector Engine")).toBeVisible()
+    await expect(page.getByText("API status")).toBeVisible()
     await expect(page.getByText("connected", { exact: true })).toHaveCount(2)
   })
 
@@ -118,9 +120,10 @@ test.describe("Admin Center", () => {
     await mocks.setup()
     await openAdmin(page)
 
-    await page.getByRole("button", { name: "Compliance Audit Logs" }).click()
+    await page.getByRole("button", { name: "Audit logs" }).click()
     await expect(page.getByText("AUTH_LOGIN")).toBeVisible()
     await expect(page.getByText("FILE_UPLOAD")).toBeVisible()
     await expect(page.getByText("rag_index")).toBeVisible()
+    await expect(page.getByText("127.0.0.1")).toHaveCount(2)
   })
 })

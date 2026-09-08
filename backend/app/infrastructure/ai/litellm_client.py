@@ -206,6 +206,12 @@ class LiteLLMService:
 
         _start = _time.perf_counter()
         try:
+            # Groq free tier enforces ~1000 output tokens/min (OTPM) per model and
+            # rejects any single request whose expected output exceeds it. Keep
+            # every completion on the Groq-hosted groups under a safe ceiling so a
+            # long internal call can never hard-fail the whole agentic stream.
+            if group in ("fast_chat", "complex_reasoning"):
+                max_tokens = min(max(max_tokens, 1), 1000)
             response = await self.router.acompletion(
                 model=group,
                 messages=_normalize_messages(messages),
@@ -264,6 +270,8 @@ class LiteLLMService:
 
         _start = _time.perf_counter()
         try:
+            if group in ("fast_chat", "complex_reasoning"):
+                max_tokens = min(max(max_tokens, 1), 1000)
             response = await self.router.acompletion(
                 model=group,
                 messages=_normalize_messages(messages),

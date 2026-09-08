@@ -459,6 +459,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             messages=final_messages[:-1] + [{"role": "user", "content": draft_prompt}],
             model="llama-3.3-70b-versatile",
             temperature=0.7,
+            max_tokens=1200,
         )
         critique = await critic_subagent.evaluate(
             user_request=last_user_content, candidate_response=draft
