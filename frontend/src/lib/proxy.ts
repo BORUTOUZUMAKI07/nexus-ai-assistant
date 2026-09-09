@@ -22,7 +22,17 @@ export async function backendFetch(path: string, init?: RequestInit) {
   }
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
-  return fetch(`${BACKEND_URL}/api/v1${path}`, { ...init, headers });
+  try {
+    return await fetch(`${BACKEND_URL}/api/v1${path}`, { ...init, headers });
+  } catch {
+    // Backend is unreachable (cold start takes 30-60s on this stack). Surface
+    // a clean 503 JSON instead of letting the raw TypeError bubble up as a 500
+    // with a `TypeError: fetch failed` stack in the dev console.
+    return new Response(JSON.stringify({ detail: "backend_unavailable" }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 }
 
 export async function proxyJson(path: string, init?: RequestInit) {

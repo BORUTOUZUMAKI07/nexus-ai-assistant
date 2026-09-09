@@ -176,27 +176,81 @@ async function parseError(res: Response, fallback: string): Promise<Error> {
   return new Error(body?.detail ?? body?.error ?? fallback);
 }
 
+// Backend cold start (imports + schema sync) can take 30-60s, so gateway-style
+// statuses returned by the /api/* proxy when the backend is momentarily
+// unreachable (503) are retried with exponential backoff — letting the UI
+// self-heal instead of showing a permanent error. The proxy turns a refused
+// connection into a clean 503, so only HTTP gateway statuses are retried; a
+// thrown fetch error means Next itself failed and fails fast. Auth/business
+// errors (401/4xx) surface immediately.
+const TRANSIENT_STATUS = new Set([429, 502, 503, 504]);
+const DEFAULT_RETRY_ATTEMPTS = 6;
+const DEFAULT_RETRY_BASE_DELAY_MS = 1000;
+const RETRY_MAX_DELAY_MS = 16000;
+
+export interface FetchRetryOptions {
+  attempts?: number;
+  baseDelayMs?: number;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit | undefined,
+  options: FetchRetryOptions = {}
+): Promise<Response> {
+  const attempts = Math.max(1, options.attempts ?? DEFAULT_RETRY_ATTEMPTS);
+  const baseDelayMs = Math.max(
+    0,
+    options.baseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS
+  );
+  let lastStatus = 503;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const res = await fetch(url, init);
+    if (!TRANSIENT_STATUS.has(res.status)) return res;
+    lastStatus = res.status;
+    if (attempt < attempts) {
+      const delay = Math.min(
+        baseDelayMs * 2 ** (attempt - 1),
+        RETRY_MAX_DELAY_MS
+      );
+      await sleep(delay + Math.random() * 250);
+    }
+  }
+  throw new Error(`Backend unavailable (${lastStatus})`);
+}
+
 // ─── Conversations ───────────────────────────────────────────────────────────
 
 export async function fetchConversations(
   page = 1,
-  size = 50
+  size = 50,
+  retry: FetchRetryOptions = {}
 ): Promise<ConversationPage> {
   const limit = size;
   const offset = (page - 1) * size;
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${API_BASE}/conversations?limit=${limit}&offset=${offset}&archived=false`,
-    { headers: authHeaders() }
+    { headers: authHeaders() },
+    retry
   );
   if (!res.ok) throw new Error(`Fetch conversations failed: ${res.status}`);
   const data: Conversation[] = await res.json();
   return { items: data, total: data.length, page, size };
 }
 
-export async function fetchConversation(id: string): Promise<ConversationDetail> {
-  const res = await fetch(`${API_BASE}/conversations/${id}`, {
-    headers: authHeaders(),
-  });
+export async function fetchConversation(
+  id: string,
+  retry: FetchRetryOptions = {}
+): Promise<ConversationDetail> {
+  const res = await fetchWithRetry(
+    `${API_BASE}/conversations/${id}`,
+    { headers: authHeaders() },
+    retry
+  );
   if (!res.ok) throw new Error(`Fetch conversation failed: ${res.status}`);
   return res.json();
 }
@@ -244,8 +298,14 @@ export async function updateConversation(
 
 // ─── Knowledge / Files ───────────────────────────────────────────────────────
 
-export async function fetchKnowledgeFiles(): Promise<KnowledgeFile[]> {
-  const res = await fetch(`${API_BASE}/files`, { headers: authHeaders() });
+export async function fetchKnowledgeFiles(
+  retry: FetchRetryOptions = {}
+): Promise<KnowledgeFile[]> {
+  const res = await fetchWithRetry(
+    `${API_BASE}/files`,
+    { headers: authHeaders() },
+    retry
+  );
   if (!res.ok) throw new Error(`Fetch files failed: ${res.status}`);
   return res.json();
 }
