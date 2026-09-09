@@ -1,7 +1,7 @@
 """
 Repository for Tool domain operations.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
@@ -43,7 +43,7 @@ class ToolRepository(BaseRepository[Tool]):
             existing.parameters_schema = parameters_schema or {}
             existing.requires_approval = requires_approval
             existing.timeout_seconds = timeout_seconds
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
             self.session.add(existing)
             await self.session.commit()
             await self.session.refresh(existing)

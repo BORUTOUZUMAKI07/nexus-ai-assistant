@@ -1,7 +1,7 @@
 """
 Domain models for Usage, Cost, and Evaluation telemetry.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -27,7 +27,7 @@ class UsageLog(SQLModel, table=True):
     status: str = Field(default="success")
     error_message: str | None = Field(default=None)
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None), index=True)
 
 
 class CostLog(SQLModel, table=True):
@@ -41,7 +41,7 @@ class CostLog(SQLModel, table=True):
     output_cost: float = Field(default=0.0)
     total_cost: float = Field(default=0.0)
     billing_period: str = Field(index=True)  # YYYY-MM
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None), index=True)
 
 
 class EvaluationLog(SQLModel, table=True):
@@ -57,4 +57,4 @@ class EvaluationLog(SQLModel, table=True):
     reason: str | None = Field(default=None)
     evaluator: str = Field(default="deepeval")  # deepeval, ragas, g-eval, guardrail
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None), index=True)

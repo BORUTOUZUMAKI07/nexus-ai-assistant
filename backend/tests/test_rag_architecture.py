@@ -343,6 +343,40 @@ def test_sparse_vector_indices_are_stable_across_processes():
     assert index_for_rag in first["indices"]
 
 
+def test_sparse_vector_indices_are_unique_under_hash_collisions():
+    """
+    Qdrant 422s (Unprocessable Entity: 'indices ... must be unique') when a
+    sparse vector repeats an index. Distinct words hashing to the same
+    100k-bucket index must be merged (values summed), never emitted twice.
+    Large real-world chunks hit collisions, so uniqueness is structural.
+    """
+    import hashlib
+    import random
+
+    random.seed(11)
+    svc = RetrievalService()
+
+    # 2500 random words -> guaranteed collisions in the md5 % 100000 space.
+    words = [f"tok{random.randrange(10_000_000):07x}" for _ in range(2500)]
+    vec = svc.generate_sparse_vector(" ".join(words))
+
+    assert len(vec["indices"]) == len(vec["values"])
+    assert len(vec["indices"]) == len(set(vec["indices"])), "duplicate sparse index emitted"
+
+    # Merge must preserve total term frequency: one count per distinct word.
+    assert abs(sum(vec["values"]) - 2500.0) < 1e-6
+
+    # Colliding words aggregate onto one shared index (bucket reuse is allowed,
+    # duplicates are not).
+    import collections
+
+    per_word = collections.Counter(words)
+    # pick the most frequent word and confirm it maps to exactly one emitted index
+    top_word, _ = per_word.most_common(1)[0]
+    top_idx = int(hashlib.md5(top_word.encode()).hexdigest()[:8], 16) % 100000
+    assert top_idx in vec["indices"]
+
+
 @pytest.mark.asyncio
 async def test_retrieve_multi_merges_and_caps_top_k(monkeypatch):
     svc = RetrievalService()

@@ -2,7 +2,7 @@
 Cost Tracking Service.
 Computes token expense based on provider pricing tables and logs usage.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -62,7 +62,7 @@ class CostTrackingService:
         output_cost = (completion_tokens / 1_000_000) * pricing["output"]
         cost = round(input_cost + output_cost, 6)
 
-        current_period = datetime.utcnow().strftime("%Y-%m")
+        current_period = datetime.now(UTC).replace(tzinfo=None).strftime("%Y-%m")
         cost_entry = CostLog(
             user_id=user_id,
             provider=provider,
@@ -115,7 +115,7 @@ class CostTrackingService:
         created_log = await usage_repo.create(log)
 
         # Aggregate monthly cost log
-        current_period = datetime.utcnow().strftime("%Y-%m")
+        current_period = datetime.now(UTC).replace(tzinfo=None).strftime("%Y-%m")
         price_model = cls._price_model(model)
         pricing = MODEL_PRICING.get(price_model, MODEL_PRICING["default"])
         cost_entry = CostLog(
