@@ -65,7 +65,7 @@ function Navbar() {
 
         <div className="flex items-center gap-3">
           <Link
-            href="/app"
+            href="/signin"
             className="rounded-lg px-4 py-2 text-[13.5px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-surface-elevated)] hover:text-[var(--text-primary)]"
           >
             Sign in

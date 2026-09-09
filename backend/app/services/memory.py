@@ -147,9 +147,11 @@ class LongTermMemoryService:
         try:
             results = await self._client.search(
                 query=query,
-                user_id=uid,
-                limit=limit,
+                filters={"user_id": uid},
+                top_k=limit,
             )
+            if isinstance(results, dict):
+                results = results.get("results", [])
             logger.debug("mem0_search", user_id=uid, query=query[:50], hits=len(results))
             return results
 
@@ -170,7 +172,10 @@ class LongTermMemoryService:
 
         uid = str(user_id)
         try:
-            return await self._client.get_all(user_id=uid, limit=limit)
+            data = await self._client.get_all(filters={"user_id": uid}, page_size=limit)
+            if isinstance(data, dict):
+                return data.get("results", [])
+            return data
         except Exception as exc:
             logger.warning("mem0_get_all_failed", user_id=uid, error=str(exc))
             return []

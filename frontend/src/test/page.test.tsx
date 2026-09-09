@@ -1,6 +1,14 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import Home from "@/app/app/page"
+
+const { routerMock } = vi.hoisted(() => ({
+  routerMock: { replace: vi.fn(), push: vi.fn() },
+}))
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => routerMock,
+}))
 
 function clearCookie() {
   document.cookie.split(";").forEach((c) => {
@@ -9,6 +17,11 @@ function clearCookie() {
 }
 
 describe("Home page integration", () => {
+  beforeEach(() => {
+    routerMock.replace.mockClear()
+    routerMock.push.mockClear()
+  })
+
   it("opens the login gate when no token is present", async () => {
     clearCookie()
     render(<Home />)
@@ -45,7 +58,7 @@ describe("Home page integration", () => {
     expect(await screen.findByText("Hello from Nexus.")).toBeInTheDocument()
   })
 
-  it("supports sign out back to the login gate", async () => {
+  it("supports sign out by clearing the token and redirecting to the landing page", async () => {
     clearCookie()
     render(<Home />)
     await screen.findByText("Welcome back")
@@ -60,6 +73,6 @@ describe("Home page integration", () => {
     await screen.findByText("Project kickoff")
     fireEvent.click(screen.getByTitle("Sign out"))
 
-    expect(await screen.findByText("Welcome back")).toBeInTheDocument()
+    await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/"))
   })
 })

@@ -72,7 +72,11 @@ class CodeExecutionService:
             stderr_lines: list[str] = []
             charts: list[dict[str, Any]] = []
 
-            async with AsyncSandbox(api_key=self.api_key, timeout=timeout_seconds) as sandbox:
+            async with await AsyncSandbox.create(
+                template=AsyncSandbox.default_template,
+                api_key=self.api_key,
+                timeout=timeout_seconds,
+            ) as sandbox:
                 execution = await sandbox.run_code(code)
 
                 for log in execution.logs.stdout:
