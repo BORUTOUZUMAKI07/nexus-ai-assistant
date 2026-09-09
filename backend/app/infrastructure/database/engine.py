@@ -19,7 +19,7 @@ except Exception as exc:
 # Create the global AsyncEngine for PostgreSQL / Supabase
 engine: AsyncEngine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.ENVIRONMENT == "development",
+    echo=settings.DATABASE_ECHO,
     future=True,
     pool_size=20,
     max_overflow=10,
