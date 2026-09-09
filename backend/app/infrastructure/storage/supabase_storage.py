@@ -4,6 +4,8 @@ Uses the Supabase REST Storage API to upload, download, and delete files
 from Supabase Storage buckets — no extra S3/boto3 dependency needed.
 """
 
+import json
+
 import httpx
 import structlog
 from backend.app.core.config import settings
@@ -144,13 +146,16 @@ class SupabaseStorageClient(IStorageService):
         """Delete a file from Supabase Storage."""
         await self._ensure_bucket()
 
+        headers = {**self.headers, "Content-Type": "application/json"}
+        body = json.dumps({"prefixes": [storage_path]}).encode()
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.delete(
+            resp = await client.request(
+                "DELETE",
                 f"{self.base_url}/object/{STORAGE_BUCKET}",
-                headers=self.headers,
-                json={"prefixes": [storage_path]},
+                headers=headers,
+                content=body,
             )
-            if resp.status_code == 200:
+            if resp.status_code in (200, 201):
                 logger.info("supabase_storage_deleted", path=storage_path)
                 return True
             else:
