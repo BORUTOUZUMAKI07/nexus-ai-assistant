@@ -2,7 +2,9 @@
 import uuid
 
 import pytest
+from backend.app.domain.conversation.models import Message
 from backend.app.domain.conversation.repository import ConversationRepository
+from backend.app.domain.file.models import File
 
 
 @pytest.mark.asyncio
@@ -89,6 +91,54 @@ async def test_delete_conversation(client, user_auth_headers):
 
     gone = await client.get(f"/api/v1/conversations/{conv_id}", headers=user_auth_headers)
     assert gone.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_with_messages_and_files(
+    client, user_auth_headers, test_user, session_factory
+):
+    """Deleting a conversation cascades messages + conversation-linked files."""
+    from backend.app.domain.file.repository import FileRepository
+
+    created = await client.post(
+        "/api/v1/conversations", json={"title": "Has data"}, headers=user_auth_headers
+    )
+    conv_id = created.json()["id"]
+
+    async with session_factory() as session:
+        repo = ConversationRepository(session)
+        m1 = await repo.add_message(conv_id, "user", "what is DP")
+        await repo.add_message(conv_id, "assistant", "dynamic programming", parent_message_id=m1.id)
+        await FileRepository(session).create_file(
+            user_id=test_user.id,
+            filename="a.pdf",
+            original_filename="a.pdf",
+            file_type="pdf",
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_path="fake/a.pdf",
+            conversation_id=conv_id,
+        )
+
+    deleted = await client.delete(
+        f"/api/v1/conversations/{conv_id}", headers=user_auth_headers
+    )
+    assert deleted.status_code == 204
+
+    gone = await client.get(f"/api/v1/conversations/{conv_id}", headers=user_auth_headers)
+    assert gone.status_code == 404
+
+    async with session_factory() as session:
+        from sqlmodel import select
+
+        leftover_messages = (await session.exec(
+            select(Message).where(Message.conversation_id == conv_id)
+        )).all()
+        leftover_files = (await session.exec(
+            select(File).where(File.conversation_id == conv_id)
+        )).all()
+    assert leftover_messages == []
+    assert leftover_files == []
 
 
 @pytest.mark.asyncio

@@ -9,8 +9,12 @@ from backend.app.domain.conversation.models import (
     Conversation,
     ConversationBranch,
     Message,
+    MessageAttachment,
 )
-from sqlmodel import select
+from backend.app.domain.file.models import File, FileChunk, FileMetadata
+from backend.app.domain.tool.models import ToolCall
+from backend.app.domain.usage.models import UsageLog
+from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 
@@ -65,6 +69,53 @@ class ConversationRepository(BaseRepository[Conversation]):
         return conversation
 
     async def delete(self, conversation: Conversation) -> None:
+        """
+        Hard-deletes a conversation and everything that references it in
+        dependency order (live FKs are NO ACTION — no cascades exist).
+
+        Each child group is removed with a single bulk DELETE statement; a
+        single-statement delete in Postgres is self-consistent for the
+        self-referencing ``messages.parent_message_id`` fine.
+        """
+        conv_id = conversation.id
+        message_sub = select(Message.id).where(Message.conversation_id == conv_id)
+
+        # Branch links pointing at this conversation (either direction).
+        await self.session.exec(
+            delete(ConversationBranch).where(
+                (ConversationBranch.conversation_id == conv_id)
+                | (ConversationBranch.parent_conversation_id == conv_id)
+            )
+        )
+
+        # Token-level children of the conversation's messages.
+        await self.session.exec(
+            delete(MessageAttachment)
+            .where(MessageAttachment.message_id.in_(message_sub))
+        )
+
+        # Messages of the conversation (self-referential bulk delete).
+        await self.session.exec(
+            delete(Message).where(Message.conversation_id == conv_id)
+        )
+
+        # Usage/tool telemetry keyed to the conversation or its messages.
+        await self.session.exec(
+            delete(UsageLog).where(UsageLog.conversation_id == conv_id)
+        )
+        await self.session.exec(
+            delete(ToolCall).where(ToolCall.conversation_id == conv_id)
+        )
+
+        # Files attached to the conversation (and their chunks/metadata).
+        await self.session.exec(
+            delete(FileChunk).where(FileChunk.file_id.in_(select(File.id).where(File.conversation_id == conv_id)))
+        )
+        await self.session.exec(
+            delete(FileMetadata).where(FileMetadata.file_id.in_(select(File.id).where(File.conversation_id == conv_id)))
+        )
+        await self.session.exec(delete(File).where(File.conversation_id == conv_id))
+
         await self.session.delete(conversation)
         await self.session.commit()
 

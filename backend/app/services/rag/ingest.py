@@ -46,33 +46,63 @@ class IngestionService:
 
         if suffix in [".txt", ".md", ".py", ".js", ".ts", ".json", ".csv", ".yaml", ".yml", ".html", ".xml"]:
             try:
-                return file_path.read_text(encoding="utf-8", errors="ignore")
+                text = file_path.read_text(encoding="utf-8", errors="ignore")
             except Exception as e:
                 logger.warning("direct_text_read_failed", path=str(file_path), error=str(e))
-                return ""
+                text = ""
+            return text.replace("\x00", "")
 
         if suffix == ".pdf":
-            # Attempt extraction via pypdf or pdfplumber if available
+            # Prefer PyMuPDF (declared project dependency, fast text layer).
             try:
-                import pypdf
+                import pymupdf as fitz  # type: ignore[import-not-found]
+
+                doc = fitz.open(str(file_path))
+                text_parts = []
+                for page_idx in range(doc.page_count):
+                    page = doc.load_page(page_idx)
+                    extracted = page.get_text("text")
+                    if extracted and extracted.strip():
+                        text_parts.append(f"--- Page {page_idx + 1} ---\n{extracted}")
+                doc.close()
+                if text_parts:
+                    return "\n\n".join(text_parts).replace("\x00", "")
+            except ImportError:
+                logger.warning("pymupdf_not_installed", path=str(file_path))
+            except Exception as exc:
+                logger.warning("pdf_extraction_failed", path=str(file_path), error=str(exc))
+
+            # Fallback: pypdf if available.
+            try:
+                import pypdf  # type: ignore[import-not-found]
+
                 reader = pypdf.PdfReader(str(file_path))
                 text_parts = []
                 for idx, page in enumerate(reader.pages):
                     extracted = page.extract_text()
-                    if extracted:
+                    if extracted and extracted.strip():
                         text_parts.append(f"--- Page {idx + 1} ---\n{extracted}")
-                return "\n\n".join(text_parts)
+                if text_parts:
+                    return "\n\n".join(text_parts).replace("\x00", "")
             except ImportError:
-                logger.warning("pypdf_not_installed_trying_raw_decode", path=str(file_path))
+                logger.warning("pypdf_not_installed", path=str(file_path))
             except Exception as exc:
-                logger.warning("pdf_extraction_failed", path=str(file_path), error=str(exc))
+                logger.warning("pypdf_extraction_failed", path=str(file_path), error=str(exc))
 
-        # Fallback binary decode
-        try:
-            raw = file_path.read_bytes()
-            return raw.decode("utf-8", errors="ignore")
-        except Exception:
+            # A PDF with no readable text layer (scanned/encrypted/no text)
+            # is contentless — mark it failed instead of shipping binary
+            # garbage (\x00 bytes) down the ingestion pipe.
+            logger.warning("pdf_no_text_extracted", path=str(file_path))
             return ""
+
+        # Fallback binary decode (non-PDF formats only)
+        try:
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            raw = file_path.read_bytes()
+            text = raw.decode("utf-8", errors="ignore")
+        # Sanitize control bytes that would fail a UTF-8 DB column / JSONB.
+        return text.replace("\x00", "")
 
     async def ingest_file(
         self,
@@ -158,6 +188,10 @@ class IngestionService:
 
         except Exception as exc:
             logger.exception("ingestion_pipeline_error", file_id=str(file_id), error=str(exc))
+            try:
+                await session.rollback()
+            except Exception:
+                pass
             await repo.update_status(file_id, status="failed", error_message=str(exc))
             return {"status": "failed", "error": str(exc), "chunks": 0}
 
@@ -283,6 +317,10 @@ class IngestionService:
 
         except Exception as exc:
             logger.exception("parent_child_ingestion_error", file_id=str(file_id), error=str(exc))
+            try:
+                await session.rollback()
+            except Exception:
+                pass
             await repo.update_status(file_id, status="failed", error_message=str(exc))
             return {"status": "failed", "error": str(exc), "chunks": 0}
 
