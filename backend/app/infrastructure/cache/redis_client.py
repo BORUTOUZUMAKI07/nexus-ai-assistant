@@ -4,12 +4,16 @@ import redis.asyncio as redis
 from backend.app.core.config import settings
 from backend.app.infrastructure.cache.base import ICacheService
 
-# Async Redis client instance
+# Async Redis client instance. ``protocol=2`` keeps redis-py on RESP2: the
+# library's default RESP3 handshake tries ``CLIENT MAINT_NOTIFICATIONS``, which
+# Upstash does not implement (logs a noisy 'Command is not available' line on
+# every pooled connection).
 redis_client: redis.Redis = redis.from_url(
     settings.REDIS_URL,
     encoding="utf-8",
     decode_responses=True,
-    max_connections=20
+    max_connections=20,
+    protocol=2,
 )
 
 
