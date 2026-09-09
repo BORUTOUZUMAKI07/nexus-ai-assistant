@@ -47,6 +47,17 @@ litellm.register_model(
 # provider against Groq's OpenAI-compatible base URL (litellm's `groq/` provider
 # strips the prefix and would send the wrong model id).
 # OpenRouter free-tier models remain as redundant fallbacks (shared-pool 429s).
+# Every deployment carries its per-token pricing in ``litellm_params`` so the
+# Router's internally-hashed registration for each deployment inherits the same
+# $0 free-tier cost fields and emits no ``register_model ... not in built-in cost
+# map`` warnings (the hashed ids are opaque and cannot be registered ahead of time).
+_CACHE_COST_FIELDS = {
+    "input_cost_per_token": 0.0,
+    "output_cost_per_token": 0.0,
+    "cache_creation_input_token_cost": 0.0,
+    "cache_read_input_token_cost": 0.0,
+}
+
 model_list = [
     {
         "model_name": "fast_chat",
@@ -57,6 +68,7 @@ model_list = [
             "max_tokens": 4096,
             "temperature": 0.7,
             "timeout": 20,
+            **_CACHE_COST_FIELDS,
         },
     },
     {
@@ -68,6 +80,7 @@ model_list = [
             "max_tokens": 8192,
             "temperature": 0.6,
             "timeout": 25,
+            **_CACHE_COST_FIELDS,
         },
     },
     {
@@ -78,6 +91,7 @@ model_list = [
             "max_tokens": 8192,
             "temperature": 0.5,
             "timeout": 30,
+            **_CACHE_COST_FIELDS,
         },
     },
     {
@@ -88,6 +102,7 @@ model_list = [
             "max_tokens": 4096,
             "temperature": 0.2,
             "timeout": 20,
+            **_CACHE_COST_FIELDS,
         },
     },
     # OpenRouter multimodal fallback (Vision-specific capability).
@@ -99,6 +114,7 @@ model_list = [
             "max_tokens": 4096,
             "temperature": 0.2,
             "timeout": 20,
+            **_CACHE_COST_FIELDS,
         },
     },
 ]
