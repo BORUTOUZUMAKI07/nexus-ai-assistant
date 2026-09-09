@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field(
         default="postgresql+asyncpg://nexus:nexus@localhost:5432/nexus_dev"
     )
+    # Echo every SQL statement to the console. Off by default even in
+    # development — on by default it floods the dev console with every
+    # sqlalchemy query (pg_catalog table checks, etc.).
+    DATABASE_ECHO: bool = Field(default=False)
     SUPABASE_URL: str | None = None
     SUPABASE_ANON_KEY: str | None = None
     SUPABASE_SERVICE_ROLE_KEY: str | None = None

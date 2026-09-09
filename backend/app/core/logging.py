@@ -75,7 +75,14 @@ def setup_logging() -> None:
     # huggingface_hub's session closes) that are useless in our logs and, when
     # fired during interpreter shutdown, hit the already-finalized colorama
     # stream and print stdlib ``--- Logging error ---`` noise. Keep them quiet.
-    for noisy_logger in ("asyncio", "httpcore", "httpx", "huggingface_hub", "litellm"):
+    for noisy_logger in (
+        "asyncio",
+        "datasets",
+        "httpcore",
+        "httpx",
+        "huggingface_hub",
+        "litellm",
+    ):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 
