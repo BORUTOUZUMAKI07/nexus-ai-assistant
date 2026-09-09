@@ -37,7 +37,7 @@ test.describe("Admin Center", () => {
 
   test("lists the user directory with roles and status", async ({ page }) => {
     const mocks = mockApi(page)
-    mocks.route(/\/api\/v1\/admin\/users(\?|$)/, (route) => {
+    mocks.route(/\/api\/admin\/users(\?|$)/, (route) => {
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(USERS) })
     })
     await mocks.setup()
@@ -55,10 +55,10 @@ test.describe("Admin Center", () => {
 
   test("disables and re-enables a user", async ({ page }) => {
     const mocks = mockApi(page)
-    mocks.route(/\/api\/v1\/admin\/users(\?|$)/, (route) => {
+    mocks.route(/\/api\/admin\/users(\?|$)/, (route) => {
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(USERS) })
     })
-    mocks.route(/\/api\/v1\/admin\/users\/usr-01\/toggle-status/, (route) => {
+    mocks.route(/\/api\/admin\/users\/usr-01\/toggle-status/, (route) => {
       route.fulfill({ status: 200, contentType: "application/json", body: "{}" })
     })
     await mocks.setup()
@@ -74,7 +74,7 @@ test.describe("Admin Center", () => {
 
   test("shows system health cards", async ({ page }) => {
     const mocks = mockApi(page)
-    mocks.route(/\/api\/v1\/admin\/system-status/, (route) => {
+    mocks.route(/\/api\/admin\/system-status/, (route) => {
       route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -93,7 +93,7 @@ test.describe("Admin Center", () => {
 
   test("renders compliance audit logs", async ({ page }) => {
     const mocks = mockApi(page)
-    mocks.route(/\/api\/v1\/admin\/audit-logs/, (route) => {
+    mocks.route(/\/api\/admin\/audit-logs/, (route) => {
       route.fulfill({
         status: 200,
         contentType: "application/json",

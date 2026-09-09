@@ -104,7 +104,7 @@ describe("resilience - real error states (no fabricated fallbacks)", () => {
     setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
-    server.use(http.get("/api/v1/admin/users", () => HttpResponse.json({}, { status: 500 })))
+    server.use(http.get("/api/admin/users", () => HttpResponse.json({}, { status: 500 })))
 
     render(<AdminView />)
 
@@ -117,7 +117,7 @@ describe("resilience - real error states (no fabricated fallbacks)", () => {
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(
-      http.get("/api/v1/admin/audit-logs", () => HttpResponse.json({}, { status: 500 }))
+      http.get("/api/admin/audit-logs", () => HttpResponse.json({}, { status: 500 }))
     )
 
     render(<AdminView />)
