@@ -60,6 +60,20 @@ export const KnowledgeView: React.FC = () => {
     void load();
   }, [load]);
 
+  // Live-refresh pending uploads so a finished file stops showing an in-flight
+  // state without requiring a page reload. Polls only while any file is still
+  // processing, and stops as soon as every file has reached a terminal state.
+  useEffect(() => {
+    const hasPending = files.some(
+      (f) => f.status === "pending" || f.status === "processing"
+    );
+    if (!hasPending || isLoading) return;
+    const timer = setTimeout(() => {
+      void load();
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [files, isLoading, load]);
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
@@ -204,7 +218,7 @@ export const KnowledgeView: React.FC = () => {
                     <FileText className="w-4 h-4 text-[var(--text-muted)] shrink-0" />
                     <div>
                       <span className="font-medium text-[var(--text-secondary)] block truncate max-w-sm">
-                        {f.filename}
+                        {f.original_filename || f.filename}
                       </span>
                       <span className="text-[10px] text-[var(--text-faint)]">
                         {(f.size_bytes / 1024).toFixed(1)} KB • {f.chunk_count} chunks
@@ -212,9 +226,25 @@ export const KnowledgeView: React.FC = () => {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="flex items-center gap-1 text-[var(--status-success)] text-[10px] bg-[var(--bg-main)] px-2 py-0.5 rounded-md font-mono border border-[var(--border-subtle)]">
-                      <CheckCircle2 className="w-3 h-3" /> {f.status}
-                    </span>
+                    {f.status === "pending" || f.status === "processing" ? (
+                      <span
+                        className="flex items-center gap-1 text-[var(--accent)] text-[10px] bg-[var(--bg-main)] px-2 py-0.5 rounded-md font-mono border border-[var(--border-subtle)]"
+                        title="Document is still being indexed in the background"
+                      >
+                        <Loader2 className="w-3 h-3 animate-spin" /> Indexing…
+                      </span>
+                    ) : f.status === "failed" ? (
+                      <span
+                        className="flex items-center gap-1 text-[var(--status-danger)] text-[10px] bg-[var(--bg-main)] px-2 py-0.5 rounded-md font-mono border border-[var(--border-subtle)]"
+                        title={f.error_message ?? "Indexing failed"}
+                      >
+                        <AlertCircle className="w-3 h-3" /> Failed
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-[var(--status-success)] text-[10px] bg-[var(--bg-main)] px-2 py-0.5 rounded-md font-mono border border-[var(--border-subtle)]">
+                        <CheckCircle2 className="w-3 h-3" /> Indexed
+                      </span>
+                    )}
                     <button
                       onClick={() => handleDeleteFile(f.id)}
                       className="text-[var(--text-faint)] hover:text-[var(--status-danger)] p-1 transition-colors"

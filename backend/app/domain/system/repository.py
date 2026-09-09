@@ -1,7 +1,7 @@
 """
 Repository for System and Audit domain operations.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
@@ -29,7 +29,7 @@ class SystemRepository(BaseRepository[SystemConfig]):
                 config.description = description
             config.is_secret = is_secret
             config.updated_by = updated_by
-            config.updated_at = datetime.utcnow()
+            config.updated_at = datetime.now(UTC).replace(tzinfo=None)
             self.session.add(config)
         else:
             config = SystemConfig(

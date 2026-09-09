@@ -1,7 +1,7 @@
 """
 Repository for File and Chunk domain operations.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
@@ -62,7 +62,7 @@ class FileRepository(BaseRepository[File]):
             db_file.status = status
             db_file.chunk_count = chunk_count
             db_file.error_message = error_message
-            db_file.updated_at = datetime.utcnow()
+            db_file.updated_at = datetime.now(UTC).replace(tzinfo=None)
             self.session.add(db_file)
             await self.session.commit()
             await self.session.refresh(db_file)

@@ -1,7 +1,7 @@
 """
 Repository for Prompt and Skill domain operations.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
@@ -93,7 +93,7 @@ class PromptRepository(BaseRepository[PromptTemplate]):
             )
             self.session.add(version)
 
-        template.updated_at = datetime.utcnow()
+        template.updated_at = datetime.now(UTC).replace(tzinfo=None)
         self.session.add(template)
         await self.session.commit()
         await self.session.refresh(template)

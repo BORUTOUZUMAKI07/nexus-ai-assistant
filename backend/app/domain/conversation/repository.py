@@ -1,7 +1,7 @@
 """
 Repository for Conversation Domain operations.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
@@ -62,7 +62,7 @@ class ConversationRepository(BaseRepository[Conversation]):
         for key, value in update_data.items():
             if value is not None and hasattr(conversation, key):
                 setattr(conversation, key, value)
-        conversation.updated_at = datetime.utcnow()
+        conversation.updated_at = datetime.now(UTC).replace(tzinfo=None)
         self.session.add(conversation)
         await self.session.commit()
         await self.session.refresh(conversation)
@@ -169,7 +169,7 @@ class ConversationRepository(BaseRepository[Conversation]):
         conversation = await self.get_by_id(conversation_id)
         if conversation:
             conversation.token_count += (prompt_tokens + completion_tokens)
-            conversation.updated_at = datetime.utcnow()
+            conversation.updated_at = datetime.now(UTC).replace(tzinfo=None)
             self.session.add(conversation)
 
         await self.session.commit()

@@ -79,13 +79,17 @@ class RetrievalService(IRetriever):
 
         words = re.findall(r"\w+", text.lower())
         counts = Counter(words)
-        # Stable index across processes (derive from md5 digest, not hash())
-        indices = [
-            int(hashlib.md5(w.encode("utf-8")).hexdigest()[:8], 16) % 100000
-            for w in counts.keys()
-        ]
-        values = [float(c) for c in counts.values()]
-        return {"indices": indices, "values": values}
+        # Stable index across processes (derive from md5 digest, not hash()).
+        # Merge colliding hashes by summing values so indices never repeat —
+        # Qdrant 422s on duplicate sparse indices.
+        merged: dict[int, float] = {}
+        for w, c in counts.items():
+            idx = int(hashlib.md5(w.encode("utf-8")).hexdigest()[:8], 16) % 100000
+            merged[idx] = merged.get(idx, 0.0) + float(c)
+        return {
+            "indices": list(merged.keys()),
+            "values": list(merged.values()),
+        }
 
     async def retrieve(
         self,

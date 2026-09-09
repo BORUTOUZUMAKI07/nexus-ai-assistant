@@ -85,9 +85,11 @@ export interface UsageStats {
 export interface KnowledgeFile {
   id: string;
   filename: string;
+  original_filename?: string;
   status: "pending" | "processing" | "indexed" | "failed";
   size_bytes: number;
   chunk_count: number;
+  error_message?: string | null;
   created_at: string;
 }
 
