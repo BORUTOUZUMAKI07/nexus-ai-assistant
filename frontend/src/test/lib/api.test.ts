@@ -58,6 +58,38 @@ describe("api client", () => {
     expect(page.size).toBe(10)
   })
 
+  it("retries transient backend-unavailable responses until it succeeds", async () => {
+    let calls = 0
+    server.use(
+      http.get(`${API}/conversations`, () => {
+        calls += 1
+        return calls < 3
+          ? HttpResponse.json({ detail: "backend_unavailable" }, { status: 503 })
+          : HttpResponse.json([])
+      })
+    )
+    setAccessToken("tok")
+    const page = await fetchConversations(1, 50, { attempts: 3, baseDelayMs: 1 })
+    expect(calls).toBe(3)
+    expect(page.items).toHaveLength(0)
+    expect(page.total).toBe(0)
+  })
+
+  it("surfaces real 4xx errors without retrying", async () => {
+    let calls = 0
+    server.use(
+      http.get(`${API}/conversations`, () => {
+        calls += 1
+        return HttpResponse.json({ detail: "unauthorized" }, { status: 401 })
+      })
+    )
+    setAccessToken("tok")
+    await expect(
+      fetchConversations(1, 50, { attempts: 3, baseDelayMs: 1 })
+    ).rejects.toThrow("Fetch conversations failed: 401")
+    expect(calls).toBe(1)
+  })
+
   it("creates a conversation with a JSON body", async () => {
     let sentBody = ""
     server.use(
