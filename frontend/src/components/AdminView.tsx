@@ -56,15 +56,15 @@ export const AdminView: React.FC = () => {
     setError(null);
     try {
       if (activeTab === "users") {
-        const res = await fetch("/api/v1/admin/users");
+        const res = await fetch("/api/admin/users");
         if (!res.ok) throw new Error(`Users endpoint failed: ${res.status}`);
         setUsers(await res.json());
       } else if (activeTab === "health") {
-        const res = await fetch("/api/v1/admin/system-status");
+        const res = await fetch("/api/admin/system-status");
         if (!res.ok) throw new Error(`System status failed: ${res.status}`);
         setSystemHealth(await res.json());
       } else {
-        const res = await fetch("/api/v1/admin/audit-logs");
+        const res = await fetch("/api/admin/audit-logs");
         if (!res.ok) throw new Error(`Audit logs failed: ${res.status}`);
         setAuditLogs(await res.json());
       }
@@ -82,7 +82,7 @@ export const AdminView: React.FC = () => {
 
   const toggleUser = async (userId: string) => {
     try {
-      const res = await fetch(`/api/v1/admin/users/${userId}/toggle-status`, {
+      const res = await fetch(`/api/admin/users/${userId}/toggle-status`, {
         method: "POST",
       });
       if (!res.ok) throw new Error(`Toggle failed: ${res.status}`);

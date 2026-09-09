@@ -284,8 +284,8 @@ export const handlers = [
     })
   }),
 
-  // ── Admin (browser hits /api/v1 directly) ──────────────────────────────
-  http.get("/api/v1/admin/users", () =>
+  // ── Admin (proxied to backend /api/v1/admin/*) ──────────────────────────
+  http.get("/api/admin/users", () =>
     HttpResponse.json([
       {
         id: "usr-01",
@@ -298,13 +298,13 @@ export const handlers = [
       },
     ])
   ),
-  http.post("/api/v1/admin/users/:id/toggle-status", () =>
+  http.post("/api/admin/users/:id/toggle-status", () =>
     HttpResponse.json({ detail: "ok" })
   ),
-  http.get("/api/v1/admin/system-status", () =>
+  http.get("/api/admin/system-status", () =>
     HttpResponse.json({ status: "healthy", database: "connected", redis_cache: "connected" })
   ),
-  http.get("/api/v1/admin/audit-logs", () =>
+  http.get("/api/admin/audit-logs", () =>
     HttpResponse.json([
       {
         id: "log-1",
