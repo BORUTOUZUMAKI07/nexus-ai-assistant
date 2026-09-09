@@ -17,6 +17,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 import structlog
+from psycopg import AsyncConnection
+from psycopg.rows import dict_row
 
 try:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -171,7 +173,19 @@ async def lifespan_graph() -> AsyncIterator[None]:
 
     if AsyncPostgresSaver is not None:
         try:
-            async with AsyncPostgresSaver.from_conn_string(pg_dsn) as checkpointer:
+            # Open a dedicated AsyncConnection (not langgraph's from_conn_string helper).
+            # `prepare_threshold=None` disables server-side PREPARE statements, which is
+            # required when running against a transaction-mode pooler (Supabase
+            # pooler.supabase.com:6543): langgraph's helper hardcodes prepare_threshold=0,
+            # so the first PREPARE per statement can collide with a still-live prepared
+            # statement on a reused backend session after a hard restart.
+            async with await AsyncConnection.connect(
+                pg_dsn,
+                autocommit=True,
+                prepare_threshold=None,
+                row_factory=dict_row,
+            ) as checkpointer_conn:
+                checkpointer = AsyncPostgresSaver(conn=checkpointer_conn)
                 # Create checkpoint tables if they don't exist yet
                 await checkpointer.setup()
                 logger.info("langgraph_checkpoint_tables_ready")

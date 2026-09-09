@@ -8,9 +8,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 # psycopg (used by the LangGraph AsyncPostgresSaver checkpointer) cannot run in
-# async mode on Windows' default ProactorEventLoop, which uvicorn would otherwise
-# create. Switching to the SelectorEventLoop at import time — before uvicorn
-# builds its loop — makes the durable Postgres checkpointer work on Windows dev.
+# async mode on Windows' ProactorEventLoop. uvicorn resolves its event-loop
+# factory BEFORE importing this module and unconditionally picks Proactor on
+# Windows, so for the real server the loop must be supplied via uvicorn's
+# `--loop backend.app.infrastructure.common.event_loop:event_loop_factory` flag
+# (see start-backend.cmd). The policy here only covers in-process runners
+# (TestClient, scripts, pytest) that call asyncio.run() themselves.
 if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
