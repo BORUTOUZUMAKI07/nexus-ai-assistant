@@ -100,7 +100,7 @@ export default function Home() {
       setHistoryLoading(true);
       try {
         const detail = await fetchConversation(conversationId);
-        chat.setMessages(detail.messages.map(mapServerMessage));
+        chat.setMessages((detail.messages ?? []).map(mapServerMessage));
       } catch (err) {
         console.warn("Could not load conversation history:", err);
         chat.setMessages([]);
@@ -115,6 +115,7 @@ export default function Home() {
   // Load conversations from backend once the user is authenticated
   useEffect(() => {
     if (isAuthOpen) return;
+    if (!getAccessToken()) return;
     fetchConversations()
       .then((page) => {
         if (page?.items && page.items.length > 0) {
