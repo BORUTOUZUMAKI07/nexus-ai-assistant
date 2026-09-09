@@ -2,8 +2,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import Column, Integer
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import Column, Field, SQLModel
+from sqlmodel import Field, SQLModel
 
 
 class File(SQLModel, table=True):
@@ -16,8 +17,12 @@ class File(SQLModel, table=True):
     original_filename: str = Field(nullable=False)
     file_type: str = Field(description="pdf | docx | txt | md | py | js | image | other")
     mime_type: str = Field(nullable=False)
-    size_bytes: int = Field(description="Size in bytes")
+    size_bytes: int = Field(
+        description="Size in bytes",
+        sa_column=Column("file_size", Integer, nullable=False),
+    )
     storage_path: str = Field(nullable=False, description="Supabase storage path")
+    processing_status: str = Field(default="pending", description="Legacy processing lifecycle status")
     status: str = Field(default="pending", description="pending | processing | indexed | failed")
     chunk_count: int = Field(default=0)
     error_message: str | None = Field(default=None)

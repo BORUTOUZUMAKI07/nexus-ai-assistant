@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Sidebar, ConversationItem } from "@/components/Sidebar";
 import {
   ChatArea,
@@ -59,6 +60,7 @@ export default function Home() {
   const [activeConversationId, setActiveConversationId] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const router = useRouter();
 
   const chat = useNexusChat({
     conversationId: activeConversationId,
@@ -102,7 +104,10 @@ export default function Home() {
         const detail = await fetchConversation(conversationId);
         chat.setMessages((detail.messages ?? []).map(mapServerMessage));
       } catch (err) {
-        console.warn("Could not load conversation history:", err);
+        const status = (err as Error | null)?.message?.match(/Fetch conversation failed: (\d+)/)?.[1];
+        if (status !== "404") {
+          console.warn("Could not load conversation history:", err);
+        }
         chat.setMessages([]);
       } finally {
         setHistoryLoading(false);
@@ -144,7 +149,7 @@ export default function Home() {
     setConversations([]);
     setActiveConversationId("");
     chat.clearMessages();
-    setIsAuthOpen(true);
+    router.replace("/");
   };
 
   const handleSelectConversation = (id: string) => {

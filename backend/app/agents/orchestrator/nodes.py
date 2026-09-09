@@ -178,7 +178,7 @@ async def orchestrator_node(state: AgentState) -> dict[str, Any]:
         decision = await structured_service.generate_structured(
             response_model=ActionChoice,
             messages=[{"role": "user", "content": router_prompt}],
-            model="llama-3.1-8b-instant",
+            model="complex_reasoning",
             temperature=0.0,
         )
         action = decision.action

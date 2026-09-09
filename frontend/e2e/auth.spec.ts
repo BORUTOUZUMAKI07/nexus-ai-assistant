@@ -37,7 +37,7 @@ test.describe("Authentication", () => {
     await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible()
   })
 
-  test("signing out returns to the login gate", async ({ page }) => {
+  test("signing out clears the session and returns to the landing page", async ({ page }) => {
     await setAuthState(page)
     await setupConversationMocks(page).setup()
 
@@ -47,6 +47,38 @@ test.describe("Authentication", () => {
     await expect(page.getByText("Project kickoff")).toBeVisible()
     await page.getByTitle("Sign out").click()
 
+    await page.waitForURL("/")
+    await expect(
+      page.getByRole("heading", { name: /An AI that researches, reasons, and/ })
+    ).toBeVisible()
+  })
+
+  test("landing page links to the sign-in page", async ({ page }) => {
+    await page.goto("/")
+    await page.getByRole("link", { name: "Sign in" }).click()
+    await expect(page).toHaveURL(/\/signin/)
     await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible()
+  })
+
+  test("sign-in page login enters the app", async ({ page }) => {
+    const auth = setupAuthMocks(page)
+    await auth.setup()
+    await setupConversationMocks(page).setup()
+
+    await page.goto("/signin")
+    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible()
+
+    const app = new NexusAppPage(page)
+    await app.login("test@nexus.ai", "password123")
+
+    await page.waitForURL(/\/app/)
+    await expect(page.getByText("Project kickoff")).toBeVisible({ timeout: 10000 })
+  })
+
+  test("sign-in page redirects to the app when already authenticated", async ({ page }) => {
+    await setAuthState(page)
+
+    await page.goto("/signin")
+    await page.waitForURL(/\/app/)
   })
 })
