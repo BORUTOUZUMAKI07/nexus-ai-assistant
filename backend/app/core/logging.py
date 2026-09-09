@@ -70,6 +70,14 @@ def setup_logging() -> None:
         level=logging.INFO if settings.ENVIRONMENT == "production" else logging.DEBUG,
     )
 
+    # Third-party libraries emit chatty DEBUG/INFO records (httpcore's per-socket
+    # ``close.started/close.complete`` trace, asyncio's loop-creation banner,
+    # huggingface_hub's session closes) that are useless in our logs and, when
+    # fired during interpreter shutdown, hit the already-finalized colorama
+    # stream and print stdlib ``--- Logging error ---`` noise. Keep them quiet.
+    for noisy_logger in ("asyncio", "httpcore", "httpx", "huggingface_hub", "litellm"):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
 
 # Root application logger instance
 logger = structlog.get_logger("nexus")

@@ -10,6 +10,12 @@ from litellm import Router, completion_cost
 # Configure litellm global settings
 litellm.drop_params = True
 litellm.telemetry = False
+# Silence litellm's red `Provider List: ...` console banner. register_model()
+# resolves every registration through get_llm_provider(); bare deployment slugs
+# (e.g. ``compound-mini``, ``qwen/qwen3.8-27b``) have no provider prefix and
+# would otherwise spam this print 4x at startup even though registration
+# succeeds. Only gates debug prints — never exceptions.
+litellm.suppress_debug_info = True
 
 # Register per-token cost info for the deployed provider model slugs. Groq is on
 # its free tier (all $0/token) so usage accounting reports accurate USD while

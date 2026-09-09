@@ -22,6 +22,16 @@ sys.path.insert(0, str(root_dir))
 sys.path.insert(0, str(backend_dir))
 sys.path.insert(0, str(tests_dir))
 
+# Tests must not ship telemetry/errors to Sentry, and the production DSN being
+# live here would make sentry_sdk's logging integration write to stdout during
+# interpreter shutdown — after colorama has closed the stream — emitting the
+# familiar ``--- Logging error --- / ValueError: I/O operation on closed file``
+# stack after every run. Env vars override the .env file, so force it off before
+# any backend module constructs the settings singleton.
+import os  # noqa: E402
+
+os.environ["SENTRY_DSN"] = ""
+
 from _testcontainers import (  # noqa: E402
     build_session_factory,
     build_test_engine,
