@@ -165,6 +165,63 @@ async def test_refresh_invalid_token_401(client):
 
 
 @pytest.mark.asyncio
+async def test_refresh_token_is_single_use(client):
+    email = f"reuse-{uuid.uuid4().hex[:8]}@example.com"
+    password = "StrongPass123!"
+    await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "username": f"reuse-{uuid.uuid4().hex[:6]}",
+            "password": password,
+        },
+    )
+    login = await client.post(
+        "/api/v1/auth/login",
+        data={"username": email, "password": password},
+    )
+    refresh_token = login.json()["refresh_token"]
+
+    first = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+    assert first.status_code == 200
+
+    # Replaying the same refresh token must be refused (rotation + reuse guard).
+    replay = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+    assert replay.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_not_usable_as_access(client):
+    email = f"scope-{uuid.uuid4().hex[:8]}@example.com"
+    password = "StrongPass123!"
+    await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "username": f"scope-{uuid.uuid4().hex[:6]}",
+            "password": password,
+        },
+    )
+    login = await client.post(
+        "/api/v1/auth/login",
+        data={"username": email, "password": password},
+    )
+    refresh_token = login.json()["refresh_token"]
+
+    resp = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {refresh_token}"},
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_protected_route_requires_token(client):
     resp = await client.get("/api/v1/conversations")
     assert resp.status_code == 401

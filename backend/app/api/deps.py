@@ -44,6 +44,8 @@ async def get_current_user(
     payload = decode_token(token)
     if payload is None:
         raise credentials_exception
+    if payload.get("type") != "access":
+        raise credentials_exception
 
     user_id_str: str = payload.get("sub")
     if user_id_str is None:

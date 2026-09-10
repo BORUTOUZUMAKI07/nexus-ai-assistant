@@ -29,6 +29,14 @@ class RedisService(ICacheService):
             return await self.client.setex(key, ttl_seconds, value)
         return await self.client.set(key, value)
 
+    async def set_if_absent(self, key: str, value: str, ttl_seconds: int) -> bool:
+        """Atomically write ``key`` only if it does not exist (SETNX + TTL).
+
+        Returns True when the write succeeded (key was absent), False when the
+        key is already present. Used for single-use refresh-token guards.
+        """
+        return bool(await self.client.set(key, value, nx=True, ex=ttl_seconds))
+
     async def delete(self, key: str) -> int:
         return await self.client.delete(key)
 
