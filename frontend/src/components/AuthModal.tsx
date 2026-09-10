@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { X, Lock, Mail, User, ArrowRight, Sparkles, Loader2 } from "lucide-react";
 import { registerUser, loginUser } from "@/lib/api";
-import { setAccessToken } from "@/lib/auth";
+import { setSession } from "@/lib/auth";
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -37,7 +37,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         });
       }
       const tokenRes = await loginUser({ email, password });
-      setAccessToken(tokenRes.access_token);
+      setSession(tokenRes.access_token, tokenRes.refresh_token);
       onSuccess(tokenRes);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");

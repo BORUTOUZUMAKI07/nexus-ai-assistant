@@ -9,7 +9,14 @@
  */
 
 const API_BASE = "/api";
-import { getAccessToken } from "./auth";
+import {
+  clearSession,
+  getAccessToken,
+  getRefreshToken,
+  setAccessToken,
+  setRefreshToken,
+  SESSION_EXPIRED_EVENT,
+} from "./auth";
 
 // ─── Types (mirror backend Pydantic schemas) ────────────────────────────────
 
@@ -197,6 +204,84 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ─── Silent session refresh ───────────────────────────────────────────────────
+// The backend access token expires after ACCESS_TOKEN_EXPIRE_MINUTES and the
+// refresh token is single-use (rotated on every exchange). When an
+// authenticated call comes back 401, exchange the stored refresh token for a
+// fresh pair and retry the request once. Only one refresh may run at a time;
+// if it fails the session is cleared and the app is bounced to /signin.
+
+const NO_AUTO_REFRESH_PATHS = ["/api/auth/login", "/api/auth/register", "/api/auth/refresh"];
+
+function isAuthRoute(url: string): boolean {
+  return NO_AUTO_REFRESH_PATHS.some((path) => url.includes(path));
+}
+
+let refreshInFlight: Promise<boolean> | null = null;
+
+async function refreshAccessToken(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      const refreshToken = getRefreshToken();
+      if (!refreshToken) return false;
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!res.ok) return false;
+      const data = (await res.json()) as {
+        access_token?: string;
+        refresh_token?: string;
+      };
+      if (!data.access_token || !data.refresh_token) return false;
+      setAccessToken(data.access_token);
+      setRefreshToken(data.refresh_token);
+      return true;
+    })().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+function notifySessionExpired(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+  } catch {
+    // Event dispatch must never break the caller on exotic environments.
+  }
+}
+
+// A retry after silent refresh must re-bake the Authorization header, because
+// the token was captured when the caller built `init` and is now stale.
+function withFreshAuth(init: RequestInit | undefined): RequestInit | undefined {
+  const token = getAccessToken();
+  if (!token) return init;
+  const headers = init?.headers ? new Headers(init.headers) : undefined;
+  if (!headers || !headers.has("authorization")) return init;
+  headers.set("authorization", `Bearer ${token}`);
+  return { ...init, headers };
+}
+
+async function nexusFetch(
+  url: string,
+  init: RequestInit | undefined,
+  retried = false
+): Promise<Response> {
+  const res = await fetch(url, init);
+  if (res.status === 401 && !retried && !isAuthRoute(url)) {
+    if (await refreshAccessToken()) {
+      return nexusFetch(url, withFreshAuth(init), true);
+    }
+    // Terminal: refresh declined or refresh token already gone.
+    clearSession();
+    notifySessionExpired();
+  }
+  return res;
+}
+
 async function fetchWithRetry(
   url: string,
   init: RequestInit | undefined,
@@ -209,7 +294,7 @@ async function fetchWithRetry(
   );
   let lastStatus = 503;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const res = await fetch(url, init);
+    const res = await nexusFetch(url, init);
     if (!TRANSIENT_STATUS.has(res.status)) return res;
     lastStatus = res.status;
     if (attempt < attempts) {
@@ -260,7 +345,7 @@ export async function createConversation(
   mode: ConversationMode = "normal",
   model?: string
 ): Promise<Conversation> {
-  const res = await fetch(`${API_BASE}/conversations`, {
+  const res = await nexusFetch(`${API_BASE}/conversations`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -274,7 +359,7 @@ export async function createConversation(
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/conversations/${id}`, {
+  const res = await nexusFetch(`${API_BASE}/conversations/${id}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -287,7 +372,7 @@ export async function updateConversation(
   id: string,
   patch: { title?: string; is_pinned?: boolean; is_archived?: boolean }
 ): Promise<Conversation> {
-  const res = await fetch(`${API_BASE}/conversations/${id}`, {
+  const res = await nexusFetch(`${API_BASE}/conversations/${id}`, {
     method: "PATCH",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(patch),
@@ -313,7 +398,7 @@ export async function fetchKnowledgeFiles(
 export async function uploadFile(file: File): Promise<KnowledgeFile> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_BASE}/files/upload`, {
+  const res = await nexusFetch(`${API_BASE}/files/upload`, {
     method: "POST",
     headers: authHeaders(),
     body: form,
@@ -323,7 +408,7 @@ export async function uploadFile(file: File): Promise<KnowledgeFile> {
 }
 
 export async function deleteFile(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/files/${id}`, {
+  const res = await nexusFetch(`${API_BASE}/files/${id}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -337,7 +422,7 @@ export async function ragQuery(query: string, topK = 5): Promise<{
   query: string;
   took_ms?: number;
 }> {
-  const res = await fetch(`${API_BASE}/files/rag/query`, {
+  const res = await nexusFetch(`${API_BASE}/files/rag/query`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ query, top_k: topK }),
@@ -349,7 +434,7 @@ export async function ragQuery(query: string, topK = 5): Promise<{
 // ─── Usage ───────────────────────────────────────────────────────────────────
 
 export async function fetchUsage(): Promise<UsageStats> {
-  const res = await fetch(`${API_BASE}/usage/summary`, { headers: authHeaders() });
+  const res = await nexusFetch(`${API_BASE}/usage/summary`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`Fetch usage failed: ${res.status}`);
   return res.json();
 }
@@ -357,7 +442,7 @@ export async function fetchUsage(): Promise<UsageStats> {
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 export async function fetchSettings(): Promise<UserSettings> {
-  const res = await fetch(`${API_BASE}/settings`, { headers: authHeaders() });
+  const res = await nexusFetch(`${API_BASE}/settings`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`Fetch settings failed: ${res.status}`);
   return res.json();
 }
@@ -365,7 +450,7 @@ export async function fetchSettings(): Promise<UserSettings> {
 export async function updateSettings(
   patch: UserSettingsUpdate
 ): Promise<UserSettings> {
-  const res = await fetch(`${API_BASE}/settings`, {
+  const res = await nexusFetch(`${API_BASE}/settings`, {
     method: "PUT",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(patch),
@@ -375,7 +460,7 @@ export async function updateSettings(
 }
 
 export async function fetchMemories(): Promise<UserMemory[]> {
-  const res = await fetch(`${API_BASE}/settings/memories`, {
+  const res = await nexusFetch(`${API_BASE}/settings/memories`, {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`Fetch memories failed: ${res.status}`);
@@ -383,7 +468,7 @@ export async function fetchMemories(): Promise<UserMemory[]> {
 }
 
 export async function createMemory(memory: UserMemoryCreate): Promise<UserMemory> {
-  const res = await fetch(`${API_BASE}/settings/memories`, {
+  const res = await nexusFetch(`${API_BASE}/settings/memories`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(memory),
@@ -393,7 +478,7 @@ export async function createMemory(memory: UserMemoryCreate): Promise<UserMemory
 }
 
 export async function deleteMemory(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/settings/memories/${id}`, {
+  const res = await nexusFetch(`${API_BASE}/settings/memories/${id}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -403,13 +488,13 @@ export async function deleteMemory(id: string): Promise<void> {
 }
 
 export async function fetchAPIKeys(): Promise<APIKey[]> {
-  const res = await fetch(`${API_BASE}/settings/keys`, { headers: authHeaders() });
+  const res = await nexusFetch(`${API_BASE}/settings/keys`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`Fetch API keys failed: ${res.status}`);
   return res.json();
 }
 
 export async function addAPIKey(key: APIKeyCreate): Promise<APIKey> {
-  const res = await fetch(`${API_BASE}/settings/keys`, {
+  const res = await nexusFetch(`${API_BASE}/settings/keys`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(key),
@@ -423,7 +508,7 @@ export async function addAPIKey(key: APIKeyCreate): Promise<APIKey> {
 export async function sendHITLFeedback(
   feedback: HITLFeedback
 ): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/hitl`, {
+  const res = await nexusFetch(`${API_BASE}/hitl`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(feedback),
@@ -440,7 +525,7 @@ export async function registerUser(payload: {
   password: string;
   full_name?: string;
 }): Promise<{ id: string; email: string; username: string }> {
-  const res = await fetch(`${API_BASE}/auth/register`, {
+  const res = await nexusFetch(`${API_BASE}/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -457,7 +542,7 @@ export async function loginUser(payload: {
   refresh_token: string;
   token_type: string;
 }> {
-  const res = await fetch(`${API_BASE}/auth/login`, {
+  const res = await nexusFetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

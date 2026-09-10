@@ -111,6 +111,14 @@ export const handlers = [
     return HttpResponse.json(mockTokenPair)
   }),
 
+  http.post("/api/auth/refresh", ({ request }) => {
+    void request
+    return HttpResponse.json({
+      access_token: "test-refreshed-access-token",
+      refresh_token: "test-refreshed-refresh-token",
+    })
+  }),
+
   http.post("/api/auth/register", () => HttpResponse.json(mockUser)),
 
   // ── Conversations ───────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, Lock, Mail, User, ArrowRight, Sparkles } from "lucide-react";
 import { registerUser, loginUser } from "@/lib/api";
-import { getAccessToken, setAccessToken } from "@/lib/auth";
+import { getAccessToken, setSession } from "@/lib/auth";
 
 export default function SignInPage() {
   const router = useRouter();
@@ -37,7 +37,7 @@ export default function SignInPage() {
         });
       }
       const tokenRes = await loginUser({ email, password });
-      setAccessToken(tokenRes.access_token);
+      setSession(tokenRes.access_token, tokenRes.refresh_token);
       router.replace("/app");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");
