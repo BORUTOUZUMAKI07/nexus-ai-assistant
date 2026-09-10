@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { server } from "@/test/mocks/server"
 import { http, HttpResponse } from "msw"
-import { setAccessToken, clearAccessToken } from "@/lib/auth"
+import {
+  setAccessToken,
+  setRefreshToken,
+  getAccessToken,
+  getRefreshToken,
+} from "@/lib/auth"
 import {
   fetchConversations,
   createConversation,
@@ -43,7 +48,7 @@ describe("api client", () => {
         return HttpResponse.json([])
       })
     )
-    clearAccessToken()
+    setAccessToken("")
     await fetchConversations()
     expect(seenAuth).toBeNull()
   })
@@ -88,6 +93,54 @@ describe("api client", () => {
       fetchConversations(1, 50, { attempts: 3, baseDelayMs: 1 })
     ).rejects.toThrow("Fetch conversations failed: 401")
     expect(calls).toBe(1)
+  })
+
+  it("silently refreshes on 401 and retries once with the new token", async () => {
+    let firstAuth: string | null = null
+    let secondAuth: string | null = null
+    let refreshCalls = 0
+    server.use(
+      http.get(`${API}/conversations`, ({ request }) => {
+        if (!firstAuth) {
+          firstAuth = request.headers.get("authorization")
+          return HttpResponse.json({ detail: "expired" }, { status: 401 })
+        }
+        secondAuth = request.headers.get("authorization")
+        return HttpResponse.json([])
+      }),
+      http.post(`${API}/auth/refresh`, () => {
+        refreshCalls += 1
+        return HttpResponse.json({
+          access_token: "new-access-token",
+          refresh_token: "new-refresh-token",
+        })
+      })
+    )
+    setAccessToken("old-access-token")
+    setRefreshToken("old-refresh-token")
+    const page = await fetchConversations()
+    expect(firstAuth).toBe("Bearer old-access-token")
+    expect(secondAuth).toBe("Bearer new-access-token")
+    expect(refreshCalls).toBe(1)
+    expect(page.items).toHaveLength(0)
+    expect(getAccessToken()).toBe("new-access-token")
+    expect(getRefreshToken()).toBe("new-refresh-token")
+  })
+
+  it("clears the session and keeps 401 when the refresh is declined", async () => {
+    server.use(
+      http.get(`${API}/conversations`, () =>
+        HttpResponse.json({ detail: "expired" }, { status: 401 })
+      ),
+      http.post(`${API}/auth/refresh`, () =>
+        HttpResponse.json({ detail: "Refresh token has already been used." }, { status: 401 })
+      )
+    )
+    setAccessToken("old-access-token")
+    setRefreshToken("old-refresh-token")
+    await expect(fetchConversations()).rejects.toThrow("Fetch conversations failed: 401")
+    expect(getAccessToken()).toBeNull()
+    expect(getRefreshToken()).toBeNull()
   })
 
   it("creates a conversation with a JSON body", async () => {

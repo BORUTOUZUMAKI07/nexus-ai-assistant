@@ -3,6 +3,11 @@ import {
   getAccessToken,
   setAccessToken,
   clearAccessToken,
+  getRefreshToken,
+  setRefreshToken,
+  clearRefreshToken,
+  setSession,
+  clearSession,
   TOKEN_COOKIE,
 } from "@/lib/auth"
 
@@ -34,5 +39,25 @@ describe("auth token store", () => {
     setAccessToken("abc")
     clearAccessToken()
     expect(getAccessToken()).toBeNull()
+  })
+
+  it("round-trips the refresh token through its own cookie", () => {
+    setRefreshToken("refresh.jwt.123")
+    expect(getRefreshToken()).toBe("refresh.jwt.123")
+  })
+
+  it("removes the refresh token from the cookie on clear", () => {
+    setRefreshToken("abc")
+    clearRefreshToken()
+    expect(getRefreshToken()).toBeNull()
+  })
+
+  it("stores and clears the full session pair together", () => {
+    setSession("access.one", "refresh.one")
+    expect(getAccessToken()).toBe("access.one")
+    expect(getRefreshToken()).toBe("refresh.one")
+    clearSession()
+    expect(getAccessToken()).toBeNull()
+    expect(getRefreshToken()).toBeNull()
   })
 })

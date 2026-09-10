@@ -23,7 +23,7 @@ import {
   uploadFile,
   ConversationMessage,
 } from "@/lib/api";
-import { getAccessToken, clearAccessToken } from "@/lib/auth";
+import { clearSession, getAccessToken, SESSION_EXPIRED_EVENT } from "@/lib/auth";
 import { useNexusChat, NexusMessage } from "@/hooks/useNexusChat";
 
 function mapServerMessage(m: ConversationMessage): MessageItem {
@@ -73,6 +73,14 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!getAccessToken()) setIsAuthOpen(true);
   }, []);
+
+  // A failed silent refresh (expired / revoked session) clears cookies and
+  // bounces the user to the sign-in page.
+  useEffect(() => {
+    const onSessionExpired = () => router.replace("/signin");
+    window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+  }, [router]);
 
   const handleNewChat = useCallback(async () => {
     try {
@@ -145,7 +153,7 @@ export default function Home() {
   }, [isAuthOpen, loadHistory, handleNewChat]);
 
   const handleSignOut = () => {
-    clearAccessToken();
+    clearSession();
     setConversations([]);
     setActiveConversationId("");
     chat.clearMessages();
@@ -249,7 +257,7 @@ export default function Home() {
       <AuthModal
         isOpen={isAuthOpen}
         onClose={() => {
-          clearAccessToken();
+          clearSession();
           setIsAuthOpen(false);
         }}
         onSuccess={() => setIsAuthOpen(false)}
