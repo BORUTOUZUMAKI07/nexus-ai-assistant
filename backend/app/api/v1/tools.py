@@ -22,7 +22,6 @@ class ToolExecuteRequest(BaseModel):
     tool_name: str
     arguments: dict[str, Any]
     conversation_id: UUID
-    is_user_approved: bool = False
 
 
 @router.get("", response_model=list[dict[str, Any]])
@@ -40,7 +39,7 @@ async def execute_tool_endpoint(
     tool_svc: ToolService = Depends(get_tool_service),
     conv_svc: ConversationService = Depends(get_conversation_service),
 ):
-    """Directly execute a vetted tool through the 5-step safety gateway."""
+    """Execute a vetted tool through the gateway; approval cannot be asserted by clients."""
     # IDOR guard: the tool call is logged against this conversation — verify the
     # caller actually owns it before executing/logging.
     try:
@@ -52,7 +51,6 @@ async def execute_tool_endpoint(
         arguments=req.arguments,
         conversation_id=req.conversation_id,
         user_id=current_user.id,
-        is_user_approved=req.is_user_approved,
     )
 
 
