@@ -104,6 +104,40 @@ async def test_approve_tool_call_updates_status(
 
 
 @pytest.mark.asyncio
+async def test_rejected_tool_call_is_terminal(
+    client, user_auth_headers, db_session, conversation_id
+):
+    repo = ToolRepository(db_session)
+    call = await repo.log_tool_call(
+        conversation_id=conversation_id,
+        tool_name="web_search",
+        input_args={"query": "reject-me"},
+        status="requires_approval",
+        requires_approval=True,
+    )
+
+    resp = await client.post(
+        "/api/v1/tools/approval",
+        json={"tool_call_id": str(call.id), "approved": False, "reason": "not safe"},
+        headers=user_auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "success"
+    assert resp.json()["approved"] is False
+
+    refreshed = await repo.get_tool_call(call.id)
+    assert refreshed.status == "rejected"
+    assert refreshed.is_approved is False
+
+    replay = await client.post(
+        "/api/v1/tools/approval",
+        json={"tool_call_id": str(call.id), "approved": True},
+        headers=user_auth_headers,
+    )
+    assert replay.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_approval_cannot_be_resolved_twice(
     client, user_auth_headers, db_session, conversation_id
 ):
