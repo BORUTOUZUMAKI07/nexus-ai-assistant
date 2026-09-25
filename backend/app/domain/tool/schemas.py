@@ -60,6 +60,9 @@ class ToolCallResponse(BaseModel):
 
 
 class ToolApprovalRequest(BaseModel):
+    # Approval requests accept only the explicit decision contract.
+    model_config = ConfigDict(extra="forbid")
+
     tool_call_id: UUID
     approved: bool
     reason: str | None = None
