@@ -15,7 +15,7 @@ try:
     import backend.app.domain.usage.models  # noqa: F401
     import backend.app.domain.user.models  # noqa: F401
 except Exception as exc:
-    logger.warning("domain_models_import_warning", error=str(exc))
+    logger.warning("domain_models_import_warning", error_type=type(exc).__name__)
 
 # NullPool is used because the DATABASE_URL points to Supabase's pgbouncer
 # transaction-mode pooler (port 6543). In transaction mode each statement is
@@ -52,7 +52,7 @@ async def init_db() -> None:
             await conn.run_sync(SQLModel.metadata.create_all)
         logger.info("database_schema_synced")
     except Exception as exc:
-        logger.error("database_schema_sync_failed", error=str(exc))
+        logger.error("database_schema_sync_failed", error_type=type(exc).__name__)
         raise
 
 
@@ -69,5 +69,5 @@ async def check_database_health() -> bool:
             await conn.execute(text("SELECT 1"))
         return True
     except Exception as e:
-        logger.error("database_health_check_failed", error=str(e))
+        logger.error("database_health_check_failed", error_type=type(e).__name__)
         return False
