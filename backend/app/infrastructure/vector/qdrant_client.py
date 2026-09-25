@@ -30,7 +30,7 @@ class QdrantService(IVectorStore):
         else:
             self.client = AsyncQdrantClient(url=settings.QDRANT_URL)
 
-    async def ensure_collection(self, recreate_if_dimension_mismatch: bool = True) -> None:
+    async def ensure_collection(self, recreate_if_dimension_mismatch: bool = False) -> None:
         """
         Idempotently creates the hybrid collection with:
           - Dense HNSW vectors (cosine, INT8 quantization)
@@ -54,6 +54,20 @@ class QdrantService(IVectorStore):
                     current_size = vectors.size
 
                 if current_size and current_size != settings.EMBEDDING_DIMENSION:
+                    if not recreate_if_dimension_mismatch:
+                        # Never destroy an existing knowledge collection on
+                        # application startup. A dimension change requires an
+                        # explicit migration/reindex operation.
+                        logger.error(
+                            "qdrant_collection_dimension_mismatch",
+                            collection=COLLECTION_NAME,
+                            existing_dim=current_size,
+                            target_dim=settings.EMBEDDING_DIMENSION,
+                        )
+                        raise ValueError(
+                            "Qdrant collection vector dimension does not match "
+                            "EMBEDDING_DIMENSION; perform an explicit reindex."
+                        )
                     logger.warning(
                         "qdrant_collection_dimension_mismatch_recreating",
                         collection=COLLECTION_NAME,
