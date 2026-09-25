@@ -252,7 +252,7 @@ class QdrantService(IVectorStore):
                 filter=models.Filter(must=must_filters)
             ),
         )
-        logger.info("qdrant_points_deleted", filter=filter_conditions)
+        logger.info("qdrant_points_deleted", filter_fields=sorted(filter_conditions.keys()))
 
 
 # Singleton instance for backwards-compatibility
