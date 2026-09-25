@@ -304,3 +304,30 @@ async def test_execute_tool_rejects_client_approval_override(
         headers=user_auth_headers,
     )
     assert response.status_code == 422
+
+@pytest.mark.asyncio
+async def test_approval_rejects_unexpected_fields(
+    client, user_auth_headers, db_session, conversation_id
+):
+    """Approval payloads cannot carry undeclared control or identity fields."""
+    repo = ToolRepository(db_session)
+    call = await repo.log_tool_call(
+        conversation_id=conversation_id,
+        tool_name="web_search",
+        input_args={"query": "strict-payload"},
+        status="requires_approval",
+        requires_approval=True,
+    )
+    response = await client.post(
+        "/api/v1/tools/approval",
+        json={
+            "tool_call_id": str(call.id),
+            "approved": True,
+            "user_id": str(uuid.uuid4()),
+        },
+        headers=user_auth_headers,
+    )
+    assert response.status_code == 422
+    refreshed = await repo.get_tool_call(call.id)
+    assert refreshed.status == "requires_approval"
+    assert refreshed.is_approved is False
