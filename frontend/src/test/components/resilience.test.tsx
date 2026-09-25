@@ -3,11 +3,9 @@ import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { KnowledgeView } from "@/components/KnowledgeView"
 import { UsageView } from "@/components/UsageView"
 import { AdminView } from "@/components/AdminView"
-import { setAccessToken } from "@/lib/auth"
 
 describe("resilience - real error states (no fabricated fallbacks)", () => {
   it("KnowledgeView shows an error state with retry when /api/files returns 500", async () => {
-    setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(http.get("/api/files", () => HttpResponse.json({ detail: "boom" }, { status: 500 })))
@@ -20,7 +18,6 @@ describe("resilience - real error states (no fabricated fallbacks)", () => {
   })
 
   it("KnowledgeView shows an error state on network error", async () => {
-    setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(http.get("/api/files", () => HttpResponse.error()))
@@ -32,7 +29,6 @@ describe("resilience - real error states (no fabricated fallbacks)", () => {
   })
 
   it("KnowledgeView surfaces a search error without inventing citations", async () => {
-    setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(
@@ -52,7 +48,6 @@ describe("resilience - real error states (no fabricated fallbacks)", () => {
   })
 
   it("KnowledgeView reports an upload error instead of a local preview", async () => {
-    setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(
@@ -71,7 +66,6 @@ describe("resilience - real error states (no fabricated fallbacks)", () => {
   })
 
   it("KnowledgeView keeps the row when delete fails and reports the error", async () => {
-    setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(
@@ -87,7 +81,6 @@ describe("resilience - real error states (no fabricated fallbacks)", () => {
   })
 
   it("UsageView shows an error banner when the usage endpoint fails", async () => {
-    setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(
@@ -101,7 +94,6 @@ describe("resilience - real error states (no fabricated fallbacks)", () => {
   })
 
   it("AdminView shows an error banner when the users endpoint fails", async () => {
-    setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(http.get("/api/admin/users", () => HttpResponse.json({}, { status: 500 })))
@@ -113,7 +105,6 @@ describe("resilience - real error states (no fabricated fallbacks)", () => {
   })
 
   it("AdminView shows an error banner when the audit endpoint fails", async () => {
-    setAccessToken("tok")
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")
     server.use(

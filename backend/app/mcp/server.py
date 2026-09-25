@@ -28,12 +28,18 @@ except ImportError:
                     from fastapi import FastAPI
                     return FastAPI()
 
+import ast
+import math
+import operator
+
 import structlog
 
 logger = structlog.get_logger(__name__)
 
 # Initialize FastMCP Server
 mcp = FastMCP("Nexus-MCP-Server")
+
+_ALLOWED_MATH_NAMES = {n: getattr(math, n) for n in dir(math) if not n.startswith("_")}
 
 
 # ==========================================
@@ -70,16 +76,74 @@ async def execute_python_code(code: str, timeout_seconds: int = 30) -> str:
     return "\n".join(output) if output else "Code executed with no output."
 
 
+_BIN_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+
+
+def _safe_math_eval(expression: str) -> float | int:
+    """
+    Restricted AST interpreter for arithmetic expressions. Unlike eval(), this
+    whitelists the parse tree node-by-node: only numeric literals, the four
+    operators, unary signs, and known ``math`` names/functions are accepted.
+    Attribute access, subscripts, comprehensions, imports and all dunder names
+    are structurally impossible, so no sandbox escape vector exists.
+    """
+    if not expression or not expression.strip():
+        raise ValueError("Empty expression")
+
+    tree = ast.parse(expression, mode="eval")
+
+    def _eval(node: ast.AST) -> float | int:
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+                return node.value
+            raise ValueError("Only numeric constants are allowed")
+        if isinstance(node, ast.BinOp):
+            op_fn = _BIN_OPS.get(type(node.op))
+            if op_fn is None:
+                raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
+            return op_fn(_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.UnaryOp):
+            op_fn = _UNARY_OPS.get(type(node.op))
+            if op_fn is None:
+                raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
+            return op_fn(_eval(node.operand))
+        if isinstance(node, ast.Name):
+            if node.id in _ALLOWED_MATH_NAMES:
+                return _ALLOWED_MATH_NAMES[node.id]
+            raise ValueError(f"Unknown symbol: {node.id}")
+        if isinstance(node, ast.Call):
+            if node.keywords:
+                raise ValueError("Keyword arguments are not allowed")
+            if not isinstance(node.func, ast.Name) or node.func.id not in _ALLOWED_MATH_NAMES:
+                raise ValueError("Only math.* functions are allowed")
+            fn = _ALLOWED_MATH_NAMES[node.func.id]
+            if not callable(fn):
+                raise ValueError(f"'{node.func.id}' is not a function")
+            return fn(*(_eval(arg) for arg in node.args))
+        raise ValueError(f"Unsupported expression element: {type(node).__name__}")
+
+    return _eval(tree)
+
+
 @mcp.tool()
 def calculate_expression(expression: str) -> str:
     """
-    Safely evaluate a mathematical expression.
+    Safely evaluate a mathematical expression using a restricted AST interpreter
+    (no eval/exec — attribute access, imports and dunders are impossible).
     """
-    import math
-
-    allowed = {k: v for k, v in math.__dict__.items() if not k.startswith("__")}
     try:
-        val = eval(expression, {"__builtins__": None}, allowed)
+        val = _safe_math_eval(expression)
         return f"Result: {val}"
     except Exception as exc:
         return f"Calculation error: {str(exc)}"

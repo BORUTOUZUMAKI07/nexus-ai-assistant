@@ -1,4 +1,4 @@
-import { test, expect, NexusAppPage, setupConversationMocks, setAuthState, mockApi } from "./fixtures"
+import { test, expect, NexusAppPage, setupConversationMocks, setAuthState, mockApi, ADMIN_TOKEN } from "./fixtures"
 import type { Page } from "@playwright/test"
 
 const USERS = [
@@ -24,7 +24,7 @@ const USERS = [
 
 test.describe("Admin Center", () => {
   test.beforeEach(async ({ page }) => {
-    await setAuthState(page)
+    await setAuthState(page, ADMIN_TOKEN)
     await setupConversationMocks(page).setup()
   })
 

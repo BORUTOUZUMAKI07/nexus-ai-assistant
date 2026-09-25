@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { AuthModal } from "@/components/AuthModal"
-import { TOKEN_COOKIE } from "@/lib/auth"
 
 describe("AuthModal", () => {
   const onClose = vi.fn()
@@ -23,7 +22,7 @@ describe("AuthModal", () => {
     expect(screen.queryByText("Welcome back")).not.toBeInTheDocument()
   })
 
-  it("logs in, stores the access token cookie, and keeps the session", async () => {
+  it("logs in and keeps the session without exposing tokens to page scripts", async () => {
     renderModal()
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
       target: { value: "test@nexus.ai" },
@@ -35,7 +34,9 @@ describe("AuthModal", () => {
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalled())
     expect(onClose).not.toHaveBeenCalled()
-    expect(document.cookie).toContain(`${TOKEN_COOKIE}=test-access-token`)
+    // httpOnly tokens are set by the server route handler, never client-side.
+    expect(document.cookie).not.toContain("nexus_access_token")
+    expect(document.cookie).not.toContain("nexus_refresh_token")
   })
 
   it("surfaces a readable error when credentials are invalid", async () => {
@@ -78,6 +79,7 @@ describe("AuthModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /Get Started/ }))
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalled())
-    expect(document.cookie).toContain(`${TOKEN_COOKIE}=test-access-token`)
+    // No tokens are ever written to document.cookie by page code.
+    expect(document.cookie).not.toContain("nexus_access_token")
   })
 })

@@ -3,12 +3,11 @@
 import React, { useState } from "react";
 import { X, Lock, Mail, User, ArrowRight, Sparkles, Loader2 } from "lucide-react";
 import { registerUser, loginUser } from "@/lib/api";
-import { setSession } from "@/lib/auth";
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (user: { access_token: string }) => void;
+  onSuccess: () => void;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => {
@@ -36,9 +35,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           full_name: fullName,
         });
       }
-      const tokenRes = await loginUser({ email, password });
-      setSession(tokenRes.access_token, tokenRes.refresh_token);
-      onSuccess(tokenRes);
+      // The /api/auth/login route handler sets the httpOnly session cookies;
+      // on success we just close the modal — no tokens touch page scripts.
+      await loginUser({ email, password });
+      onSuccess();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");
     } finally {
@@ -148,7 +148,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           <button
             type="submit"
             disabled={loading}
-            className="w-full mt-2 flex items-center justify-center gap-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] py-2.5 text-sm font-medium text-white transition-all disabled:opacity-50"
+            className="w-full mt-2 flex items-center justify-center gap-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] py-2.5 text-sm font-semibold text-[var(--accent-foreground)] transition-all disabled:opacity-50 shadow-sm"
           >
             {loading ? (
               <Loader2 className="h-4 w-4 animate-spin" />

@@ -237,10 +237,14 @@ async def test_orchestrator_routes_via_raw_fallback_when_structured_output_fails
 
 @pytest.mark.asyncio
 async def test_orchestrator_uses_structured_routing_when_available(monkeypatch):
+    async def _completion_answer(*args, **kwargs):
+        return "ANSWER"
+
     async def _structured_answer(response_model=None, **kwargs):
         return SimpleNamespace(action="ANSWER")
 
     monkeypatch.setattr(nodes.structured_service, "generate_structured", _structured_answer)
+    monkeypatch.setattr(nodes.ai_client, "completion", _completion_answer)
 
     state = {"messages": [HumanMessage(content="what is 2+2")], "mode": "normal"}
 

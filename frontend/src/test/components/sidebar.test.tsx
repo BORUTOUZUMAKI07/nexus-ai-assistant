@@ -81,11 +81,16 @@ describe("Sidebar", () => {
   })
 
   it("switches active tab through the bottom navigation", () => {
-    const props = renderSidebar()
+    const props = renderSidebar({ showAdmin: true })
     fireEvent.click(screen.getByText("Usage"))
     expect(props.setActiveTab).toHaveBeenCalledWith("usage")
     fireEvent.click(screen.getByText("Admin"))
     expect(props.setActiveTab).toHaveBeenCalledWith("admin")
+  })
+
+  it("hides the Admin nav item from non-admin users", () => {
+    renderSidebar()
+    expect(screen.queryByText("Admin")).not.toBeInTheDocument()
   })
 
   it("signs out when the logout button is clicked", () => {

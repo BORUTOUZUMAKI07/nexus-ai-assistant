@@ -1,10 +1,14 @@
+# ruff: noqa: F401, I001
 """
 Alembic environment configuration for Nexus AI Assistant database migrations.
 Uses async engine for SQLModel + asyncpg compatibility.
 """
 import asyncio
+import os
 from logging.config import fileConfig
+
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
@@ -28,8 +32,6 @@ target_metadata = SQLModel.metadata
 
 
 def get_database_url() -> str:
-    import os
-    from dotenv import load_dotenv
     load_dotenv()
     return os.getenv(
         "DATABASE_URL",

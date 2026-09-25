@@ -21,11 +21,11 @@ class FileRepository(BaseRepository[File]):
         result = await self.session.exec(statement)
         return result.first()
 
-    async def get_by_user(self, user_id: UUID, conversation_id: UUID | None = None, limit: int = 50) -> list[File]:
+    async def get_by_user(self, user_id: UUID, conversation_id: UUID | None = None, limit: int = 50, offset: int = 0) -> list[File]:
         statement = select(File).where(File.user_id == user_id)
         if conversation_id:
             statement = statement.where(File.conversation_id == conversation_id)
-        statement = statement.order_by(File.created_at.desc()).limit(limit)
+        statement = statement.order_by(File.created_at.desc()).offset(offset).limit(limit)
         result = await self.session.exec(statement)
         return list(result.all())
 
@@ -98,6 +98,13 @@ class FileRepository(BaseRepository[File]):
         statement = select(FileChunk).where(FileChunk.file_id == file_id).order_by(FileChunk.chunk_index.asc())
         result = await self.session.exec(statement)
         return list(result.all())
+
+    async def delete_chunks_by_file(self, file_id: UUID) -> None:
+        """Removes every chunk row for a file (idempotent re-ingest support)."""
+        await self.session.exec(
+            delete(FileChunk).where(FileChunk.file_id == file_id)
+        )
+        await self.session.commit()
 
     async def delete_file(self, file_id: UUID, user_id: UUID) -> bool:
         db_file = await self.get_by_id(file_id, user_id=user_id)

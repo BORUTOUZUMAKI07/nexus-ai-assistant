@@ -29,6 +29,7 @@ from backend.app.mcp.server import mcp
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # 1. Initialize Structured Logging
 setup_logging()
@@ -167,6 +168,22 @@ async def root():
 # 4. Mount API v1 Routes
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
+def _mcp_token_is_valid(token: str) -> bool:
+    """Rejects anything but a structurally-valid, unexpired access token."""
+    from backend.app.core.exceptions import InvalidTokenError
+    from backend.app.core.security import decode_token
+
+    try:
+        payload = decode_token(token)
+    except InvalidTokenError:
+        return False
+    if payload.get("type") != "access":
+        return False
+    if not payload.get("sub"):
+        return False
+    return True
+
+
 # 5. Mount FastMCP HTTP/SSE App
 try:
     if hasattr(mcp, "http_app"):
@@ -177,7 +194,39 @@ try:
         mcp_subapp = None
 
     if mcp_subapp:
+        # The MCP endpoint exposes agent tool execution (web search, code
+        # execution) — it must not listen anonymously. Every request is gated
+        # by a middleware enforcing a valid Bearer JWT, the nexus access cookie,
+        # or the shared MCP key before reaching any MCP tool.
+        async def _mcp_request_is_authorized(request: Request) -> bool:
+            if not settings.MCP_AUTH_ENABLED:
+                return True
+            try:
+                authz = request.headers.get("Authorization", "")
+                if authz.lower().startswith("bearer "):
+                    return _mcp_token_is_valid(authz[7:].strip())
+                cookie_token = request.cookies.get("nexus_access_token")
+                if cookie_token:
+                    return _mcp_token_is_valid(cookie_token)
+                mcp_key = request.headers.get("x-nexus-mcp-key")
+                if mcp_key and settings.MCP_API_KEY and mcp_key == settings.MCP_API_KEY:
+                    return True
+            except Exception as exc:
+                logger.warning("mcp_auth_check_error", error=str(exc))
+            return False
+
+        class _MCPAuthMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next):
+                if not await _mcp_request_is_authorized(request):
+                    return JSONResponse(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        content={"detail": "MCP endpoint requires authentication"},
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+                return await call_next(request)
+
+        mcp_subapp.add_middleware(_MCPAuthMiddleware)
         app.mount("/mcp", mcp_subapp)
-        logger.info("fastmcp_mounted", path="/mcp")
+        logger.info("fastmcp_mounted", path="/mcp", auth_enabled=settings.MCP_AUTH_ENABLED)
 except Exception as exc:
     logger.warning("fastmcp_mount_failed", error=str(exc))

@@ -118,7 +118,7 @@ async def test_usage_repo_summary_and_cost_rollup(db_session, test_user):
             passed=True,
         )
     )
-    evals = await repo.get_evaluations(limit=10)
+    evals = await repo.get_evaluations(user_id=test_user.id, limit=10)
     assert any(e.metric_name == "offline_rag_recall" for e in evals)
 
 

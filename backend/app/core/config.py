@@ -2,11 +2,15 @@
 Application Settings — loaded from environment / .env file.
 All optional keys default to None (free-tier compatible).
 """
+import logging
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 # Load backend/.env into os.environ as well as into Settings. Several internal
 # consumers read the process environment directly — mem0 (MEM0_API_KEY),
@@ -35,10 +39,13 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = Field(default="/api/v1")         # used in main.py include_router
 
     # ── Security ───────────────────────────────────────────────────────────────
-    SECRET_KEY: str = Field(default="nexus-development-secret-key-min-32-chars-long-must-be-secure")
-    JWT_SECRET_KEY: str = Field(default="nexus-development-secret-key-min-32-chars-long-must-be-secure")
+    # No built-in defaults: secrets must come from the environment. In
+    # non-production a random value is generated at boot; in production a
+    # missing/placeholder value hard-fails startup (see _guard_prod_secrets).
+    SECRET_KEY: str | None = Field(default=None, description="HMAC/JWT signing secret")
+    JWT_SECRET_KEY: str | None = Field(default=None, description="Alias of SECRET_KEY")
     JWT_ALGORITHM: str = Field(default="HS256")
-    ENCRYPTION_KEY: str = Field(default="nexus-aes256-key-32bytes-long!!")
+    ENCRYPTION_KEY: str | None = Field(default=None, description="AES-256 key material (≥32 bytes)")
 
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=30)
@@ -88,8 +95,8 @@ class Settings(BaseSettings):
     FAST_MODEL: str = Field(default="groq/llama-3.1-8b-instant")
 
     # ── Embeddings ─────────────────────────────────────────────────────────────
-    EMBEDDING_MODEL: str = Field(default="BAAI/bge-small-en-v1.5")
-    EMBEDDING_DIMENSION: int = Field(default=384)
+    EMBEDDING_MODEL: str = Field(default="models/gemini-embedding-001")
+    EMBEDDING_DIMENSION: int = Field(default=768)
     RERANKER_MODEL: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2")
 
     # ── External Services ──────────────────────────────────────────────────────
@@ -102,7 +109,21 @@ class Settings(BaseSettings):
 
     # ── Object Storage (Supabase Storage — uses SUPABASE_URL + SERVICE_ROLE_KEY) ─
     STORAGE_BUCKET: str = Field(default="nexus-knowledge", description="Supabase Storage bucket name")
-    STORAGE_MAX_FILE_SIZE_MB: int = Field(default=50, description="Max file upload size in MB")
+    STORAGE_MAX_FILE_SIZE_MB: int = Field(default=50, description="Max file upload size in MB (Supabase bucket)")
+
+    # ── Object Storage (S3 legacy aliases — fused from the old app/settings.py) ─
+    SUPABASE_S3_ENDPOINT: str | None = None
+    SUPABASE_S3_BUCKET: str = Field(default="nexus-knowledge")
+    SUPABASE_S3_ACCESS_KEY_ID: str | None = None
+    SUPABASE_S3_SECRET_ACCESS_KEY: str | None = None
+
+    # ── Prompt templates ──────────────────────────────────────────────────────
+    # Single source of truth, computed at import so the default works in any
+    # checkout without duplication.
+    PROMPT_DIR: str = Field(
+        default="",
+        description="Directory containing prompt template .txt files",
+    )
 
     # ── Observability (LangSmith & Sentry Free Tiers) ──────────────────────────
     LANGSMITH_API_KEY: str | None = None
@@ -135,6 +156,9 @@ class Settings(BaseSettings):
     # ── Self-Refinement (Critic Subagent) ─────────────────────────────────────
     CRITIC_MAX_REVISIONS: int = Field(default=2, description="Max revision passes of the critic subagent before a draft is accepted as-is")
 
+    # ── HITL Approvals ────────────────────────────────────────────────────────
+    HITL_APPROVAL_TIMEOUT_SECONDS: int = Field(default=900, description="How long a parked HITL approval stays valid before auto-expiring")
+
     # ── Email (Free Gmail SMTP or Resend) ──────────────────────────────────────
     SMTP_HOST: str = Field(default="smtp.gmail.com")
     SMTP_PORT: int = Field(default=587)
@@ -147,6 +171,12 @@ class Settings(BaseSettings):
     # ── MCP ────────────────────────────────────────────────────────────────────
     MCP_SERVER_NAME: str = Field(default="nexus-mcp")
     MCP_SERVER_VERSION: str = Field(default="1.0.0")
+    # Shared secret accepted by the MCP endpoint (x-nexus-mcp-key header). When
+    # set, both a valid Bearer JWT and this static key are accepted.
+    MCP_API_KEY: str | None = Field(default=None)
+    # When True (default) the /mcp endpoint rejects requests without valid auth.
+    # Set to False only for unauthenticated local tooling; do NOT disable in prod.
+    MCP_AUTH_ENABLED: bool = Field(default=True)
 
     @field_validator("CORS_ORIGINS", "ALLOWED_ORIGINS", mode="before")
     @classmethod
@@ -158,6 +188,46 @@ class Settings(BaseSettings):
             except Exception:
                 return [origin.strip() for origin in v.split(",")]
         return v
+
+    @model_validator(mode="after")
+    def _resolve_secrets(self) -> "Settings":
+        """
+        Secret hygiene:
+        * JWT_SECRET_KEY falls back to SECRET_KEY (single canonical signing key).
+        * Missing secrets get a random value in non-production so dev stays
+          single-process-functional without a checked-in secret.
+        * In production a missing key — or one of the old well-known dev
+          placeholders — aborts startup instead of shipping with a guessable key.
+        """
+        old_dev_placeholder = "nexus-development-secret-key-min-32-chars-long-must-be-secure"
+        old_dev_encryption = "nexus-aes256-key-32bytes-long!!"
+
+        self.JWT_SECRET_KEY = self.JWT_SECRET_KEY or self.SECRET_KEY
+
+        if self.ENVIRONMENT == "production":
+            missing: list[str] = []
+            if not self.SECRET_KEY or self.SECRET_KEY == old_dev_placeholder:
+                missing.append("SECRET_KEY")
+            if not self.ENCRYPTION_KEY or self.ENCRYPTION_KEY == old_dev_encryption:
+                missing.append("ENCRYPTION_KEY")
+            if missing:
+                raise ValueError(
+                    "Refusing to start in production with missing/insecure secrets: "
+                    f"{', '.join(missing)}. Set them explicitly in the environment."
+                )
+        else:
+            if not self.SECRET_KEY or self.SECRET_KEY == old_dev_placeholder:
+                self.SECRET_KEY = secrets.token_urlsafe(48)
+                logger.info("generated_random_development_secret_key")
+            if not self.JWT_SECRET_KEY:
+                self.JWT_SECRET_KEY = self.SECRET_KEY
+            if not self.ENCRYPTION_KEY or self.ENCRYPTION_KEY == old_dev_encryption:
+                self.ENCRYPTION_KEY = secrets.token_hex(32)  # 64 hex chars → 32 bytes
+                logger.info("generated_random_development_encryption_key")
+
+        if not self.PROMPT_DIR:
+            self.PROMPT_DIR = str(Path(__file__).resolve().parent.parent / "prompt_templates")
+        return self
 
 
 settings = Settings()

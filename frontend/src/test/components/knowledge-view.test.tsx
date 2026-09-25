@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { KnowledgeView } from "@/components/KnowledgeView"
-import { setAccessToken } from "@/lib/auth"
 
 function clearCookie() {
   document.cookie.split(";").forEach((c) => {
@@ -11,14 +10,12 @@ function clearCookie() {
 
 describe("KnowledgeView", () => {
   it("loads and lists indexed documents from the API", async () => {
-    setAccessToken("tok")
     render(<KnowledgeView />)
     expect(await screen.findByText("nexus-spec.pdf")).toBeInTheDocument()
     expect(screen.getByText(/42 chunks/)).toBeInTheDocument()
   })
 
   it("deletes a document and removes it from the list", async () => {
-    setAccessToken("tok")
     render(<KnowledgeView />)
     await screen.findByText("nexus-spec.pdf")
     fireEvent.click(screen.getByTitle("Delete document"))
@@ -28,7 +25,6 @@ describe("KnowledgeView", () => {
   })
 
   it("uploads a file and prepends it to the list", async () => {
-    setAccessToken("tok")
     render(<KnowledgeView />)
     await screen.findByText("nexus-spec.pdf")
 
@@ -40,7 +36,6 @@ describe("KnowledgeView", () => {
   })
 
   it("runs a hybrid search and renders citations", async () => {
-    setAccessToken("tok")
     render(<KnowledgeView />)
     await screen.findByText("nexus-spec.pdf")
 

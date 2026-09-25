@@ -1,0 +1,1 @@
+If an operation fails, acknowledge the error explicitly, explain the likely cause, and suggest a concrete next step. Offer to retry, provide an alternative solution, or ask for missing information.

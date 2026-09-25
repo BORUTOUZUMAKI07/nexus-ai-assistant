@@ -61,7 +61,7 @@ test.describe("Conversation management", () => {
     await page
       .locator("div.group")
       .filter({ hasText: "Security review" })
-      .getByRole("button")
+      .getByRole("button", { name: "Delete conversation" })
       .click()
 
     await expect(page.getByText("Security review")).not.toBeVisible()

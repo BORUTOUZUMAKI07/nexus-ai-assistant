@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, Lock, Mail, User, ArrowRight, Sparkles } from "lucide-react";
 import { registerUser, loginUser } from "@/lib/api";
-import { getAccessToken, setSession } from "@/lib/auth";
+import { checkAuth } from "@/lib/auth";
 
 export default function SignInPage() {
   const router = useRouter();
@@ -18,7 +18,11 @@ export default function SignInPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (getAccessToken()) router.replace("/app");
+    // The access cookie is httpOnly, so session presence is verified against
+    // the backend rather than by reading document.cookie.
+    void checkAuth().then((authed) => {
+      if (authed) router.replace("/app");
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -36,8 +40,9 @@ export default function SignInPage() {
           full_name: fullName,
         });
       }
-      const tokenRes = await loginUser({ email, password });
-      setSession(tokenRes.access_token, tokenRes.refresh_token);
+      // /api/auth/login writes the httpOnly session cookies; this page just
+      // navigates once the server confirms the session was created.
+      await loginUser({ email, password });
       router.replace("/app");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");
@@ -141,7 +146,7 @@ export default function SignInPage() {
           <button
             type="submit"
             disabled={loading}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-4 py-2.5 text-sm font-medium text-white transition-all hover:bg-[var(--accent-hover)] disabled:opacity-50"
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--accent-foreground)] shadow-sm transition-all hover:bg-[var(--accent-hover)] disabled:opacity-50"
           >
             {loading ? (
               <Loader2 className="h-4 w-4 animate-spin" />

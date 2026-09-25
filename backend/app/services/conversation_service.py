@@ -104,10 +104,12 @@ class ConversationService:
         return await self._repo.get_messages(conversation_id)
 
     async def record_feedback(
-        self, message_id: UUID, feedback: str, note: str | None = None
+        self, message_id: UUID, feedback: str, note: str | None = None,
+        conversation_id: UUID | None = None, user_id: UUID | None = None,
     ) -> Message:
         msg = await self._repo.record_feedback(
-            message_id, feedback=feedback, note=note
+            message_id, feedback=feedback, note=note,
+            conversation_id=conversation_id, user_id=user_id,
         )
         if not msg:
             raise ResourceNotFoundError("Message", str(message_id))

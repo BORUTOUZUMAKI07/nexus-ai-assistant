@@ -14,6 +14,7 @@ import {
   Cpu,
   AlertCircle,
   Loader2,
+  ExternalLink,
 } from "lucide-react";
 
 interface AdminUser {
@@ -262,6 +263,44 @@ export const AdminView: React.FC = () => {
               </div>
             ))
           )}
+
+          {/* External Observability & Telemetry Dashboards */}
+          <div className="col-span-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 mt-2">
+            <h3 className="text-sm font-medium text-white mb-1">External Observability & Telemetry</h3>
+            <p className="text-xs text-[var(--text-muted)] mb-4">
+              Access real-time LLM trace monitoring, token latency analytics, and crash reporting dashboards.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <a
+                href="https://us.helicone.ai"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-between p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--accent)] text-xs text-[var(--text-secondary)] hover:text-white transition-colors group"
+              >
+                <div>
+                  <div className="font-semibold text-white group-hover:text-[var(--accent)] transition-colors">
+                    Helicone AI Observability
+                  </div>
+                  <div className="text-[11px] text-[var(--text-muted)]">Live LLM request tracing & cost metrics</div>
+                </div>
+                <ExternalLink className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--accent)] shrink-0" />
+              </a>
+              <a
+                href="https://sentry.io"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-between p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--accent)] text-xs text-[var(--text-secondary)] hover:text-white transition-colors group"
+              >
+                <div>
+                  <div className="font-semibold text-white group-hover:text-[var(--accent)] transition-colors">
+                    Sentry Error Tracking
+                  </div>
+                  <div className="text-[11px] text-[var(--text-muted)]">Backend exception monitoring & APM traces</div>
+                </div>
+                <ExternalLink className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--accent)] shrink-0" />
+              </a>
+            </div>
+          </div>
         </div>
       )}
 

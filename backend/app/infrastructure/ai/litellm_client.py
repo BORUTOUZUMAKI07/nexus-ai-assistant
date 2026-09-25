@@ -10,9 +10,10 @@ from litellm import Router, completion_cost
 # Configure litellm global settings
 litellm.drop_params = True
 litellm.telemetry = False
+litellm.set_verbose = False
 # Silence litellm's red `Provider List: ...` console banner. register_model()
 # resolves every registration through get_llm_provider(); bare deployment slugs
-# (e.g. ``compound-mini``, ``qwen/qwen3.8-27b``) have no provider prefix and
+# (e.g. ``compound-mini``, ``groq/compound``) have no provider prefix and
 # would otherwise spam this print 4x at startup even though registration
 # succeeds. Only gates debug prints — never exceptions.
 litellm.suppress_debug_info = True
@@ -23,12 +24,9 @@ litellm.suppress_debug_info = True
 # warnings at startup. Provider-prefixed variants all appear in responses/cost
 # lookups depending on the call path.
 _DEPLOYED_MODEL_COSTS: dict[str, tuple[float, float]] = {
-    "openai/groq/compound-mini": (0.0, 0.0),
-    "groq/compound-mini": (0.0, 0.0),
-    "compound-mini": (0.0, 0.0),
-    "openai/qwen/qwen3.8-27b": (0.0, 0.0),
-    "groq/qwen/qwen3.8-27b": (0.0, 0.0),
-    "qwen/qwen3.8-27b": (0.0, 0.0),
+    "openrouter/nex-agi/nex-n2.5-mini:free": (0.0, 0.0),
+    "openrouter/nex-agi/nex-n2.5-pro:free": (0.0, 0.0),
+    "openrouter/liquid/lfm-2.5-2.6b:free": (0.0, 0.0),
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free": (0.0, 0.0),
     "openrouter/inclusionai/ling-3.0-flash-sante:free": (0.0, 0.0),
     "openrouter/google/gemma-4-31b-it:free": (0.0, 0.0),
@@ -36,7 +34,7 @@ _DEPLOYED_MODEL_COSTS: dict[str, tuple[float, float]] = {
 litellm.register_model(
     {
         model_slug: {
-            "max_tokens": 8192,
+            "max_tokens": 4096,
             "input_cost_per_token": input_cost,
             "output_cost_per_token": output_cost,
             "cache_creation_input_token_cost": 0.0,
@@ -47,16 +45,6 @@ litellm.register_model(
 )
 
 # Construct model deployment list for LiteLLM Router.
-# Primary tier: Groq, live-verified after the VPN was turned off. Groq's current
-# catalog uses provider-prefixed ids (e.g. `groq/compound-mini`, `qwen/qwen3.8-27b`)
-# and its legacy `llama-*` ids are gone, so deployments use the generic `openai/`
-# provider against Groq's OpenAI-compatible base URL (litellm's `groq/` provider
-# strips the prefix and would send the wrong model id).
-# OpenRouter free-tier models remain as redundant fallbacks (shared-pool 429s).
-# Every deployment carries its per-token pricing in ``litellm_params`` so the
-# Router's internally-hashed registration for each deployment inherits the same
-# $0 free-tier cost fields and emits no ``register_model ... not in built-in cost
-# map`` warnings (the hashed ids are opaque and cannot be registered ahead of time).
 _CACHE_COST_FIELDS = {
     "input_cost_per_token": 0.0,
     "output_cost_per_token": 0.0,
@@ -68,31 +56,29 @@ model_list = [
     {
         "model_name": "fast_chat",
         "litellm_params": {
-            "model": "openai/groq/compound-mini",
-            "api_base": "https://api.groq.com/openai/v1",
-            "api_key": settings.GROQ_API_KEY,
+            "model": "openrouter/nex-agi/nex-n2.5-mini:free",
+            "api_key": settings.OPENROUTER_API_KEY,
             "max_tokens": 4096,
             "temperature": 0.7,
-            "timeout": 20,
+            "timeout": 25,
             **_CACHE_COST_FIELDS,
         },
     },
     {
         "model_name": "complex_reasoning",
         "litellm_params": {
-            "model": "openai/qwen/qwen3.8-27b",
-            "api_base": "https://api.groq.com/openai/v1",
-            "api_key": settings.GROQ_API_KEY,
-            "max_tokens": 8192,
-            "temperature": 0.6,
-            "timeout": 25,
+            "model": "openrouter/nex-agi/nex-n2.5-pro:free",
+            "api_key": settings.OPENROUTER_API_KEY,
+            "max_tokens": 4096,
+            "temperature": 0.5,
+            "timeout": 30,
             **_CACHE_COST_FIELDS,
         },
     },
     {
         "model_name": "large_context",
         "litellm_params": {
-            "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+            "model": "openrouter/nex-agi/nex-n2.5-pro:free",
             "api_key": settings.OPENROUTER_API_KEY,
             "max_tokens": 8192,
             "temperature": 0.5,
@@ -103,19 +89,18 @@ model_list = [
     {
         "model_name": "vision_analysis",
         "litellm_params": {
-            "model": "openrouter/inclusionai/ling-3.0-flash-sante:free",
+            "model": "openrouter/nex-agi/nex-n2.5-mini:free",
             "api_key": settings.OPENROUTER_API_KEY,
             "max_tokens": 4096,
             "temperature": 0.2,
-            "timeout": 20,
+            "timeout": 25,
             **_CACHE_COST_FIELDS,
         },
     },
-    # OpenRouter multimodal fallback (Vision-specific capability).
     {
-        "model_name": "openrouter_gemma",
+        "model_name": "liquid_fallback",
         "litellm_params": {
-            "model": "openrouter/google/gemma-4-31b-it:free",
+            "model": "openrouter/liquid/lfm-2.5-2.6b:free",
             "api_key": settings.OPENROUTER_API_KEY,
             "max_tokens": 4096,
             "temperature": 0.2,
@@ -153,11 +138,11 @@ _MODEL_GROUP_ALIASES = {
 
 # Router model_group → provider/model string for direct litellm calls (tokens, cost).
 _GROUP_TO_MODEL = {
-    "fast_chat": "groq/compound-mini",
-    "complex_reasoning": "qwen/qwen3.8-27b",
-    "large_context": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "vision_analysis": "openrouter/inclusionai/ling-3.0-flash-sante:free",
-    "openrouter_gemma": "openrouter/google/gemma-4-31b-it:free",
+    "fast_chat": "openrouter/nex-agi/nex-n2.5-mini:free",
+    "complex_reasoning": "openrouter/nex-agi/nex-n2.5-pro:free",
+    "large_context": "openrouter/nex-agi/nex-n2.5-pro:free",
+    "vision_analysis": "openrouter/nex-agi/nex-n2.5-mini:free",
+    "liquid_fallback": "openrouter/liquid/lfm-2.5-2.6b:free",
 }
 
 _GROUP_NAMES = set(_GROUP_TO_MODEL)
@@ -202,14 +187,12 @@ def resolve_provider_model(model: str) -> str:
 
 
 # Initialize LiteLLM Router with 3 Specialized Fallback Tiers.
-# Fallbacks rotate across distinct OpenRouter free-tier models so a shared-pool
-# 429 on one model hands off to another provider instead of ending the stream.
 router = Router(
     model_list=model_list,
     fallbacks=[
-        {"fast_chat": ["complex_reasoning", "large_context", "openrouter_gemma", "vision_analysis"]},
-        {"complex_reasoning": ["fast_chat", "large_context", "openrouter_gemma"]},
-        {"large_context": ["complex_reasoning", "fast_chat", "openrouter_gemma"]},
+        {"fast_chat": ["complex_reasoning", "large_context", "liquid_fallback", "vision_analysis"]},
+        {"complex_reasoning": ["fast_chat", "large_context", "liquid_fallback"]},
+        {"large_context": ["complex_reasoning", "fast_chat", "liquid_fallback"]},
         {"vision_analysis": ["fast_chat", "complex_reasoning"]},
     ],
     context_window_fallbacks=[
@@ -256,28 +239,64 @@ class LiteLLMService:
         import time as _time
 
         _start = _time.perf_counter()
-        try:
-            # Groq free tier enforces ~1000 output tokens/min (OTPM) per model and
-            # rejects any single request whose expected output exceeds it. Keep
-            # every completion on the Groq-hosted groups under a safe ceiling so a
-            # long internal call can never hard-fail the whole agentic stream.
-            if group in ("fast_chat", "complex_reasoning"):
-                max_tokens = min(max(max_tokens, 1), 1000)
-            response = await self.router.acompletion(
-                model=group,
-                messages=_normalize_messages(messages),
-                temperature=temperature,
-                max_tokens=max_tokens,
-                extra_headers=extra_headers if extra_headers else None,
-            )
-        except Exception as exc:
+        # Groq free tier enforces ~1000 output tokens/min (OTPM) per model and
+        # rejects any single request whose expected output exceeds it. Keep
+        # every completion on the Groq-hosted groups under a safe ceiling so a
+        # long internal call can never hard-fail the whole agentic stream.
+        effective_max_tokens = min(max(max_tokens, 1), 1000) if group in ("fast_chat", "complex_reasoning") else max_tokens
+
+        # Fallback chain: if primary group returns empty content (no text + no tool calls),
+        # retry once with the next available group before raising. This guards against
+        # the "model output must contain either output text or tool calls" error that
+        # some Groq-hosted thinking models emit when they exhaust their token budget.
+        _fallback_groups = ["large_context", "liquid_fallback", "vision_analysis"]
+        _attempt_groups = [group] + [g for g in _fallback_groups if g != group]
+
+        response = None
+        last_exc: Exception | None = None
+        for _attempt_group in _attempt_groups:
+            _eff_tokens = min(max(max_tokens, 1), 1000) if _attempt_group in ("fast_chat", "complex_reasoning") else max_tokens
+            try:
+                response = await self.router.acompletion(
+                    model=_attempt_group,
+                    messages=_normalize_messages(messages),
+                    temperature=temperature,
+                    max_tokens=_eff_tokens,
+                    extra_headers=extra_headers if extra_headers else None,
+                )
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "llm_completion_failed",
+                    model=_attempt_group,
+                    error=str(exc),
+                    duration_ms=int((_time.perf_counter() - _start) * 1000),
+                )
+                continue
+
+            # Guard: some reasoning models (qwen thinking mode) return content=None
+            # with no tool calls — this causes the litellm "model output must contain
+            # either output text or tool calls" validation error.  Detect early and
+            # retry with the next fallback group before propagating.
+            _msg = response.choices[0].message if response.choices else None
+            _content = getattr(_msg, "content", None) if _msg else None
+            _tool_calls = getattr(_msg, "tool_calls", None) if _msg else None
+            if _content or _tool_calls:
+                # Valid response — stop retrying.
+                break
+
             logger.warning(
-                "llm_completion_failed",
-                model=group,
-                error=str(exc),
-                duration_ms=int((_time.perf_counter() - _start) * 1000),
+                "llm_empty_output_retrying",
+                model=_attempt_group,
+                attempt_group=_attempt_group,
             )
-            raise
+            response = None  # Mark as invalid so we try next group
+
+        if response is None:
+            if last_exc:
+                raise last_exc
+            raise RuntimeError("All model groups returned empty output with no tool calls.")
+
         _duration_ms = int((_time.perf_counter() - _start) * 1000)
 
         cost = 0.0
@@ -299,8 +318,12 @@ class LiteLLMService:
             tokens_output=output_tokens,
         )
 
+        # Safe content extraction: prefer text content; fall back to tool call
+        # serialization; final fallback is empty string (never None).
+        _final_msg = response.choices[0].message
+        _raw_content = getattr(_final_msg, "content", None) or ""
         return {
-            "content": response.choices[0].message.content or "",
+            "content": _raw_content,
             "model": response.model,
             "tokens_input": input_tokens,
             "tokens_output": output_tokens,
@@ -320,14 +343,13 @@ class LiteLLMService:
         import time as _time
 
         _start = _time.perf_counter()
+        effective_max_tokens = min(max(max_tokens, 1), 1000) if group in ("fast_chat", "complex_reasoning") else max_tokens
         try:
-            if group in ("fast_chat", "complex_reasoning"):
-                max_tokens = min(max(max_tokens, 1), 1000)
             response = await self.router.acompletion(
                 model=group,
                 messages=_normalize_messages(messages),
                 temperature=temperature,
-                max_tokens=max_tokens,
+                max_tokens=effective_max_tokens,
                 stream=True,
             )
         except Exception as exc:
@@ -344,10 +366,22 @@ class LiteLLMService:
             resolved=getattr(response, "model", ""),
             first_chunk_latency_ms=int((_time.perf_counter() - _start) * 1000),
         )
-        async for chunk in response:
-            delta = chunk.choices[0].delta.content or ""
-            if delta:
-                yield delta
+        try:
+            async for chunk in response:
+                # Guard: streaming chunks can have delta.content = None between
+                # thinking tokens — skip silently rather than yielding "None" strings.
+                delta = (chunk.choices[0].delta.content if chunk.choices else None) or ""
+                if delta:
+                    yield delta
+        finally:
+            # Always release the upstream SSE connection, including when the
+            # consumer generator is closed early (client disconnect) or a
+            # provider error interrupts the loop. Leaking it stalls the provider
+            # HTTP pool and can wedge later runs.
+            try:
+                await response.aclose()
+            except Exception as exc:
+                logger.warning("llm_stream_aclose_failed", model=group, error=str(exc))
 
     async def completion(
         self,

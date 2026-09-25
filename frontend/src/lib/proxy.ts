@@ -9,7 +9,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { TOKEN_COOKIE } from "./auth";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 export async function backendFetch(path: string, init?: RequestInit) {
   const cookieStore = await cookies();
@@ -20,7 +20,15 @@ export async function backendFetch(path: string, init?: RequestInit) {
   if (!isFormBody && !headers.get("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  // Login/refresh are reached with a possibly expired/stale access token still
+  // in the cookie; forwarding it would shadow the fresh credentials. All other
+  // routes — including /auth/me, which is the app's authenticated session probe
+  // — must present the bearer token or the backend rejects them as anonymous.
+  const isTokenlessAuth =
+    path.startsWith("/auth/login") || path.startsWith("/auth/refresh");
+  if (accessToken && !isTokenlessAuth) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
 
   try {
     return await fetch(`${BACKEND_URL}/api/v1${path}`, { ...init, headers });

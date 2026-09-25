@@ -18,25 +18,24 @@ import {
 
 const GRADIENT_TEXT = "text-gradient";
 
-function BrandMark({ size = 34 }: { size?: number }) {
+function BrandMark({ size = 32 }: { size?: number }) {
   return (
     <span
-      className="grid place-items-center rounded-lg shadow-float"
+      className="grid place-items-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] shadow-sm"
       style={{
         width: size,
         height: size,
-        background: "linear-gradient(135deg, #10b981 0%, #2dd4bf 45%, #38bdf8 100%)",
       }}
       aria-hidden="true"
     >
-      <Sparkles className="text-white" size={size * 0.55} strokeWidth={2.2} />
+      <Sparkles className="text-[var(--accent)]" size={size * 0.55} strokeWidth={2.2} />
     </span>
   );
 }
 
 function Navbar() {
   return (
-    <header className="fixed inset-x-0 top-0 z-50 border-b border-[var(--border-subtle)] bg-[rgba(8,9,10,0.72)] backdrop-blur-xl">
+    <header className="fixed inset-x-0 top-0 z-50 border-b border-[var(--border-subtle)] bg-[rgba(8,9,10,0.85)] backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
         <a href="#top" className="flex items-center gap-3">
           <BrandMark size={30} />
@@ -66,13 +65,13 @@ function Navbar() {
         <div className="flex items-center gap-3">
           <Link
             href="/signin"
-            className="rounded-lg px-4 py-2 text-[13.5px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-surface-elevated)] hover:text-[var(--text-primary)]"
+            className="btn-ghost-pill px-4 py-1.5 text-[13px] hover:text-[var(--text-primary)]"
           >
             Sign in
           </Link>
           <Link
             href="/app"
-            className="landing-shimmer group inline-flex items-center gap-2 rounded-lg bg-[var(--grad-brand)] px-4 py-2 text-[13.5px] font-semibold text-white shadow-float transition-transform hover:scale-[1.02]"
+            className="btn-electric group inline-flex items-center gap-2 px-5 py-2 text-[13px]"
           >
             Launch app
             <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
@@ -172,26 +171,33 @@ function Hero() {
     <section id="top" className="relative overflow-hidden pt-36 pb-20 sm:pt-44">
       <div className="landing-grid absolute inset-0" aria-hidden="true" />
       <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: "radial-gradient(ellipse 80% 50% at 50% -15%, rgba(228, 242, 34, 0.12), rgba(99, 102, 241, 0.05) 50%, transparent 80%)",
+        }}
+        aria-hidden="true"
+      />
+      <div
         className="landing-aurora left-[-10%] top-[-20%] h-[480px] w-[480px]"
-        style={{ background: "radial-gradient(circle, rgba(16,185,129,0.26), transparent 65%)" }}
+        style={{ background: "radial-gradient(circle, rgba(228, 242, 34, 0.15), transparent 65%)" }}
         aria-hidden="true"
       />
       <div
         className="landing-aurora right-[-8%] top-[5%] h-[420px] w-[420px]"
-        style={{ background: "radial-gradient(circle, rgba(56,189,248,0.16), transparent 65%)", animationDelay: "-6s" }}
+        style={{ background: "radial-gradient(circle, rgba(99, 102, 241, 0.15), transparent 65%)", animationDelay: "-6s" }}
         aria-hidden="true"
       />
 
       <div className="relative mx-auto max-w-4xl px-6 text-center">
-        <span className="inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3.5 py-1.5 text-[12.5px] text-[var(--text-secondary)]">
+        <div className="badge-pill mx-auto mb-2">
           <span className="relative flex h-2 w-2">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--status-success)] opacity-60" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--status-success)]" />
           </span>
           Production-grade agentic assistant — live now
-        </span>
+        </div>
 
-        <h1 className="mt-7 text-[clamp(2.6rem,6.5vw,4.6rem)] font-semibold leading-[1.06] tracking-[-0.03em] text-[var(--text-primary)]">
+        <h1 className="mt-7 text-[clamp(2.6rem,6.5vw,4.6rem)] font-normal leading-[1.04] tracking-[-0.03em] text-[var(--text-primary)]">
           An AI that researches, reasons, and{" "}
           <span className={GRADIENT_TEXT}>gets work done</span>
         </h1>
@@ -202,17 +208,17 @@ function Hero() {
           grounded in sources you can open.
         </p>
 
-        <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
+        <div className="mt-9 flex flex-col items-center justify-center gap-3.5 sm:flex-row">
           <Link
             href="/app"
-            className="landing-shimmer group inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--grad-brand)] px-7 py-3.5 text-[15px] font-semibold text-white shadow-float transition-transform hover:scale-[1.02] sm:w-auto"
+            className="btn-electric group inline-flex w-full items-center justify-center gap-2 px-8 py-3.5 text-[14.5px] sm:w-auto"
           >
             Start chatting
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </Link>
           <a
             href="#features"
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-7 py-3.5 text-[15px] font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-surface-elevated)] hover:text-[var(--text-primary)] sm:w-auto"
+            className="btn-ghost-pill inline-flex w-full items-center justify-center gap-2 px-8 py-3.5 text-[14.5px] font-medium sm:w-auto"
           >
             See what it can do
           </a>
@@ -527,7 +533,7 @@ function Pricing() {
               }
             >
               {p.highlight && (
-                <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-[var(--grad-brand)] px-3 py-1 text-[11px] font-semibold text-white">
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-[var(--accent)] px-3 py-1 text-[11px] font-semibold text-[var(--accent-foreground)] shadow-[0_0_12px_var(--accent-glow)]">
                   Popular
                 </span>
               )}
@@ -552,8 +558,8 @@ function Pricing() {
                 href="/app"
                 className={
                   p.highlight
-                    ? "mt-7 inline-flex w-full items-center justify-center rounded-lg bg-[var(--grad-brand)] px-4 py-2.5 text-[13.5px] font-semibold text-white transition-transform hover:scale-[1.02]"
-                    : "mt-7 inline-flex w-full items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-4 py-2.5 text-[13.5px] font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-surface-elevated)] hover:text-[var(--text-primary)]"
+                    ? "mt-7 btn-electric inline-flex w-full items-center justify-center px-4 py-2.5 text-[13.5px]"
+                    : "mt-7 btn-ghost-pill inline-flex w-full items-center justify-center px-4 py-2.5 text-[13.5px] font-medium"
                 }
               >
                 {p.cta}
@@ -636,7 +642,7 @@ function FinalCta() {
         </p>
         <Link
           href="/app"
-          className="landing-shimmer group mt-9 inline-flex items-center gap-2 rounded-xl bg-[var(--grad-brand)] px-8 py-4 text-[16px] font-semibold text-white shadow-float transition-transform hover:scale-[1.02]"
+          className="btn-electric group mt-9 inline-flex items-center gap-2 px-8 py-4 text-[15.5px] shadow-[0_0_28px_var(--accent-glow)]"
         >
           Start chatting
           <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />

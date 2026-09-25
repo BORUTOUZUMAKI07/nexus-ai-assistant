@@ -2,12 +2,6 @@ import { describe, it, expect, beforeEach } from "vitest"
 import { server } from "@/test/mocks/server"
 import { http, HttpResponse } from "msw"
 import {
-  setAccessToken,
-  setRefreshToken,
-  getAccessToken,
-  getRefreshToken,
-} from "@/lib/auth"
-import {
   fetchConversations,
   createConversation,
   deleteConversation,
@@ -27,20 +21,7 @@ describe("api client", () => {
     })
   })
 
-  it("adds an Authorization header when a token cookie exists", async () => {
-    let seenAuth: string | null = null
-    server.use(
-      http.get(`${API}/conversations`, ({ request }) => {
-        seenAuth = request.headers.get("authorization")
-        return HttpResponse.json([], { status: 401 })
-      })
-    )
-    setAccessToken("tok-123")
-    await fetchConversations().catch(() => {})
-    expect(seenAuth).toBe("Bearer tok-123")
-  })
-
-  it("does not add an Authorization header when logged out", async () => {
+  it("does not attach an Authorization header client-side (tokens live in httpOnly cookies)", async () => {
     let seenAuth: string | null = "unset"
     server.use(
       http.get(`${API}/conversations`, ({ request }) => {
@@ -48,13 +29,11 @@ describe("api client", () => {
         return HttpResponse.json([])
       })
     )
-    setAccessToken("")
     await fetchConversations()
     expect(seenAuth).toBeNull()
   })
 
   it("maps conversation responses into a page envelope", async () => {
-    setAccessToken("tok")
     const page = await fetchConversations(2, 10)
     expect(page.items).toHaveLength(1)
     expect(page.items[0].id).toBe("conv-100")
@@ -73,7 +52,6 @@ describe("api client", () => {
           : HttpResponse.json([])
       })
     )
-    setAccessToken("tok")
     const page = await fetchConversations(1, 50, { attempts: 3, baseDelayMs: 1 })
     expect(calls).toBe(3)
     expect(page.items).toHaveLength(0)
@@ -85,62 +63,55 @@ describe("api client", () => {
     server.use(
       http.get(`${API}/conversations`, () => {
         calls += 1
-        return HttpResponse.json({ detail: "unauthorized" }, { status: 401 })
+        return HttpResponse.json({ detail: "forbidden" }, { status: 403 })
       })
     )
-    setAccessToken("tok")
     await expect(
       fetchConversations(1, 50, { attempts: 3, baseDelayMs: 1 })
-    ).rejects.toThrow("Fetch conversations failed: 401")
+    ).rejects.toThrow("Fetch conversations failed: 403")
     expect(calls).toBe(1)
   })
 
-  it("silently refreshes on 401 and retries once with the new token", async () => {
-    let firstAuth: string | null = null
-    let secondAuth: string | null = null
+  it("silently refreshes on 401 and retries once", async () => {
     let refreshCalls = 0
+    let requests = 0
     server.use(
-      http.get(`${API}/conversations`, ({ request }) => {
-        if (!firstAuth) {
-          firstAuth = request.headers.get("authorization")
-          return HttpResponse.json({ detail: "expired" }, { status: 401 })
-        }
-        secondAuth = request.headers.get("authorization")
-        return HttpResponse.json([])
+      http.get(`${API}/conversations`, () => {
+        requests += 1
+        return requests === 1
+          ? HttpResponse.json({ detail: "expired" }, { status: 401 })
+          : HttpResponse.json([])
       }),
       http.post(`${API}/auth/refresh`, () => {
         refreshCalls += 1
-        return HttpResponse.json({
-          access_token: "new-access-token",
-          refresh_token: "new-refresh-token",
-        })
+        // Ordinary 200s never reach the browser (httpOnly cookie rotation is
+        // server-side), so the retry just reuses the same request.
+        return HttpResponse.json({ ok: true })
       })
     )
-    setAccessToken("old-access-token")
-    setRefreshToken("old-refresh-token")
     const page = await fetchConversations()
-    expect(firstAuth).toBe("Bearer old-access-token")
-    expect(secondAuth).toBe("Bearer new-access-token")
+    expect(requests).toBe(2)
     expect(refreshCalls).toBe(1)
     expect(page.items).toHaveLength(0)
-    expect(getAccessToken()).toBe("new-access-token")
-    expect(getRefreshToken()).toBe("new-refresh-token")
+    expect(page.total).toBe(0)
   })
 
-  it("clears the session and keeps 401 when the refresh is declined", async () => {
+  it("keeps the 401 and clears the session when the refresh is declined", async () => {
+    let logoutCalls = 0
     server.use(
       http.get(`${API}/conversations`, () =>
         HttpResponse.json({ detail: "expired" }, { status: 401 })
       ),
       http.post(`${API}/auth/refresh`, () =>
         HttpResponse.json({ detail: "Refresh token has already been used." }, { status: 401 })
-      )
+      ),
+      http.post(`${API}/auth/logout`, () => {
+        logoutCalls += 1
+        return HttpResponse.json({ message: "Logged out successfully" })
+      })
     )
-    setAccessToken("old-access-token")
-    setRefreshToken("old-refresh-token")
     await expect(fetchConversations()).rejects.toThrow("Fetch conversations failed: 401")
-    expect(getAccessToken()).toBeNull()
-    expect(getRefreshToken()).toBeNull()
+    expect(logoutCalls).toBe(1)
   })
 
   it("creates a conversation with a JSON body", async () => {
@@ -151,14 +122,13 @@ describe("api client", () => {
         return HttpResponse.json({
           id: "conv-new-1",
           title: "New Conversation",
-          mode: "normal",
+          mode: "code",
           created_at: "",
           updated_at: "",
           message_count: 0,
         })
       })
     )
-    setAccessToken("tok")
     const created = await createConversation("My title", "code")
     expect(created.id).toBe("conv-new-1")
     expect(sentBody).toContain("My title")
@@ -166,14 +136,12 @@ describe("api client", () => {
   })
 
   it("resolves after a 204 on delete", async () => {
-    setAccessToken("tok")
     await expect(deleteConversation("conv-100")).resolves.toBeUndefined()
   })
 
-  it("returns a token pair on successful login", async () => {
+  it("reports success on login without exposing tokens to the page", async () => {
     const res = await loginUser({ email: "test@nexus.ai", password: "password123" })
-    expect(res.access_token).toBe("test-access-token")
-    expect(res.refresh_token).toBe("test-refresh-token")
+    expect(res.ok).toBe(true)
   })
 
   it("throws the backend detail on failed login", async () => {
@@ -191,14 +159,12 @@ describe("api client", () => {
   })
 
   it("lists knowledge files", async () => {
-    setAccessToken("tok")
     const files = await fetchKnowledgeFiles()
     expect(files[0].filename).toBe("nexus-spec.pdf")
     expect(files[0].status).toBe("indexed")
   })
 
   it("posts HITL feedback", async () => {
-    setAccessToken("tok")
     const res = await sendHITLFeedback({ threadId: "t-1", action: "approve" })
     expect(res.status).toBe("received")
   })

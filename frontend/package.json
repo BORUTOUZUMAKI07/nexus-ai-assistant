@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/serve.js",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",

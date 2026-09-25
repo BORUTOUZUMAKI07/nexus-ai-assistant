@@ -2,6 +2,7 @@
 Conversations API Router.
 Pure HTTP transport layer — delegates all conversation use cases to ConversationService (SRP + DIP).
 """
+import asyncio
 import json
 import time
 from collections.abc import AsyncGenerator
@@ -28,6 +29,7 @@ from backend.app.domain.usage.schemas import UsageLogCreate
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.ai.litellm_client import ai_client
 from backend.app.services.conversation_service import ConversationService
+from backend.app.services.evaluation.guardrail_service import guardrail_service
 from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.tracing import trace_span
@@ -39,6 +41,30 @@ from pydantic import BaseModel
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
+
+# ─── Per-thread run serialization ─────────────────────────────────────────────
+# A single LangGraph thread must not be executed concurrently: a resume racing a
+# fresh turn would double-run tools and corrupt the checkpointer. Guards track
+# which threads are actively streaming so runaway concurrent runs are rejected
+# (409) instead of duplicating execution.
+_active_stream_threads: set[str] = set()
+_stream_thread_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _acquire_stream_slot(thread_id: str) -> bool:
+    """Claims the streaming slot for ``thread_id``. Returns False if already in use."""
+    lock = _stream_thread_locks.setdefault(thread_id, asyncio.Lock())
+    async with lock:
+        if thread_id in _active_stream_threads:
+            return False
+        _active_stream_threads.add(thread_id)
+        return True
+
+
+async def _release_stream_slot(thread_id: str) -> None:
+    lock = _stream_thread_locks.setdefault(thread_id, asyncio.Lock())
+    async with lock:
+        _active_stream_threads.discard(thread_id)
 
 
 @router.get("", response_model=list[ConversationResponse])
@@ -173,6 +199,21 @@ async def stream_conversation(
         convo_uuid = conv.id
         thread_id = str(convo_uuid)
         logger.info("conversation_created_from_stream", conversation_id=thread_id)
+    else:
+        # Existing conversation UUID: verify ownership BEFORE reading the thread
+        # history or persisting anything into it (IDOR guard).
+        try:
+            await conv_svc.get_conversation(convo_uuid, user_id=current_user.id)
+        except ResourceNotFoundError:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Serialize concurrent runs per thread so a double-submit/resume can never
+    # execute the same tools twice or interleave checkpointer writes.
+    if not await _acquire_stream_slot(thread_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This conversation is already streaming. Please wait for it to finish.",
+        )
 
     config = {
         "configurable": {
@@ -184,28 +225,59 @@ async def stream_conversation(
     }
 
     # Persist the latest user message so the agentic path is durably tracked,
-    # mirroring the messages.py chat endpoints.
+    # mirroring the messages.py chat endpoints. The input is pass guardrailed
+    # (PII redaction parity with the messages.py path).
     user_msg = None
+    user_content = ""
     if user_messages:
         try:
             last_in = user_messages[-1]
-            user_content = last_in.get("content") if isinstance(last_in, dict) else str(last_in)
-            user_msg = await conv_svc.add_message(
-                conversation_id=convo_uuid,
-                role="user",
-                content=user_content,
-            )
+            raw_content = last_in.get("content") if isinstance(last_in, dict) else str(last_in)
+            if isinstance(raw_content, list):
+                # Extract text component for guardrailing and text persistence
+                text_parts = [
+                    p.get("text", "")
+                    for p in raw_content
+                    if isinstance(p, dict) and p.get("type") == "text"
+                ]
+                text_to_validate = " ".join(text_parts).strip()
+                sanitized_text = guardrail_service.validate_input(text_to_validate) if text_to_validate else ""
+                user_msg = await conv_svc.add_message(
+                    conversation_id=convo_uuid,
+                    role="user",
+                    content=sanitized_text or "[Image attached]",
+                )
+            else:
+                user_content = str(raw_content)
+                sanitized_content = guardrail_service.validate_input(user_content)
+                user_msg = await conv_svc.add_message(
+                    conversation_id=convo_uuid,
+                    role="user",
+                    content=sanitized_content,
+                )
+                if isinstance(user_messages[-1], dict):
+                    user_messages[-1] = {**user_messages[-1], "content": sanitized_content}
         except Exception as exc:
             logger.warning("agentic_user_message_persist_failed", thread_id=thread_id, error=str(exc))
+
+    # Bound the agentic context: only the most recent turns are replayed into the
+    # graph every run, preventing unbounded context growth across a conversation.
+    _MAX_AGENTIC_TURNS = 20
+    graph_messages = (user_messages or [])[-_MAX_AGENTIC_TURNS:]
 
     async def event_generator() -> AsyncGenerator[str, None]:
         emitted_text = ""
         start_time = time.time()
         latency_ms = 0
+        # Track whether on_chat_model_stream produced token-level chunks.
+        # on_chain_stream emits the final AIMessage.content which would duplicate
+        # the text if we already streamed individual tokens — use it only as a
+        # fallback when the model did NOT stream token-by-token (e.g. ToT node).
+        _streamed_tokens = False
         try:
             async with trace_span("agentic_stream", {"thread_id": thread_id, "mode": body.mode, "user_id": str(current_user.id)}):
                 async for event in orchestrator_graph.astream_events(
-                    input={"messages": user_messages, "mode": body.mode},
+                    input={"messages": graph_messages, "mode": body.mode},
                     config=config,
                     version="v2",
                 ):
@@ -216,20 +288,24 @@ async def stream_conversation(
                         if chunk and hasattr(chunk, "content") and chunk.content:
                             payload = json.dumps({"type": "text_delta", "content": chunk.content})
                             emitted_text += chunk.content
+                            _streamed_tokens = True
                             yield f"data: {payload}\n\n"
 
-                    elif kind == "on_chain_stream":
-                        # State writes surface as node chunks — emit assistant text when
-                        # a node (synthesizer / tree_of_thoughts) appends a final AIMessage.
-                        chunk = event.get("data", {}).get("chunk")
-                        if isinstance(chunk, dict):
-                            msgs = chunk.get("messages")
-                            if msgs:
-                                last = msgs[-1]
-                                if hasattr(last, "content") and isinstance(last.content, str) and last.content:
-                                    payload = json.dumps({"type": "text_delta", "content": last.content})
-                                    emitted_text += last.content
-                                    yield f"data: {payload}\n\n"
+                    elif kind in ("on_chain_stream", "on_chain_end"):
+                        # If no token-level chunks have been streamed, emit the final message
+                        # content from the completed node (synthesizer or tree_of_thoughts).
+                        if not _streamed_tokens:
+                            data = event.get("data", {})
+                            chunk = data.get("chunk") or data.get("output")
+                            if isinstance(chunk, dict):
+                                msgs = chunk.get("messages")
+                                if msgs:
+                                    last = msgs[-1]
+                                    if hasattr(last, "content") and isinstance(last.content, str) and last.content:
+                                        payload = json.dumps({"type": "text_delta", "content": last.content})
+                                        emitted_text += last.content
+                                        _streamed_tokens = True
+                                        yield f"data: {payload}\n\n"
 
                     elif kind == "on_tool_start":
                         payload = json.dumps({
@@ -335,6 +411,7 @@ async def stream_conversation(
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
         finally:
+            await _release_stream_slot(thread_id)
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(
@@ -351,17 +428,80 @@ async def hitl_feedback(
     conversation_id: str,
     body: HITLFeedbackRequest,
     current_user: User = Depends(get_current_user),
+    conv_svc: ConversationService = Depends(get_conversation_service),
 ) -> dict:
     """Resume a LangGraph graph via Command(resume=...) pattern after HITL approval."""
     from langgraph.types import Command
 
     thread_id = str(conversation_id)
     try:
-        await orchestrator_graph.ainvoke(
+        convo_uuid = UUID(thread_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Ownership check: never resume another user's parked HITL thread (IDOR guard).
+    try:
+        await conv_svc.get_conversation(convo_uuid, user_id=current_user.id)
+    except ResourceNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Serialize with any active stream on the same thread.
+    if not await _acquire_stream_slot(thread_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This conversation is already streaming. Please wait for it to finish.",
+        )
+
+    try:
+        # Verify the thread is actually parked at an interrupt and that the
+        # parked approval has not expired — refuse to resume a stale request.
+        snapshot = await orchestrator_graph.aget_state(
+            {"configurable": {"thread_id": thread_id, "user_id": str(current_user.id)}}
+        )
+        pending_interrupts = (snapshot.values.get("__interrupt__") or []) if snapshot and snapshot.values else []
+        if not pending_interrupts:
+            raise HTTPException(status_code=400, detail="This conversation is not waiting for an approval.")
+        from backend.app.agents.orchestrator.hitl import is_approval_expired
+
+        for intr in pending_interrupts:
+            payload = getattr(intr, "value", None)
+            if is_approval_expired(payload):
+                raise HTTPException(
+                    status_code=410,
+                    detail="This approval request has expired. Please start a new request.",
+                )
+
+        result = await orchestrator_graph.ainvoke(
             Command(resume={"action": body.action, "data": body.data}),
             config={"configurable": {"thread_id": thread_id, "user_id": str(current_user.id)}},
         )
+
+        # Persist the resumed run's final assistant turn so an approved HITL
+        # decision is durably recorded even though this endpoint is not SSE.
+        if result and isinstance(result, dict) and body.action in ("approve", "modify"):
+            msgs = result.get("messages") or []
+            if msgs:
+                last = msgs[-1]
+                content = getattr(last, "content", "") or ""
+                if isinstance(content, list):
+                    content = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
+                if content and str(content).strip():
+                    try:
+                        await conv_svc.add_message(
+                            conversation_id=convo_uuid,
+                            role="assistant",
+                            content=str(content),
+                            parent_message_id=None,
+                            model=settings.DEFAULT_MODEL,
+                        )
+                    except Exception as exc:
+                        logger.warning("agentic_hitl_assistant_message_persist_failed", thread_id=thread_id, error=str(exc))
+
         return {"status": "resumed", "action": body.action}
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("hitl_resume_error", thread_id=thread_id, error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        await _release_stream_slot(thread_id)

@@ -33,6 +33,15 @@ class IReranker(ABC):
 class IRetriever(ABC):
     """Abstract hybrid vector/sparse retrieval contract."""
 
+    async def generate_embedding(self, text: str) -> list[float]:
+        """Generate dense vector embedding for a single text."""
+        vectors = await self.generate_embeddings_batch([text])
+        return vectors[0]
+
+    async def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate dense vector embeddings for multiple texts."""
+        return [await self.generate_embedding(t) for t in texts]
+
     @abstractmethod
     async def retrieve(
         self,
@@ -52,6 +61,8 @@ class IRetriever(ABC):
         file_ids: list[UUID] | None = None,
         top_k: int = 5,
         score_threshold: float = 0.35,
+        use_mmr: bool = True,
+        mmr_lambda: float = 0.7,
     ) -> list[dict[str, Any]]:
         """Retrieve and merge candidates across multiple query variants."""
         merged: list[dict[str, Any]] = []

@@ -1,11 +1,9 @@
 import { describe, it, expect } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { SettingsView } from "@/components/SettingsView"
-import { setAccessToken } from "@/lib/auth"
 
 describe("SettingsView", () => {
   it("loads agent config, BYOK keys, and persistent memories from the API", async () => {
-    setAccessToken("tok")
     render(<SettingsView />)
 
     expect(await screen.findByText("Agent configuration")).toBeInTheDocument()
@@ -16,7 +14,6 @@ describe("SettingsView", () => {
   })
 
   it("shows a saved confirmation after saving", async () => {
-    setAccessToken("tok")
     render(<SettingsView />)
     await screen.findByText("Agent configuration")
 
@@ -26,7 +23,6 @@ describe("SettingsView", () => {
   })
 
   it("deletes a memory row", async () => {
-    setAccessToken("tok")
     render(<SettingsView />)
     const memory = await screen.findByText(/Prefers Python and TypeScript/)
     const deleteBtn = memory
@@ -40,7 +36,6 @@ describe("SettingsView", () => {
   })
 
   it("adds a memory through the API", async () => {
-    setAccessToken("tok")
     render(<SettingsView />)
     await screen.findByText("Agent configuration")
 

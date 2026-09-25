@@ -16,6 +16,20 @@ logger = structlog.get_logger(__name__)
 STORAGE_BUCKET = "nexus-knowledge"
 
 
+def _normalize_storage_path(storage_path: str) -> str:
+    """
+    Single path contract: File rows must store the path RELATIVE to the bucket
+    (e.g. ``<user_id>/<uuid>.pdf``). This normalizer also tolerates legacy rows
+    that accidentally persisted the prefixed form ``<bucket>/<user_id>/...`` so
+    uploads, downloads, signed URLs and deletes always address the same object.
+    """
+    path = storage_path.lstrip("/")
+    prefix = f"{STORAGE_BUCKET}/"
+    if path.startswith(prefix):
+        path = path[len(prefix):]
+    return path
+
+
 class SupabaseStorageClient(IStorageService):
     """Thin async wrapper around Supabase Storage REST API."""
 
@@ -107,7 +121,8 @@ class SupabaseStorageClient(IStorageService):
 
             if resp.status_code in (200, 201):
                 logger.info("supabase_storage_upload_ok", path=storage_path, size=len(file_bytes))
-                return f"{STORAGE_BUCKET}/{storage_path}"
+                # Consistent, single contract: persist the bucket-relative path.
+                return _normalize_storage_path(storage_path)
             else:
                 logger.error("supabase_storage_upload_failed", status=resp.status_code, body=resp.text)
                 raise RuntimeError(f"Supabase Storage upload failed: {resp.status_code} - {resp.text}")
@@ -115,10 +130,11 @@ class SupabaseStorageClient(IStorageService):
     async def download(self, storage_path: str) -> bytes:
         """Download a file from Supabase Storage."""
         await self._ensure_bucket()
+        path = _normalize_storage_path(storage_path)
 
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.get(
-                f"{self.base_url}/object/{STORAGE_BUCKET}/{storage_path}",
+                f"{self.base_url}/object/{STORAGE_BUCKET}/{path}",
                 headers=self.headers,
             )
             if resp.status_code == 200:
@@ -129,10 +145,11 @@ class SupabaseStorageClient(IStorageService):
     async def get_public_url(self, storage_path: str) -> str:
         """Get a signed URL for temporary access (60 min expiry)."""
         await self._ensure_bucket()
+        path = _normalize_storage_path(storage_path)
 
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
-                f"{self.base_url}/object/sign/{STORAGE_BUCKET}/{storage_path}",
+                f"{self.base_url}/object/sign/{STORAGE_BUCKET}/{path}",
                 headers=self.headers,
                 json={"expiresIn": 3600},
             )
@@ -145,9 +162,10 @@ class SupabaseStorageClient(IStorageService):
     async def delete(self, storage_path: str) -> bool:
         """Delete a file from Supabase Storage."""
         await self._ensure_bucket()
+        path = _normalize_storage_path(storage_path)
 
         headers = {**self.headers, "Content-Type": "application/json"}
-        body = json.dumps({"prefixes": [storage_path]}).encode()
+        body = json.dumps({"prefixes": [path]}).encode()
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.request(
                 "DELETE",
@@ -156,7 +174,7 @@ class SupabaseStorageClient(IStorageService):
                 content=body,
             )
             if resp.status_code in (200, 201):
-                logger.info("supabase_storage_deleted", path=storage_path)
+                logger.info("supabase_storage_deleted", path=path)
                 return True
             else:
                 logger.warning("supabase_storage_delete_failed", status=resp.status_code, body=resp.text)
@@ -165,6 +183,7 @@ class SupabaseStorageClient(IStorageService):
     async def list_files(self, prefix: str = "", limit: int = 100) -> list:
         """List files in the bucket with an optional prefix filter."""
         await self._ensure_bucket()
+        prefix = _normalize_storage_path(prefix) if prefix else ""
 
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(

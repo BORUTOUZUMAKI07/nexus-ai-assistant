@@ -83,10 +83,6 @@ export function chatStreamBody(
   return `${lines.join("\n")}\n`
 }
 
-function requireAuth(request: Request): boolean {
-  return Boolean(request.headers.get("authorization")?.startsWith("Bearer "))
-}
-
 export const handlers = [
   // ── Auth ────────────────────────────────────────────────────────────────
   http.post("/api/auth/login", async ({ request }) => {
@@ -108,32 +104,37 @@ export const handlers = [
         { status: 401 }
       )
     }
-    return HttpResponse.json(mockTokenPair)
+    // Mirrors the real /api/auth/login route handler, which echoes only a
+    // boolean and keeps the tokens in httpOnly cookies server-side.
+    return HttpResponse.json({ ok: true })
   }),
 
-  http.post("/api/auth/refresh", ({ request }) => {
-    void request
-    return HttpResponse.json({
-      access_token: "test-refreshed-access-token",
-      refresh_token: "test-refreshed-refresh-token",
+  http.post("/api/auth/refresh", () =>
+    HttpResponse.json({
+      ok: true,
     })
-  }),
+  ),
 
   http.post("/api/auth/register", () => HttpResponse.json(mockUser)),
 
-  // ── Conversations ───────────────────────────────────────────────────────
-  http.get("/api/conversations", ({ request }) => {
-    if (!requireAuth(request)) {
-      return HttpResponse.json({ detail: "Not authenticated" }, { status: 401 })
-    }
-    return HttpResponse.json(mockConversations)
-  }),
+  // The browser never sends Authorization headers — tokens live in httpOnly
+  // cookies that the Next proxy attaches server-side. Normally these requests
+  // are "authenticated", so handlers below don't gate on a header.
+  http.get("/api/auth/me", () =>
+    // A signed-in page reads the httpOnly cookie; jsdom has none, so the gate
+    // opens (authenticated: false) exactly like a cold-start browser.
+    HttpResponse.json({ authenticated: false })
+  ),
 
-  http.post("/api/conversations", ({ request }) => {
-    if (!requireAuth(request)) {
-      return HttpResponse.json({ detail: "Not authenticated" }, { status: 401 })
-    }
-    return HttpResponse.json({
+  http.post("/api/auth/logout", () =>
+    HttpResponse.json({ message: "Logged out successfully" })
+  ),
+
+  // ── Conversations ───────────────────────────────────────────────────────
+  http.get("/api/conversations", () => HttpResponse.json(mockConversations)),
+
+  http.post("/api/conversations", () =>
+    HttpResponse.json({
       id: "conv-new-1",
       title: "New Conversation",
       model: "llama-3.3-70b-versatile",
@@ -143,7 +144,7 @@ export const handlers = [
       created_at: "2026-09-06T00:00:00Z",
       updated_at: "2026-09-06T00:00:00Z",
     })
-  }),
+  ),
 
   http.get("/api/conversations/:id", () =>
     HttpResponse.json({
@@ -182,12 +183,9 @@ export const handlers = [
     })
   ),
 
-  http.patch("/api/conversations/:id", ({ request }) => {
-    if (!requireAuth(request)) {
-      return HttpResponse.json({ detail: "Not authenticated" }, { status: 401 })
-    }
-    return HttpResponse.json(mockConversations[0])
-  }),
+  http.patch("/api/conversations/:id", () =>
+    HttpResponse.json(mockConversations[0])
+  ),
 
   http.delete("/api/conversations/:id", () =>
     HttpResponse.json(null, { status: 204 })

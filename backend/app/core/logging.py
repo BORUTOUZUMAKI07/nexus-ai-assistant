@@ -70,6 +70,17 @@ def setup_logging() -> None:
         level=logging.INFO if settings.ENVIRONMENT == "production" else logging.DEBUG,
     )
 
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     # Third-party libraries emit chatty DEBUG/INFO records (httpcore's per-socket
     # ``close.started/close.complete`` trace, asyncio's loop-creation banner,
     # huggingface_hub's session closes) that are useless in our logs and, when
@@ -82,6 +93,9 @@ def setup_logging() -> None:
         "httpx",
         "huggingface_hub",
         "litellm",
+        "LiteLLM",
+        "LiteLLM Router",
+        "LiteLLM Proxy",
     ):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 

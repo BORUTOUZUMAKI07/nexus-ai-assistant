@@ -3,12 +3,37 @@ RAG Reranking Service.
 Re-orders retrieved candidate chunks using fast cross-encoder models
 (FlashRank or lightweight cross-attention scoring).
 """
+import asyncio
 from typing import Any
 
 import structlog
 from backend.app.services.rag.base import IReranker
 
 logger = structlog.get_logger(__name__)
+
+# Ranker construction loads model weights — cache one instance per model name
+# and reuse it, instead of re-initializing the model for every rerank call.
+_ranker_cache: dict[str, Any] = {}
+
+
+def _get_ranker(model_name: str) -> Any:
+    from flashrank import Ranker
+
+    cached = _ranker_cache.get(model_name)
+    if cached is None:
+        cached = Ranker(model_name=model_name)
+        _ranker_cache[model_name] = cached
+    return cached
+
+
+def _rerank_sync(ranker: Any, request: Any, top_n: int, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    results = ranker.rerank(request)
+    reranked: list[dict[str, Any]] = []
+    for r in results[:top_n]:
+        chunk_data = r["meta"]
+        chunk_data["rerank_score"] = float(r.get("score", 0.0))
+        reranked.append(chunk_data)
+    return reranked
 
 
 class RerankingService(IReranker):
@@ -32,21 +57,17 @@ class RerankingService(IReranker):
             return []
 
         try:
-            from flashrank import Ranker, RerankRequest
+            from flashrank import RerankRequest
 
-            ranker = Ranker(model_name=self.model_name)
+            # Ranker construction + CPU-bound inference must never block the
+            # event loop.  Init is cached, so first-call overhead amortises.
+            ranker = await asyncio.to_thread(_get_ranker, self.model_name)
             passages = [
                 {"id": str(i), "text": c.get("content", ""), "meta": c}
                 for i, c in enumerate(candidates)
             ]
             rerank_request = RerankRequest(query=query, passages=passages)
-            results = ranker.rerank(rerank_request)
-
-            reranked: list[dict[str, Any]] = []
-            for r in results[:top_n]:
-                chunk_data = r["meta"]
-                chunk_data["rerank_score"] = float(r.get("score", 0.0))
-                reranked.append(chunk_data)
+            reranked = await asyncio.to_thread(_rerank_sync, ranker, rerank_request, top_n, candidates)
 
             logger.info("flashrank_rerank_complete", original_count=len(candidates), reranked_count=len(reranked))
             return reranked

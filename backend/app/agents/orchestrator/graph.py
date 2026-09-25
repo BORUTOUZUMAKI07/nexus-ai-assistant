@@ -20,6 +20,8 @@ import structlog
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 
+from backend.app.core.config import settings
+
 try:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 except ImportError:
@@ -117,7 +119,7 @@ def _build_workflow() -> StateGraph:
             "orchestrator": "orchestrator",
         },
     )
-    workflow.add_edge("tree_of_thoughts", END)
+    workflow.add_edge("tree_of_thoughts", "synthesizer")
     workflow.add_conditional_edges(
         "orchestrator",
         route_after_orchestrator,
@@ -153,8 +155,18 @@ def _build_workflow() -> StateGraph:
 async def lifespan_graph() -> AsyncIterator[None]:
     """
     FastAPI lifespan-compatible context manager.
-    Opens a single AsyncPostgresSaver connection pool shared across the app.
+    Opens the AsyncPostgresSaver checkpointer connection (durable short-term
+    memory) shared across the app, and compiles the workflow graph.
     Call from main.py lifespan.
+
+    Note on the installed langgraph-checkpoint-postgres (3.1.x): AsyncPostgresSaver
+    is bound to a single psycopg AsyncConnection — it exposes no pool API, so all
+    threads share one checkpointer connection (safe: async ops serialise at the
+    protocol level; throughput is bounded by that connection).
+
+    Production behaviour is fail-fast: if the Postgres checkpointer is missing or
+    cannot connect, startup ABORTS instead of silently degrading to MemorySaver
+    (which would reset every thread on restart and break HITL resume).
 
     Usage in main.py:
         async with lifespan_graph():
@@ -162,9 +174,8 @@ async def lifespan_graph() -> AsyncIterator[None]:
     """
     global _compiled_graph, _store
 
-    database_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql://nexus:nexus@localhost:5432/nexus_dev",
+    database_url = settings.DATABASE_URL or os.environ.get(
+        "DATABASE_URL", "postgresql://nexus:nexus@localhost:5432/nexus_dev"
     )
     # AsyncPostgresSaver requires the synchronous psycopg3 DSN (no +asyncpg prefix)
     pg_dsn = database_url.replace("postgresql+asyncpg://", "postgresql://")
@@ -173,12 +184,11 @@ async def lifespan_graph() -> AsyncIterator[None]:
 
     if AsyncPostgresSaver is not None:
         try:
-            # Open a dedicated AsyncConnection (not langgraph's from_conn_string helper).
-            # `prepare_threshold=None` disables server-side PREPARE statements, which is
-            # required when running against a transaction-mode pooler (Supabase
-            # pooler.supabase.com:6543): langgraph's helper hardcodes prepare_threshold=0,
-            # so the first PREPARE per statement can collide with a still-live prepared
-            # statement on a reused backend session after a hard restart.
+            # A dedicated AsyncConnection (langgraph's from_conn_string helper is
+            # unusable with transaction-mode poolers — it hardcodes
+            # prepare_threshold=0, colliding with still-live prepared statements
+            # on a reused backend session after a hard restart).
+            # `prepare_threshold=None` disables server-side PREPARE for poolers.
             async with await AsyncConnection.connect(
                 pg_dsn,
                 autocommit=True,
@@ -204,10 +214,20 @@ async def lifespan_graph() -> AsyncIterator[None]:
 
             logger.info("langgraph_checkpointer_closed")
         except Exception as exc:
+            if settings.ENVIRONMENT == "production":
+                logger.error(
+                    "langgraph_checkpointer_unavailable_in_production_refusing_to_degrade",
+                    error=str(exc),
+                )
+                raise RuntimeError(
+                    "LangGraph Postgres checkpointer unavailable in production; "
+                    "refusing to silently degrade to MemorySaver. Fix DATABASE_URL "
+                    "resolution before starting the API."
+                ) from exc
             logger.warning(
                 "langgraph_postgres_checkpointer_failed_fallback_inmemory",
                 error=str(exc),
-                hint="Using in-memory MemorySaver checkpointer for this session.",
+                hint="Using in-memory MemorySaver checkpointer for this session (non-production only).",
             )
             _store = InMemoryStore()
             workflow = _build_workflow()
@@ -219,9 +239,15 @@ async def lifespan_graph() -> AsyncIterator[None]:
 
             yield
     else:
+        if settings.ENVIRONMENT == "production":
+            logger.error("langgraph_postgres_checkpointer_missing_in_production")
+            raise RuntimeError(
+                "langgraph-checkpoint-postgres is not installed; cannot persist "
+                "agent state in production. Install the dependency before starting."
+            )
         logger.info(
             "langgraph_postgres_checkpointer_not_installed_using_inmemory",
-            hint="langgraph-checkpoint-postgres not found. Using in-memory MemorySaver.",
+            hint="langgraph-checkpoint-postgres not found. Using in-memory MemorySaver (non-production only).",
         )
         _store = InMemoryStore()
         workflow = _build_workflow()

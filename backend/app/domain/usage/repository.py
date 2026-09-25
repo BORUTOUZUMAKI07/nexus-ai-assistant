@@ -4,12 +4,14 @@ Repository for Usage and Telemetry domain operations.
 from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
+from backend.app.domain.conversation.models import Conversation
 from backend.app.domain.usage.models import EvaluationLog, UsageLog
 from backend.app.domain.usage.schemas import (
     EvaluationLogCreate,
     UsageLogCreate,
     UsageSummaryResponse,
 )
+from sqlalchemy import or_
 from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -92,8 +94,22 @@ class UsageRepository(BaseRepository[UsageLog]):
         await self.session.refresh(db_eval)
         return db_eval
 
-    async def get_evaluations(self, conversation_id: UUID | None = None, limit: int = 50) -> list[EvaluationLog]:
-        statement = select(EvaluationLog)
+    async def get_evaluations(self, user_id: UUID, conversation_id: UUID | None = None, limit: int = 50) -> list[EvaluationLog]:
+        # EvaluationLog has no user_id column, so ownership flows through the
+        # conversation it is attached to: conversation-scoped evaluations are
+        # only visible to their conversation's owner (IDOR guard), while
+        # unattached/system-level evaluations (conversation_id IS NULL, e.g.
+        # offline metric runs) remain globally readable.
+        statement = (
+            select(EvaluationLog)
+            .outerjoin(Conversation, Conversation.id == EvaluationLog.conversation_id)
+            .where(
+                or_(
+                    EvaluationLog.conversation_id.is_(None),
+                    Conversation.user_id == user_id,
+                )
+            )
+        )
         if conversation_id:
             statement = statement.where(EvaluationLog.conversation_id == conversation_id)
         statement = statement.order_by(EvaluationLog.created_at.desc()).limit(limit)

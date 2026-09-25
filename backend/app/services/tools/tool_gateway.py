@@ -117,7 +117,7 @@ class ToolGateway:
         # instead of crashing the request, since Redis is not core to execution.
         rate_key = f"rate_limit:tool:{user_id}"
         try:
-            allowed, _ = await redis_client.check_rate_limit(rate_key, max_requests=20, window_seconds=60)
+            allowed, _ = await redis_client.check_rate_limit(rate_key, limit=20, window_seconds=60)
         except Exception as exc:
             logger.warning("redis_rate_limit_skipped_redis_unavailable", error=str(exc))
             allowed = True
@@ -155,7 +155,7 @@ class ToolGateway:
         """
         Internal dispatcher to registered tools.
         """
-        if tool_name == "execute_python":
+        if tool_name in ("execute_python", "execute_python_code"):
             code = args.get("code", "")
             timeout = args.get("timeout_seconds", 30)
             return await code_executor.execute_python(code=code, timeout_seconds=timeout)
@@ -169,7 +169,7 @@ class ToolGateway:
             url = args.get("url", "")
             return await web_search_service.scrape_url(url=url)
 
-        elif tool_name == "calculator":
+        elif tool_name in ("calculator", "calculate_expression"):
             import math
             expression = args.get("expression", "")
             # Safe math eval

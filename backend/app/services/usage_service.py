@@ -23,8 +23,8 @@ class UsageService:
         return await self._repo.get_summary(user_id)
 
     async def get_evaluations(
-        self, conversation_id: UUID | None = None, limit: int = 50
+        self, user_id: UUID, conversation_id: UUID | None = None, limit: int = 50
     ):
         return await self._repo.get_evaluations(
-            conversation_id=conversation_id, limit=limit
+            user_id=user_id, conversation_id=conversation_id, limit=limit
         )
