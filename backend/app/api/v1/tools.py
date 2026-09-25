@@ -13,7 +13,7 @@ from backend.app.mcp.client import mcp_client
 from backend.app.services.conversation_service import ConversationService
 from backend.app.services.tool_service import ToolService
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
@@ -23,7 +23,7 @@ class ToolExecuteRequest(BaseModel):
     # than silently ignoring them and creating ambiguous security semantics.
     model_config = ConfigDict(extra="forbid")
 
-    tool_name: str
+    tool_name: str = Field(min_length=1, max_length=128, pattern=r"^\\S(?:.*\\S)?$")
     arguments: dict[str, Any]
     conversation_id: UUID
 
