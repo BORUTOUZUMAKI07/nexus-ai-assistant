@@ -62,6 +62,16 @@ def create_access_token(
     if role is not None:
         to_encode["role"] = role
     if additional_claims:
+        # Identity and lifetime claims are controlled exclusively by this
+        # function. Callers must not override subject, expiry, token type, or
+        # token identifier through the extension-claims parameter.
+        reserved_claims = {"sub", "exp", "iat", "jti", "type", "iss", "aud"}
+        collisions = reserved_claims.intersection(additional_claims)
+        if collisions:
+            raise ValueError(
+                "additional_claims cannot override reserved JWT claims: "
+                + ", ".join(sorted(collisions))
+            )
         to_encode.update(additional_claims)
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
 
