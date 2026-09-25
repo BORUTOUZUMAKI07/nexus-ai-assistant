@@ -53,7 +53,11 @@ async def _validate_public_url(url: str) -> str:
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"Only http/https URLs are allowed (got scheme '{parsed.scheme}')")
+        raise ValueError("Only http/https URLs are allowed")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URLs containing embedded credentials are not allowed")
+    if parsed.port is not None and parsed.port not in (80, 443):
+        raise ValueError("Only standard HTTP/HTTPS ports are allowed")
     host = parsed.hostname or ""
     if not host:
         raise ValueError("URL must include a hostname")
@@ -74,6 +78,8 @@ async def _validate_public_url(url: str) -> str:
 
     # Hostname → resolve and check every returned address.
     resolved = await asyncio.to_thread(socket.getaddrinfo, hostname, None)
+    if not resolved:
+        raise ValueError("Hostname did not resolve to a public address")
     for _family, _socktype, _proto, _canon, sockaddr in resolved:
         try:
             addr = ipaddress.ip_address(sockaddr[0])
@@ -145,12 +151,20 @@ class WebSearchService:
         Executes a web search using the priority ladder:
         Tavily → Firecrawl → DuckDuckGo.
         """
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("Search query must be a non-empty string")
+        if len(query) > 2000:
+            raise ValueError("Search query exceeds the 2000-character limit")
+        if isinstance(max_results, bool) or not isinstance(max_results, int) or not 1 <= max_results <= 10:
+            raise ValueError("max_results must be an integer between 1 and 10")
+        query = query.strip()
+
         # 1. Primary: Tavily Search API (clean agentic results, no boilerplate)
         if self.tavily_key:
             try:
                 results = await self._search_tavily(query, max_results)
                 if results:
-                    logger.info("tavily_search_success", query=query, count=len(results))
+                    logger.info("tavily_search_success", query_length=len(query), count=len(results))
                     return results
             except Exception as exc:
                 logger.warning("tavily_search_failed_falling_back", error=str(exc))
@@ -160,7 +174,7 @@ class WebSearchService:
             try:
                 results = await self._search_firecrawl(query, max_results)
                 if results:
-                    logger.info("firecrawl_search_success", query=query, count=len(results))
+                    logger.info("firecrawl_search_success", query_length=len(query), count=len(results))
                     return results
             except Exception as exc:
                 logger.warning("firecrawl_search_failed_falling_back_to_ddg", error=str(exc))
@@ -169,7 +183,7 @@ class WebSearchService:
         try:
             results = await self._search_duckduckgo(query, max_results)
             if results:
-                logger.info("duckduckgo_search_success", query=query, results_count=len(results))
+                logger.info("duckduckgo_search_success", query_length=len(query), results_count=len(results))
                 return results
         except Exception as exc:
             logger.warning("duckduckgo_search_failed", error=str(exc))
@@ -244,7 +258,7 @@ class WebSearchService:
                 )
                 if not raw_results:
                     logger.warning(
-                        "duckduckgo_empty_retrying", query=query, attempt=attempt, retries=retries
+                        "duckduckgo_empty_retrying", query_length=len(query), attempt=attempt, retries=retries
                     )
                     await asyncio.sleep(attempt)
                     continue
@@ -258,10 +272,10 @@ class WebSearchService:
                     for r in raw_results
                 ]
             except DDGSException as exc:
-                logger.warning("duckduckgo_blocked_retrying", query=query, attempt=attempt, error=str(exc))
+                logger.warning("duckduckgo_blocked_retrying", query_length=len(query), attempt=attempt, error_type=type(exc).__name__)
                 await asyncio.sleep(attempt)
             except Exception as exc:
-                logger.warning("duckduckgo_error_retrying", query=query, attempt=attempt, error=str(exc))
+                logger.warning("duckduckgo_error_retrying", query_length=len(query), attempt=attempt, error_type=type(exc).__name__)
                 await asyncio.sleep(attempt)
         return []
 
@@ -269,6 +283,12 @@ class WebSearchService:
         """
         Scrapes a URL and converts HTML into clean, LLM-ready markdown using Firecrawl v2.
         """
+        if not isinstance(url, str) or not url or len(url) > 2048:
+            raise ValueError("URL must be a non-empty string of at most 2048 characters")
+        # Validate before handing the URL to Firecrawl as well as the direct
+        # HTTP fallback; otherwise the primary provider path bypasses our SSRF guard.
+        await _validate_public_url(url)
+
         if self.firecrawl_key and not self.firecrawl_key.startswith("fc_placeholder"):
             try:
                 from firecrawl import FirecrawlApp
@@ -291,7 +311,7 @@ class WebSearchService:
                     "success": True,
                 }
             except Exception as exc:
-                logger.warning("firecrawl_scrape_failed_falling_back_to_httpx", url=url, error=str(exc))
+                logger.warning("firecrawl_scrape_failed_falling_back_to_httpx", error_type=type(exc).__name__)
 
         # Fallback to basic httpx + html-to-markdown if Firecrawl is unavailable.
         # Every hop is SSRF-validated (scheme, host, DNS resolution, redirects).
@@ -310,9 +330,9 @@ class WebSearchService:
                     "content": text[:15000],  # Limit content size
                     "success": True,
                 }
-            logger.warning("basic_http_scrape_non_200", url=url, status_code=status_code)
+            logger.warning("basic_http_scrape_non_200", status_code=status_code)
         except Exception as exc:
-            logger.error("basic_http_scrape_failed", url=url, error=str(exc))
+            logger.error("basic_http_scrape_failed", error_type=type(exc).__name__)
 
         return {
             "url": url,
