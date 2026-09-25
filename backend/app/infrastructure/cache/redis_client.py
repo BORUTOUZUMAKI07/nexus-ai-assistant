@@ -55,6 +55,15 @@ class RedisService(ICacheService):
         racing requests can never both pass the limit. Returns (is_allowed,
         remaining_tokens).
         """
+        if not isinstance(identifier, str) or not identifier.strip() or len(identifier) > 256:
+            raise ValueError("identifier must be a non-empty string of at most 256 characters")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100000:
+            raise ValueError("limit must be an integer between 1 and 100000")
+        if isinstance(window_seconds, bool) or not isinstance(window_seconds, int) or not 1 <= window_seconds <= 86400:
+            raise ValueError("window_seconds must be an integer between 1 and 86400")
+        if isinstance(cost, bool) or not isinstance(cost, int) or not 1 <= cost <= limit:
+            raise ValueError("cost must be an integer between 1 and limit")
+
         key = f"rate_limit:{identifier}"
         script = """
         local key = KEYS[1]
