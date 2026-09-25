@@ -460,3 +460,32 @@ async def test_scrape_rejects_overlong_url():
     service = WebSearchService(tavily_key=None, firecrawl_key=None)
     with pytest.raises(ValueError):
         await service.scrape_url("https://example.com/" + "x" * 2048)
+
+
+@pytest.mark.parametrize(
+    "value,limit,expected",
+    [
+        ("x" * 2500, 2000, "x" * 2000),
+        ("short", 10, "short"),
+        (None, 10, ""),
+        (123, 10, ""),
+    ],
+)
+def test_web_search_provider_text_is_bounded(value, limit, expected):
+    from backend.app.services.tools.web_search import _bounded_text
+
+    assert _bounded_text(value, limit) == expected
+
+
+def test_web_search_result_limits_are_explicit():
+    from backend.app.services.tools.web_search import (
+        SEARCH_CONTENT_LIMIT,
+        SEARCH_SNIPPET_LIMIT,
+        SEARCH_TITLE_LIMIT,
+        SEARCH_URL_LIMIT,
+    )
+
+    assert SEARCH_TITLE_LIMIT == 500
+    assert SEARCH_URL_LIMIT == 2048
+    assert SEARCH_SNIPPET_LIMIT == 2000
+    assert SEARCH_CONTENT_LIMIT == 10000
