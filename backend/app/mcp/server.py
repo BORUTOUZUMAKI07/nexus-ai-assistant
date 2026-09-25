@@ -98,8 +98,21 @@ def _safe_math_eval(expression: str) -> float | int:
     """
     if not expression or not expression.strip():
         raise ValueError("Empty expression")
+    if len(expression) > 500:
+        raise ValueError("Expression is too long (maximum 500 characters)")
 
     tree = ast.parse(expression, mode="eval")
+    if sum(1 for _ in ast.walk(tree)) > 100:
+        raise ValueError("Expression is too complex (maximum 100 syntax nodes)")
+
+    def _checked(value: Any) -> float | int:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("Calculation must produce a numeric result")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("Result must be finite")
+        if abs(value) > 1e100:
+            raise ValueError("Result magnitude exceeds the supported limit")
+        return value
 
     def _eval(node: ast.AST) -> float | int:
         if isinstance(node, ast.Expression):
@@ -112,12 +125,19 @@ def _safe_math_eval(expression: str) -> float | int:
             op_fn = _BIN_OPS.get(type(node.op))
             if op_fn is None:
                 raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
-            return op_fn(_eval(node.left), _eval(node.right))
+            left = _eval(node.left)
+            right = _eval(node.right)
+            if isinstance(node.op, ast.Pow):
+                if abs(right) > 100:
+                    raise ValueError("Exponent magnitude exceeds 100")
+                if abs(left) > 1e100:
+                    raise ValueError("Base magnitude exceeds the supported limit")
+            return _checked(op_fn(left, right))
         if isinstance(node, ast.UnaryOp):
             op_fn = _UNARY_OPS.get(type(node.op))
             if op_fn is None:
                 raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
-            return op_fn(_eval(node.operand))
+            return _checked(op_fn(_eval(node.operand)))
         if isinstance(node, ast.Name):
             if node.id in _ALLOWED_MATH_NAMES:
                 return _ALLOWED_MATH_NAMES[node.id]
@@ -130,10 +150,10 @@ def _safe_math_eval(expression: str) -> float | int:
             fn = _ALLOWED_MATH_NAMES[node.func.id]
             if not callable(fn):
                 raise ValueError(f"'{node.func.id}' is not a function")
-            return fn(*(_eval(arg) for arg in node.args))
+            return _checked(fn(*(_eval(arg) for arg in node.args)))
         raise ValueError(f"Unsupported expression element: {type(node).__name__}")
 
-    return _eval(tree)
+    return _checked(_eval(tree))
 
 
 @mcp.tool()
