@@ -469,15 +469,33 @@ async def hitl_feedback(
         pending_interrupts = (snapshot.values.get("__interrupt__") or []) if snapshot and snapshot.values else []
         if not pending_interrupts:
             raise HTTPException(status_code=400, detail="This conversation is not waiting for an approval.")
+        # This endpoint resolves one specific tool-approval interrupt. Do not
+        # resume arbitrary/future interrupt types or ambiguous multi-interrupt
+        # snapshots with a generic approval decision.
+        if len(pending_interrupts) != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Multiple pending interruptions cannot be resolved by this endpoint.",
+            )
+
         from backend.app.agents.orchestrator.hitl import is_approval_expired
 
-        for intr in pending_interrupts:
-            payload = getattr(intr, "value", None)
-            if is_approval_expired(payload):
-                raise HTTPException(
-                    status_code=410,
-                    detail="This approval request has expired. Please start a new request.",
-                )
+        interrupt_payload = getattr(pending_interrupts[0], "value", None)
+        if not isinstance(interrupt_payload, dict) or interrupt_payload.get("action") != "tool_approval":
+            raise HTTPException(
+                status_code=409,
+                detail="The pending interruption is not a supported tool approval request.",
+            )
+        if not interrupt_payload.get("tool_name") or not isinstance(interrupt_payload.get("arguments"), dict):
+            raise HTTPException(
+                status_code=409,
+                detail="The pending tool approval payload is invalid.",
+            )
+        if is_approval_expired(interrupt_payload):
+            raise HTTPException(
+                status_code=410,
+                detail="This approval request has expired. Please start a new request.",
+            )
 
         result = await orchestrator_graph.ainvoke(
             Command(resume={"action": body.action, "data": body.data}),
