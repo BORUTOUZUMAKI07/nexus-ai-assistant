@@ -72,7 +72,7 @@ async def _validate_public_url(url: str) -> str:
     except ValueError:
         ip = None
     if ip is not None:
-        if _is_reserved_ip(ip) or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        if not ip.is_global or _is_reserved_ip(ip) or ip.is_loopback or ip.is_link_local or ip.is_reserved:
             raise ValueError(f"Host '{hostname}' is a private/reserved address")
         return url
 
@@ -85,7 +85,7 @@ async def _validate_public_url(url: str) -> str:
             addr = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             continue
-        if _is_reserved_ip(addr) or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+        if not addr.is_global or _is_reserved_ip(addr) or addr.is_loopback or addr.is_link_local or addr.is_reserved:
             raise ValueError(f"Host '{hostname}' resolves to a private/reserved address ({addr})")
     return url
 
