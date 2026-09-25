@@ -13,12 +13,16 @@ from backend.app.mcp.client import mcp_client
 from backend.app.services.conversation_service import ConversationService
 from backend.app.services.tool_service import ToolService
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
 
 class ToolExecuteRequest(BaseModel):
+    # Reject client-supplied control flags (for example is_user_approved) rather
+    # than silently ignoring them and creating ambiguous security semantics.
+    model_config = ConfigDict(extra="forbid")
+
     tool_name: str
     arguments: dict[str, Any]
     conversation_id: UUID
