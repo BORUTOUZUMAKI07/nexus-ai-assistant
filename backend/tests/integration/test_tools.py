@@ -81,7 +81,7 @@ async def test_approve_tool_call_updates_status(
         conversation_id=conversation_id,
         tool_name="web_search",
         input_args={"query": "pending"},
-        status="pending",
+        status="requires_approval",
         requires_approval=True,
     )
 
@@ -101,6 +101,37 @@ async def test_approve_tool_call_updates_status(
     refreshed = await repo.get_tool_call(call.id)
     assert refreshed.status == "approved"
     assert refreshed.is_approved is True
+
+
+@pytest.mark.asyncio
+async def test_approval_cannot_be_resolved_twice(
+    client, user_auth_headers, db_session, conversation_id
+):
+    repo = ToolRepository(db_session)
+    call = await repo.log_tool_call(
+        conversation_id=conversation_id,
+        tool_name="web_search",
+        input_args={"query": "one-shot"},
+        status="requires_approval",
+        requires_approval=True,
+    )
+
+    payload = {
+        "tool_call_id": str(call.id),
+        "approved": True,
+        "reason": "approved once",
+    }
+    first = await client.post(
+        "/api/v1/tools/approval", json=payload, headers=user_auth_headers
+    )
+    assert first.status_code == 200
+    assert first.json()["status"] == "success"
+
+    second = await client.post(
+        "/api/v1/tools/approval", json=payload, headers=user_auth_headers
+    )
+    assert second.status_code == 409
+    assert second.json()["detail"]
 
 
 @pytest.mark.asyncio
