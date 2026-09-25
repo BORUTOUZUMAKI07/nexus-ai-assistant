@@ -413,3 +413,50 @@ def test_tool_execute_request_accepts_supported_tool_name():
     )
     assert request.tool_name == "web_search"
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query,max_results",
+    [
+        ("", 5),
+        ("   ", 5),
+        ("x" * 2001, 5),
+        ("valid query", 0),
+        ("valid query", 11),
+        ("valid query", True),
+    ],
+)
+async def test_web_search_rejects_invalid_bounds(query, max_results):
+    from backend.app.services.tools.web_search import WebSearchService
+
+    service = WebSearchService(tavily_key=None, firecrawl_key=None)
+    with pytest.raises(ValueError):
+        await service.search(query=query, max_results=max_results)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "http://user:password@example.com/",
+        "http://example.com:8080/",
+        "http://127.0.0.1/",
+        "http://localhost/",
+    ],
+)
+async def test_scrape_rejects_unsafe_destinations_before_provider(url):
+    from backend.app.services.tools.web_search import WebSearchService
+
+    service = WebSearchService(tavily_key=None, firecrawl_key="configured")
+    with pytest.raises(ValueError):
+        await service.scrape_url(url)
+
+
+@pytest.mark.asyncio
+async def test_scrape_rejects_overlong_url():
+    from backend.app.services.tools.web_search import WebSearchService
+
+    service = WebSearchService(tavily_key=None, firecrawl_key=None)
+    with pytest.raises(ValueError):
+        await service.scrape_url("https://example.com/" + "x" * 2048)
