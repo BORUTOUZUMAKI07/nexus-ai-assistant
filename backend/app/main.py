@@ -23,7 +23,7 @@ from backend.app.core.config import settings
 from backend.app.core.exceptions import NexusException
 from backend.app.core.logging import get_logger, setup_logging
 from backend.app.infrastructure.cache.redis_client import redis_client
-from backend.app.infrastructure.database.engine import close_db, init_db
+from backend.app.infrastructure.database.engine import check_database_health, close_db, init_db
 from backend.app.infrastructure.vector.qdrant_client import vector_db
 from backend.app.mcp.server import mcp
 from fastapi import FastAPI, Request, status
@@ -147,13 +147,25 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # 3. Health check endpoints
 @app.get("/health", tags=["system"])
 async def health_check():
+    """Liveness probe: confirms the ASGI process is responding."""
     return {
         "status": "healthy",
         "service": "Nexus AI Assistant",
-        "environment": settings.ENVIRONMENT,
-        "default_model": settings.DEFAULT_MODEL,
-        "free_tier_ready": True,
     }
+
+
+@app.get("/health/ready", tags=["system"])
+async def readiness_check():
+    """Readiness probe: returns 503 when the primary database is unavailable."""
+    from fastapi.responses import JSONResponse
+
+    database_ready = await check_database_health()
+    if not database_ready:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "not_ready", "database": "unavailable"},
+        )
+    return {"status": "ready", "database": "available"}
 
 
 @app.get("/", tags=["system"])
