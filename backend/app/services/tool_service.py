@@ -61,6 +61,12 @@ class ToolService:
         call = await self._repo.get_tool_call(approval.tool_call_id, user_id=user_id)
         if not call:
             raise ResourceNotFoundError("ToolCall", str(approval.tool_call_id))
+        if call.status != "requires_approval":
+            return {
+                "status": "conflict",
+                "tool_call_id": approval.tool_call_id,
+                "message": "This tool call is not awaiting approval or has already been resolved.",
+            }
 
         await self._repo.update_tool_call(
             tool_call_id=approval.tool_call_id,
