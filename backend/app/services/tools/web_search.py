@@ -18,6 +18,15 @@ logger = structlog.get_logger(__name__)
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 TAVILY_MAX_TOKENS = 4000
+SEARCH_TITLE_LIMIT = 500
+SEARCH_URL_LIMIT = 2048
+SEARCH_SNIPPET_LIMIT = 2000
+SEARCH_CONTENT_LIMIT = 10000
+
+
+def _bounded_text(value: Any, limit: int) -> str:
+    """Return a bounded string from untrusted provider output."""
+    return value[:limit] if isinstance(value, str) else ""
 
 # Protected network ranges an SSRF-mitigated fetch must never connect to.
 _PRIVATE_NETS = [
@@ -167,7 +176,7 @@ class WebSearchService:
                     logger.info("tavily_search_success", query_length=len(query), count=len(results))
                     return results
             except Exception as exc:
-                logger.warning("tavily_search_failed_falling_back", error=str(exc))
+                logger.warning("tavily_search_failed_falling_back", error_type=type(exc).__name__)
 
         # 2. Secondary: Firecrawl Native Search API
         if self.firecrawl_key and not self.firecrawl_key.startswith("fc_placeholder"):
@@ -177,7 +186,7 @@ class WebSearchService:
                     logger.info("firecrawl_search_success", query_length=len(query), count=len(results))
                     return results
             except Exception as exc:
-                logger.warning("firecrawl_search_failed_falling_back_to_ddg", error=str(exc))
+                logger.warning("firecrawl_search_failed_falling_back_to_ddg", error_type=type(exc).__name__)
 
         # 3. Resilient Fallback: DuckDuckGo free search
         try:
@@ -186,7 +195,7 @@ class WebSearchService:
                 logger.info("duckduckgo_search_success", query_length=len(query), results_count=len(results))
                 return results
         except Exception as exc:
-            logger.warning("duckduckgo_search_failed", error=str(exc))
+            logger.warning("duckduckgo_search_failed", error_type=type(exc).__name__)
 
         return []
 
@@ -209,12 +218,12 @@ class WebSearchService:
             data = response.json()
 
         results: list[dict[str, Any]] = []
-        for item in data.get("results", []):
-            raw = item.get("raw_content") or ""
-            snippet = item.get("content") or raw[:300]
+        for item in data.get("results", [])[:max_results]:
+            raw = _bounded_text(item.get("raw_content"), SEARCH_CONTENT_LIMIT)
+            snippet = _bounded_text(item.get("content"), SEARCH_SNIPPET_LIMIT) or raw[:300]
             results.append({
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
+                "title": _bounded_text(item.get("title"), SEARCH_TITLE_LIMIT),
+                "url": _bounded_text(item.get("url"), SEARCH_URL_LIMIT),
                 "snippet": snippet,
                 "content": raw,
             })
@@ -231,12 +240,14 @@ class WebSearchService:
             return []
 
         results: list[dict[str, Any]] = []
-        for item in search_res.get("data", []):
+        for item in search_res.get("data", [])[:max_results]:
+            markdown = _bounded_text(item.get("markdown"), SEARCH_CONTENT_LIMIT)
+            snippet = _bounded_text(item.get("description"), SEARCH_SNIPPET_LIMIT) or markdown[:300]
             results.append({
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "snippet": item.get("description", "") or item.get("markdown", "")[:300],
-                "content": item.get("markdown", ""),
+                "title": _bounded_text(item.get("title"), SEARCH_TITLE_LIMIT),
+                "url": _bounded_text(item.get("url"), SEARCH_URL_LIMIT),
+                "snippet": snippet,
+                "content": markdown,
             })
         return results
 
@@ -264,9 +275,9 @@ class WebSearchService:
                     continue
                 return [
                     {
-                        "title": r.get("title", ""),
-                        "url": r.get("href", ""),
-                        "snippet": r.get("body", ""),
+                        "title": _bounded_text(r.get("title"), SEARCH_TITLE_LIMIT),
+                        "url": _bounded_text(r.get("href"), SEARCH_URL_LIMIT),
+                        "snippet": _bounded_text(r.get("body"), SEARCH_SNIPPET_LIMIT),
                         "content": "",
                     }
                     for r in raw_results
