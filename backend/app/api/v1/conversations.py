@@ -36,7 +36,7 @@ from backend.app.services.observability.tracing import trace_span
 from backend.app.services.usage_service import UsageService
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = structlog.get_logger(__name__)
 
@@ -155,7 +155,7 @@ class StreamChatRequest(BaseModel):
 
 class HITLFeedbackRequest(BaseModel):
     action: Literal["approve", "reject", "modify"]
-    data: dict = {}
+    data: dict = Field(default_factory=dict)
 
 
 # ─── Streaming Chat Endpoint ─────────────────────────────────────────────────
