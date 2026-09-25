@@ -4,6 +4,7 @@ Aggregates all domain routes into a single router.
 """
 from backend.app.api.v1 import (
     admin,
+    audio,
     auth,
     conversations,
     evaluation,
@@ -21,6 +22,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(conversations.router)
 api_router.include_router(messages.router)
+api_router.include_router(audio.router)
 api_router.include_router(files.router)
 api_router.include_router(tools.router)
 api_router.include_router(prompts.router)

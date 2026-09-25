@@ -76,6 +76,11 @@ test.describe("Authentication", () => {
   })
 
   test("sign-in page redirects to the app when already authenticated", async ({ page }) => {
+    // The redirect hinges on the /api/auth/me probe reporting a real session,
+    // so the auth gate must be mocked (the access cookie is not a real JWT).
+    const auth = setupAuthMocks(page)
+    await auth.setup()
+    await setupConversationMocks(page).setup()
     await setAuthState(page)
 
     await page.goto("/signin")

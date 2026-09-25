@@ -22,6 +22,7 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 POSTGRES_IMAGE = os.environ.get("TEST_POSTGRES_IMAGE", "postgres:16-alpine")
+REDIS_IMAGE = os.environ.get("TEST_REDIS_IMAGE", "redis:7-alpine")
 
 _lock = threading.Lock()
 _state: dict[str, tuple[object, str]] = {}
@@ -89,6 +90,33 @@ def get_postgres_url(name: str = "nexus_test") -> str:
         os.environ["DATABASE_URL"] = async_url
         _state[name] = (pg, async_url)
         return async_url
+
+
+def get_redis_url(name: str = "nexus_test") -> str:
+    """Lazily start a Redis container (once per ``name``) and return its URL.
+
+    Mirrors ``get_postgres_url``: the container is shared for the session so
+    auth rotation/reuse guards and any cache-backed routes hit a real, local
+    Redis instead of the Upstash instance configured in ``.env`` (whose SSL
+    handshake times out in this environment). ``REDIS_URL`` is set so late
+    ``Settings()`` builds observe the container.
+    """
+    with _lock:
+        if name in _state:
+            return _state[name][1]
+
+        try:
+            from testcontainers.community.redis import RedisContainer  # type: ignore[import-untyped]
+        except ImportError:  # pragma: no cover
+            from testcontainers.redis import RedisContainer  # type: ignore[import-untyped]
+
+        rc = RedisContainer(REDIS_IMAGE)
+        rc.start()
+        url = f"redis://{rc.get_container_host_ip()}:{rc.get_exposed_port(6379)}/0"
+
+        os.environ["REDIS_URL"] = url
+        _state[name] = (rc, url)
+        return url
 
 
 def stop_containers() -> None:

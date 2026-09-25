@@ -5,11 +5,12 @@ Pure HTTP transport layer — delegates tool execution and HITL approval to Tool
 from typing import Any
 from uuid import UUID
 
-from backend.app.api.deps import get_current_user, get_tool_service
+from backend.app.api.deps import get_conversation_service, get_current_user, get_tool_service
 from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.domain.tool.schemas import ToolApprovalRequest
 from backend.app.domain.user.models import User
 from backend.app.mcp.client import mcp_client
+from backend.app.services.conversation_service import ConversationService
 from backend.app.services.tool_service import ToolService
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -37,8 +38,15 @@ async def execute_tool_endpoint(
     req: ToolExecuteRequest,
     current_user: User = Depends(get_current_user),
     tool_svc: ToolService = Depends(get_tool_service),
+    conv_svc: ConversationService = Depends(get_conversation_service),
 ):
     """Directly execute a vetted tool through the 5-step safety gateway."""
+    # IDOR guard: the tool call is logged against this conversation — verify the
+    # caller actually owns it before executing/logging.
+    try:
+        await conv_svc.get_conversation(req.conversation_id, user_id=current_user.id)
+    except ResourceNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
     return await tool_svc.execute_tool(
         tool_name=req.tool_name,
         arguments=req.arguments,
@@ -56,6 +64,6 @@ async def approve_tool_call(
 ):
     """Resolves a pending Human-In-The-Loop approval request."""
     try:
-        return await tool_svc.approve_tool_call(approval)
+        return await tool_svc.approve_tool_call(approval, user_id=current_user.id)
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)

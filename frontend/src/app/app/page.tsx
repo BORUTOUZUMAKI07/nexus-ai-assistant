@@ -9,7 +9,9 @@ import {
   CitationItem,
   ToolCallItem,
 } from "@/components/ChatArea";
-import { ChatInput } from "@/components/ChatInput";
+import { ChatInput, SendMessageOptions } from "@/components/ChatInput";
+import { ArtifactCanvas, ArtifactItem } from "@/components/ArtifactCanvas";
+import { CitationInspector } from "@/components/CitationInspector";
 import { KnowledgeView } from "@/components/KnowledgeView";
 import { UsageView } from "@/components/UsageView";
 import { SettingsView } from "@/components/SettingsView";
@@ -20,10 +22,14 @@ import {
   fetchConversation,
   createConversation,
   deleteConversation,
+  forkConversation,
   uploadFile,
+  sendMessageFeedback,
   ConversationMessage,
+  CurrentUser,
+  fetchCurrentUser,
 } from "@/lib/api";
-import { clearSession, getAccessToken, SESSION_EXPIRED_EVENT } from "@/lib/auth";
+import { clearSession, SESSION_EXPIRED_EVENT } from "@/lib/auth";
 import { useNexusChat, NexusMessage } from "@/hooks/useNexusChat";
 
 function mapServerMessage(m: ConversationMessage): MessageItem {
@@ -53,116 +59,172 @@ function mapServerMessage(m: ConversationMessage): MessageItem {
   };
 }
 
-export default function Home() {
-  const [activeTab, setActiveTab] = useState<"chat" | "files" | "settings" | "usage" | "admin">("chat");
-  const [currentModel, setCurrentModel] = useState("llama-3.3-70b-versatile");
-  const [conversations, setConversations] = useState<ConversationItem[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState("");
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
+export default function AppPage() {
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string>("");
+  const [activeTab, setActiveTab] = useState<"chat" | "files" | "usage" | "settings" | "admin">("chat");
+  const [currentModel, setCurrentModel] = useState("llama-3.3-70b-versatile");
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Dual-Pane Artifact Canvas state
+  const [activeArtifact, setActiveArtifact] = useState<ArtifactItem | null>(null);
+  const [allArtifacts, setAllArtifacts] = useState<ArtifactItem[]>([]);
+
+  const handleOpenArtifact = (artifact: ArtifactItem) => {
+    setActiveArtifact(artifact);
+    // Add to history if not already present
+    setAllArtifacts((prev) => {
+      const exists = prev.some((a) => a.id === artifact.id);
+      return exists ? prev : [...prev, artifact];
+    });
+  };
+
+  // Grounding Citation Inspector state
+  const [activeCitation, setActiveCitation] = useState<CitationItem | null>(null);
 
   const chat = useNexusChat({
-    conversationId: activeConversationId,
-    model: currentModel,
+    conversationId: activeConversationId || undefined,
+    onConversationCreated: (newId: string) => {
+      // Backend auto-created a conversation for the first message.
+      // Update state so all subsequent messages continue this same thread.
+      setActiveConversationId(newId);
+      setConversations((prev) => {
+        if (prev.some((c) => c.id === newId)) return prev;
+        const newItem: ConversationItem = {
+          id: newId,
+          title: "New Chat",
+          updated_at: new Date().toISOString(),
+          model: currentModel,
+          is_pinned: false,
+        };
+        return [newItem, ...prev];
+      });
+    },
   });
 
-  // Open the login gate when no session token exists (client-side check only,
-  // so the server render and hydration always agree on a closed modal).
+  // Set mounted flag and detect real auth state on the client only.
+  // This prevents the SSR/client mismatch (hydration error) caused by
+  // reading cookies / localStorage during server-side rendering. The access
+  // cookie is httpOnly, so auth state is verified against the backend via
+  // /api/auth/me rather than read from document.cookie.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!getAccessToken()) setIsAuthOpen(true);
+    // setState here runs on the first microtask after mount (inside the async
+    // body, matching the react-hooks/set-state-in-effect rule) and flips the
+    // hydration guard off once we know the real auth state.
+    void (async () => {
+      setMounted(true);
+      const probe = await fetchCurrentUser();
+      setIsAuthOpen(!probe.authenticated);
+      setCurrentUser(probe.user ?? null);
+    })();
   }, []);
 
-  // A failed silent refresh (expired / revoked session) clears cookies and
-  // bounces the user to the sign-in page.
+  // Listen for session expiry from api.ts
   useEffect(() => {
-    const onSessionExpired = () => router.replace("/signin");
+    const onSessionExpired = () => setIsAuthOpen(true);
     window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
-  }, [router]);
+  }, []);
 
-  const handleNewChat = useCallback(async () => {
-    try {
-      const created = await createConversation("New Conversation", "normal", currentModel);
-      const newConv: ConversationItem = {
-        id: created.id,
-        title: created.title || "New Conversation",
-        model: currentModel,
-        is_pinned: created.is_pinned,
-        updated_at: new Date(created.updated_at).toLocaleDateString(),
-      };
-      setConversations((prev) => [newConv, ...prev]);
-      setActiveConversationId(created.id);
-      chat.clearMessages();
-    } catch {
-      // Without a reachable backend we cannot create durable conversations;
-      // keep the sidebar empty rather than inventing local state.
-      chat.clearMessages();
-    }
-    setActiveTab("chat");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentModel]);
+  const { setMessages, clearMessages } = chat;
 
+  // Load conversation list and restore the most recent chat on mount
   const loadHistory = useCallback(
-    async (conversationId: string) => {
-      if (!conversationId) return;
+    async (convId: string) => {
       setHistoryLoading(true);
       try {
-        const detail = await fetchConversation(conversationId);
-        chat.setMessages((detail.messages ?? []).map(mapServerMessage));
+        const full = await fetchConversation(convId);
+        const mapped = (full.messages ?? []).map(mapServerMessage);
+        setMessages(
+          mapped.map((m) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant" | "system",
+            content: m.content,
+            model: m.model,
+            createdAt: m.created_at ?? new Date().toISOString(),
+          }))
+        );
       } catch (err) {
-        const status = (err as Error | null)?.message?.match(/Fetch conversation failed: (\d+)/)?.[1];
-        if (status !== "404") {
-          console.warn("Could not load conversation history:", err);
-        }
-        chat.setMessages([]);
+        console.warn("Failed to load conversation history:", err);
       } finally {
         setHistoryLoading(false);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
+    [setMessages]
   );
 
-  // Load conversations from backend once the user is authenticated
+  const handleNewChat = useCallback(() => {
+    createConversation({
+      title: "New Chat",
+      model: currentModel,
+    })
+      .then((newConv) => {
+        const item: ConversationItem = {
+          id: newConv.id,
+          title: newConv.title,
+          updated_at: newConv.updated_at,
+          model: newConv.model,
+          is_pinned: newConv.is_pinned ?? false,
+        };
+        setConversations((prev) => [item, ...prev]);
+        setActiveConversationId(newConv.id);
+        clearMessages();
+        setActiveTab("chat");
+        setActiveArtifact(null);
+        setActiveCitation(null);
+      })
+      .catch((err) => {
+        console.warn("Could not create conversation:", err);
+      });
+  }, [currentModel, clearMessages]);
+
   useEffect(() => {
-    if (isAuthOpen) return;
-    if (!getAccessToken()) return;
-    fetchConversations()
-      .then((page) => {
-        if (page?.items && page.items.length > 0) {
-          const mapped: ConversationItem[] = page.items.map((item) => ({
-            id: item.id,
-            title: item.title,
-            model: item.model,
-            is_pinned: item.is_pinned,
-            updated_at: new Date(item.updated_at).toLocaleDateString(),
-          }));
-          setConversations(mapped);
-          setActiveConversationId(mapped[0].id);
-          void loadHistory(mapped[0].id);
+    // Wait until client-side auth check is done; skip if not logged in.
+    if (!mounted || isAuthOpen) return;
+    fetchConversations(1, 50)
+      .then((res) => {
+        const rawList = Array.isArray(res) ? res : (res?.items ?? []);
+        const items: ConversationItem[] = rawList.map((c) => ({
+          id: c.id,
+          title: c.title,
+          updated_at: c.updated_at,
+          model: c.model,
+          is_pinned: c.is_pinned ?? false,
+        }));
+        setConversations(items);
+        if (items.length > 0) {
+          setActiveConversationId(items[0].id);
+          void loadHistory(items[0].id);
         } else {
-          // Auto-create a first conversation so the chat surface is usable
           handleNewChat();
         }
       })
       .catch((err) => {
         console.warn("Backend conversation list unavailable:", err);
       });
-  }, [isAuthOpen, loadHistory, handleNewChat]);
+  }, [mounted, isAuthOpen, loadHistory, handleNewChat]);
 
-  const handleSignOut = () => {
-    clearSession();
+  const handleSignOut = async () => {
+    // Logs out server-side: revokes the refresh token and clears both httpOnly
+    // cookies (which page scripts cannot delete themselves).
+    await clearSession();
     setConversations([]);
     setActiveConversationId("");
     chat.clearMessages();
+    setActiveArtifact(null);
+    setActiveCitation(null);
     router.replace("/");
   };
 
   const handleSelectConversation = (id: string) => {
     setActiveConversationId(id);
     setActiveTab("chat");
+    setActiveArtifact(null);
+    setActiveCitation(null);
     void loadHistory(id);
   };
 
@@ -171,7 +233,7 @@ export default function Home() {
     try {
       await deleteConversation(id);
     } catch {
-      // Ignored — the list will refresh from the backend on next load.
+      // Ignored
     }
     setConversations((prev) => prev.filter((c) => c.id !== id));
     if (activeConversationId === id) {
@@ -185,13 +247,35 @@ export default function Home() {
     }
   };
 
+  const handleForkConversation = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const currentMsgs = chat.messages;
+    if (!currentMsgs.length) return;
+    const lastMsgId = currentMsgs[currentMsgs.length - 1].id;
+    try {
+      const forked = await forkConversation(id, lastMsgId, "Forked Branch");
+      const item: ConversationItem = {
+        id: forked.id,
+        title: forked.title,
+        updated_at: forked.updated_at,
+        model: forked.model,
+        is_pinned: forked.is_pinned ?? false,
+      };
+      setConversations((prev) => [item, ...prev]);
+      setActiveConversationId(forked.id);
+      void loadHistory(forked.id);
+    } catch (err) {
+      console.warn("Fork conversation failed:", err);
+    }
+  };
+
   const handleStop = () => {
     chat.stop();
   };
 
   const handleSendMessage = async (
     content: string,
-    options: { enableWeb: boolean; enableCode: boolean; attachments: File[] }
+    options: SendMessageOptions
   ) => {
     // Upload any attachments first
     if (options.attachments && options.attachments.length > 0) {
@@ -204,8 +288,15 @@ export default function Home() {
       }
     }
 
-    const mode = options.enableCode ? "code" : options.enableWeb ? "research" : "normal";
-    void chat.sendMessage(content, { mode });
+    const mode = options.enableCode
+      ? "code"
+      : options.enableWeb
+      ? "research"
+      : options.agentMode === "deep"
+      ? "agent"
+      : "normal";
+
+    void chat.sendMessage(content, { mode, imageDataUrl: options.imageDataUrl });
   };
 
   const messages: MessageItem[] = chat.messages.map((m: NexusMessage) => {
@@ -230,12 +321,25 @@ export default function Home() {
       thought_process: thoughts || undefined,
       citations: citations.length > 0 ? citations : undefined,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-      created_at: m.createdAt,
+      created_at: typeof m.createdAt === "string" ? m.createdAt : undefined,
+      imageDataUrl: m.imageDataUrl,
     };
   });
 
-  const handleFeedback = (messageId: string, feedback: "thumbs_up" | "thumbs_down") => {
-    console.log("Feedback recorded:", messageId, feedback);
+  const isAdmin = currentUser?.role === "admin";
+
+  // Non-admins can't see the Admin tab in the sidebar, but if activeTab is ever
+  // "admin" without an admin role the tab is derived away at render time — no
+  // effect round-trip needed. The backend /api/v1/admin/* check is the real gate.
+  const effectiveTab = activeTab === "admin" && !isAdmin ? "chat" : activeTab;
+
+  const handleFeedback = async (messageId: string, feedback: "thumbs_up" | "thumbs_down") => {
+    if (!activeConversationId) return;
+    try {
+      await sendMessageFeedback(activeConversationId, messageId, feedback);
+    } catch (err) {
+      console.warn("Feedback submission failed:", err);
+    }
   };
 
   return (
@@ -247,11 +351,13 @@ export default function Home() {
         onSelectConversation={handleSelectConversation}
         onNewChat={handleNewChat}
         onDeleteConversation={handleDeleteConversation}
-        activeTab={activeTab}
+        onForkConversation={handleForkConversation}
+        activeTab={effectiveTab}
         setActiveTab={setActiveTab}
         currentModel={currentModel}
         onChangeModel={setCurrentModel}
         onSignOut={handleSignOut}
+        showAdmin={isAdmin}
       />
 
       <AuthModal
@@ -265,44 +371,72 @@ export default function Home() {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
-        {activeTab === "chat" && (
-          <>
-            {historyLoading ? (
-              <div className="flex-1 flex items-center justify-center text-sm text-[var(--text-muted)]">
-                Loading conversation…
-              </div>
-            ) : (
-              <ChatArea
-                messages={messages}
+        {effectiveTab === "chat" && (
+          <div className="flex-1 flex h-full overflow-hidden relative">
+            {/* Chat Column */}
+            <div
+              className={`flex flex-col h-full overflow-hidden transition-all duration-200 ${
+                activeArtifact ? "w-full md:w-[52%]" : "w-full"
+              }`}
+            >
+              {historyLoading ? (
+                <div className="flex-1 flex items-center justify-center text-sm text-[var(--text-muted)]">
+                  Loading conversation…
+                </div>
+              ) : (
+                <ChatArea
+                  messages={messages}
+                  isLoading={chat.isLoading}
+                  error={chat.error?.message ?? null}
+                  onRetry={chat.error ? chat.reload : undefined}
+                  pendingHITL={
+                    chat.pendingHITL
+                      ? {
+                          thread_id: chat.pendingHITL.thread_id,
+                          request: chat.pendingHITL.request,
+                          plan: chat.pendingHITL.plan,
+                          tool_name: chat.pendingHITL.tool_name,
+                          arguments: chat.pendingHITL.arguments,
+                        }
+                      : null
+                  }
+                  onResolveHITL={chat.resolveHITL}
+                  onFeedback={handleFeedback}
+                  onOpenArtifact={handleOpenArtifact}
+                  onSelectCitation={setActiveCitation}
+                />
+              )}
+              <ChatInput
+                onSendMessage={handleSendMessage}
                 isLoading={chat.isLoading}
-                error={chat.error?.message ?? null}
-                onRetry={chat.error ? chat.reload : undefined}
-                pendingHITL={
-                  chat.pendingHITL
-                    ? {
-                        thread_id: chat.pendingHITL.thread_id,
-                        request: chat.pendingHITL.request,
-                        plan: chat.pendingHITL.plan,
-                        tool_name: chat.pendingHITL.tool_name,
-                      }
-                    : null
-                }
-                onResolveHITL={chat.resolveHITL}
-                onFeedback={handleFeedback}
+                onStop={handleStop}
+              />
+            </div>
+
+            {/* Dual-Pane Artifact Canvas */}
+            {activeArtifact && (
+              <ArtifactCanvas
+                artifact={activeArtifact}
+                artifacts={allArtifacts}
+                onClose={() => setActiveArtifact(null)}
+                onSelectArtifact={(art) => setActiveArtifact(art)}
               />
             )}
-            <ChatInput
-              onSendMessage={handleSendMessage}
-              isLoading={chat.isLoading}
-              onStop={handleStop}
+
+            {/* Grounding Source Citation Inspector */}
+            <CitationInspector
+              citation={activeCitation}
+              onClose={() => setActiveCitation(null)}
             />
-          </>
+          </div>
         )}
 
-        {activeTab === "files" && <KnowledgeView />}
-        {activeTab === "usage" && <UsageView />}
-        {activeTab === "settings" && <SettingsView />}
-        {activeTab === "admin" && <AdminView />}
+        {effectiveTab === "files" && (
+  <KnowledgeView />
+)}
+        {effectiveTab === "usage" && <UsageView />}
+        {effectiveTab === "settings" && <SettingsView />}
+        {effectiveTab === "admin" && <AdminView />}
       </main>
     </div>
   );

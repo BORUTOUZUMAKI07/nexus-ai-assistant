@@ -14,6 +14,8 @@ redis_client: redis.Redis = redis.from_url(
     decode_responses=True,
     max_connections=20,
     protocol=2,
+    socket_connect_timeout=2.0,
+    socket_timeout=2.0,
 )
 
 
@@ -48,32 +50,38 @@ class RedisService(ICacheService):
 
     async def check_rate_limit(self, identifier: str, limit: int = 100, window_seconds: int = 60, cost: int = 1) -> tuple[bool, int]:
         """
-        Sliding window token bucket rate limiter using Redis sorted sets (ZADD/ZREMRANGEBYSCORE).
-        Returns (is_allowed, remaining_tokens).
+        Sliding-window token bucket rate limiter using an atomic Lua script.
+        Trimming, counting, and recording happen in ONE server-side op, so two
+        racing requests can never both pass the limit. Returns (is_allowed,
+        remaining_tokens).
         """
-        now = time.time()
-        clear_before = now - window_seconds
         key = f"rate_limit:{identifier}"
-
-        pipe = self.client.pipeline()
-        # Remove requests older than the sliding window
-        pipe.zremrangebyscore(key, 0, clear_before)
-        # Get count of current requests in window
-        pipe.zcard(key)
-        results = await pipe.execute()
-        current_count = results[1]
-
-        if current_count + cost > limit:
-            return False, max(0, limit - current_count)
-
-        # Record this request
-        pipe = self.client.pipeline()
-        for i in range(cost):
-            pipe.zadd(key, {f"{now}-{i}": now})
-        pipe.expire(key, window_seconds)
-        await pipe.execute()
-
-        return True, max(0, limit - (current_count + cost))
+        script = """
+        local key = KEYS[1]
+        local now = tonumber(ARGV[1])
+        local window = tonumber(ARGV[2])
+        local limit = tonumber(ARGV[3])
+        local cost = tonumber(ARGV[4])
+        redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+        local current = redis.call('ZCARD', key)
+        if (current + cost) > limit then
+            return {0, limit - current}
+        end
+        for i = 1, cost do
+            redis.call('ZADD', key, now + (i - 1) / 1000, now .. ':' .. i)
+        end
+        redis.call('EXPIRE', key, window)
+        return {1, limit - (current + cost)}
+        """
+        try:
+            result = await self.client.eval(script, 1, key, time.time(), window_seconds, limit, cost)
+            allowed = bool(result[0])
+            remaining = max(0, int(result[1]))
+            return allowed, remaining
+        except Exception:
+            # No pipelined fallback: a non-atomic fallback could double-count.
+            # Surface the error so callers can degrade (fail-open) explicitly.
+            raise
 
 
 # Singleton instance for backwards-compatibility

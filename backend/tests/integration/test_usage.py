@@ -53,7 +53,15 @@ async def test_summary_aggregates_usage_logs(client, user_auth_headers, db_sessi
 @pytest.mark.asyncio
 async def test_evaluations_round_trip(client, user_auth_headers, db_session, test_user):
     repo = UsageRepository(db_session)
-    conv_id = uuid.uuid4()
+
+    conv_resp = await client.post(
+        "/api/v1/conversations",
+        headers=user_auth_headers,
+        json={"title": "Eval conversation", "mode": "normal"},
+    )
+    assert conv_resp.status_code == 201
+    conv_id = uuid.UUID(conv_resp.json()["id"])
+
     await repo.log_evaluation(
         EvaluationLogCreate(
             trace_id="trace-1",
@@ -78,6 +86,8 @@ async def test_evaluations_round_trip(client, user_auth_headers, db_session, tes
     all_evals = await client.get("/api/v1/usage/evaluations", headers=user_auth_headers)
     assert all_evals.status_code == 200
     metrics = {e["metric_name"] for e in all_evals.json()}
+    # System-level (conversation-agnostic) evaluations and the owner's
+    # conversation-scoped evaluation are both returned.
     assert {"faithfulness", "other_metric"} <= metrics
 
     filtered = await client.get(

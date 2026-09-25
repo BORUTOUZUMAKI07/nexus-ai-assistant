@@ -30,12 +30,16 @@ sys.path.insert(0, str(tests_dir))
 # any backend module constructs the settings singleton.
 import os  # noqa: E402
 
+import backend.app.infrastructure.cache.redis_client as cache_module  # noqa: E402
+import redis.asyncio as redis  # noqa: E402
+
 os.environ["SENTRY_DSN"] = ""
 
 from _testcontainers import (  # noqa: E402
     build_session_factory,
     build_test_engine,
     get_postgres_url,
+    get_redis_url,
     init_db_schema,
     stop_containers,
 )
@@ -86,6 +90,29 @@ async def db_session(session_factory, schema_ready):
     """Function-scoped AsyncSession for direct repository/service tests."""
     async with session_factory() as session:
         yield session
+
+
+@pytest.fixture(scope="session")
+def redis_backend():
+    """Session-scoped local Redis testcontainer repointed into the app singletons.
+
+    The ``redis_client`` module builds its client at import time from
+    ``settings.REDIS_URL``; the auth service now resolves the cache provider
+    dynamically, so swapping both the client and the singleton here routes every
+    cache-backed code path (refresh-token guards, revocation) to the container.
+    """
+    url = get_redis_url("nexus_redis")
+    cache_module.redis_client = redis.from_url(
+        url,
+        encoding="utf-8",
+        decode_responses=True,
+        max_connections=20,
+        protocol=2,
+        socket_connect_timeout=2.0,
+        socket_timeout=2.0,
+    )
+    cache_module.redis_service = cache_module.RedisService(cache_module.redis_client)
+    yield cache_module.redis_service
 
 
 # ─────────────────────────────────────────────────────────────────────────── #

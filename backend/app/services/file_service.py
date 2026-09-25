@@ -154,10 +154,17 @@ class FileService:
         user_id: UUID,
         session: AsyncSession,
         conversation_id: UUID | None = None,
+        limit: int = 50,
+        offset: int = 0,
     ) -> list[File]:
         """Return all files belonging to a user, optionally scoped to a conversation."""
         repo = FileRepository(session)
-        return await repo.get_by_user(user_id=user_id, conversation_id=conversation_id)
+        return await repo.get_by_user(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            limit=limit,
+            offset=offset,
+        )
 
     async def get_file_chunks(
         self,
@@ -193,9 +200,18 @@ class FileService:
 
         if db_file.storage_path:
             try:
-                await self._storage.delete(db_file.storage_path)
+                deleted = await self._storage.delete(db_file.storage_path)
+                if not deleted:
+                    # Object reports as already absent/no-op — keep DB cleanup and
+                    # surface a warning rather than silently dropping the blob row.
+                    logger.warning("storage_delete_reported_missing", file_id=str(file_id), path=db_file.storage_path)
             except Exception as exc:
-                logger.warning("storage_delete_failed_continuing", file_id=str(file_id), error=str(exc))
+                # Infrastructure outage: abort so the DB row + vector index stay
+                # consistent and the operator can retry the deletion.
+                logger.error("storage_delete_failed_aborting_delete", file_id=str(file_id), error=str(exc))
+                raise RuntimeError(
+                    f"Failed to delete file object from storage: {exc}"
+                ) from exc
 
         await repo.delete_file(file_id, user_id=user_id)
         await self._ingestion.delete_file_index(file_id)

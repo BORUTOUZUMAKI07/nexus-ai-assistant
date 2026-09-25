@@ -58,10 +58,12 @@ class CodeExecutionService:
         start_time = time.time()
 
         if not self.api_key or self.api_key.startswith("e2b_placeholder"):
-            logger.warning("e2b_api_key_not_configured_simulating_output")
-            # Safe mock execution response when key is not yet set
+            logger.warning("e2b_api_key_not_configured")
+            # Honest failure: never fabricate a plausible "executed" response.
+            # A mock success would let the model/user believe code actually ran
+            # and returned real output, which is a correctness/security hazard.
             return CodeExecutionResult(
-                stdout="[E2B Sandbox Notice: E2B_API_KEY not configured. Simulated execution output.]\nCode length: " + str(len(code)),
+                error="E2B sandbox is not configured (E2B_API_KEY missing). Code execution is unavailable — try running the code yourself or ask for a different approach.",
                 execution_time_ms=(time.time() - start_time) * 1000,
             ).to_dict()
 

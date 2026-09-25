@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 from uuid import UUID
 
 from backend.app.core.config import settings
+from backend.app.core.exceptions import InvalidTokenError
 from backend.app.core.security import decode_token
 from backend.app.domain.user.models import User
 from backend.app.domain.user.repository import UserRepository
@@ -41,8 +42,9 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    payload = decode_token(token)
-    if payload is None:
+    try:
+        payload = decode_token(token)
+    except InvalidTokenError:
         raise credentials_exception
     if payload.get("type") != "access":
         raise credentials_exception

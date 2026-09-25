@@ -122,10 +122,12 @@ def _router_state(**overrides) -> dict:
 async def test_orchestrator_structured_route_uses_structured_service(monkeypatch):
     from backend.app.agents.orchestrator import nodes
 
-    async def fake_structured(**kwargs):
-        return MagicMock(action="CODE")
+    # The orchestrator routes via a single-token completion (not the
+    # instructor/structured-output path); a CODE verdict dispatches the coder.
+    async def fake_completion(messages, model, temperature, max_tokens):
+        return "CODE"
 
-    monkeypatch.setattr(nodes.structured_service, "generate_structured", fake_structured)
+    monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
     update = await nodes.orchestrator_node(_router_state())
     assert update["subagent_dispatches"] == ["coder"]
     assert update["task_type"] == "code"
@@ -135,18 +137,16 @@ async def test_orchestrator_structured_route_uses_structured_service(monkeypatch
 async def test_orchestrator_falls_back_to_raw_completion_when_structured_fails(monkeypatch):
     from backend.app.agents.orchestrator import nodes
 
-    async def broken_structured(**kwargs):
-        raise RuntimeError("instructor unavailable")
+    # The router is a plain completion; when it raises the node must not crash
+    # but degrade to a general answer rather than dispatching the wrong subagent.
+    async def broken_completion(messages, model, temperature, max_tokens):
+        raise RuntimeError("provider unavailable")
 
-    async def fake_completion(messages, model, temperature):
-        return "RESEARCH"
-
-    monkeypatch.setattr(nodes.structured_service, "generate_structured", broken_structured)
-    monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
+    monkeypatch.setattr(nodes.ai_client, "completion", broken_completion)
 
     update = await nodes.orchestrator_node(_router_state())
-    assert update["subagent_dispatches"] == ["researcher"]
-    assert update["task_type"] == "research"
+    assert update["subagent_dispatches"] == []
+    assert update["task_type"] == "general"
 
 
 # ─── 5. Critic Self-Refinement (synthesizer node) ─────────────────────────────
@@ -181,6 +181,7 @@ async def test_synthesizer_revises_draft_until_critic_approves(monkeypatch):
         "user_memories": [],
         "citations": [],
         "grader_verdict": "insufficient",
+        "task_type": "research",
         "revision_count": 0,
         "messages": [MagicMock()],
     }
@@ -218,6 +219,7 @@ async def test_synthesizer_bounds_revisions_when_critic_keeps_rejecting(monkeypa
         "user_memories": [],
         "citations": [],
         "grader_verdict": "unrelated",
+        "task_type": "research",
         "revision_count": 0,
         "messages": [MagicMock()],
     }

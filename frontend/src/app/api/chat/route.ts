@@ -8,18 +8,35 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { TOKEN_COOKIE } from "@/lib/auth";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 export const runtime = "nodejs"; // Must be Node.js for native fetch streaming
+
+// Backend conversations are UUIDs; "new" signals auto-creation. Anything else
+// is rejected up front so malformed client payloads never reach the backend.
+const CONVERSATION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const {
     messages,
     conversationId,
-    userId = "anonymous",
     mode = "normal",
   } = body;
+
+  if (
+    conversationId != null &&
+    conversationId !== "new" &&
+    conversationId !== "" &&
+    typeof conversationId === "string" &&
+    !CONVERSATION_ID_RE.test(conversationId)
+  ) {
+    return NextResponse.json(
+      { detail: "invalid_conversation_id" },
+      { status: 400 }
+    );
+  }
 
   const cookieStore = await cookies();
   const accessToken = cookieStore.get(TOKEN_COOKIE)?.value;
@@ -37,7 +54,6 @@ export async function POST(req: NextRequest) {
             headers: {
               "Content-Type": "application/json",
               ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-              "X-User-ID": userId,
             },
             body: JSON.stringify({
               messages,
@@ -131,6 +147,14 @@ export async function POST(req: NextRequest) {
               } else if (eventType === "error") {
                 const errorChunk = `3:${JSON.stringify(parsed.message)}\n`;
                 controller.enqueue(encoder.encode(errorChunk));
+              } else if (eventType === "done" && parsed.thread_id) {
+                // Forward the resolved conversation ID so the hook can surface
+                // it to the page when a new conversation was auto-created.
+                const annotation = JSON.stringify({
+                  type: "conversation_created",
+                  data: { thread_id: parsed.thread_id },
+                });
+                controller.enqueue(encoder.encode(`8:[${annotation}]\n`));
               }
             } catch {
               // Non-JSON SSE lines are skipped

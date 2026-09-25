@@ -8,6 +8,7 @@ import time
 from collections.abc import AsyncGenerator
 from uuid import UUID
 
+import structlog
 from backend.app.api.deps import (
     get_conversation_service,
     get_current_user,
@@ -33,6 +34,8 @@ from backend.app.services.prompt_compiler import prompt_compiler
 from backend.app.services.usage_service import UsageService
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/conversations/{conversation_id}/messages", tags=["messages"])
 
@@ -228,6 +231,26 @@ async def send_message_stream(
 
             yield f"data: {json.dumps({'event': 'done', 'assistant_message_id': str(assistant_msg.id), 'tokens': comp_tok, 'latency_ms': duration_ms})}\n\n"
 
+        except GeneratorExit:
+            # Client disconnected mid-stream. Persist whatever text was already
+            # collected so the conversation isn't left with an unanswered user
+            # turn, then let the generator finalize (upstream provider stream is
+            # closed by ai_client.astream's finally block).
+            partial = "".join(collected_chunks)
+            if partial and partial.strip():
+                try:
+                    await conv_svc.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=partial,
+                        parent_message_id=user_msg.id,
+                        model=target_model,
+                    )
+                    logger.info("partial_response_persisted_on_disconnect", conversation_id=str(conversation_id))
+                except Exception as exc:
+                    logger.warning("partial_response_persist_failed", conversation_id=str(conversation_id), error=str(exc))
+            raise
+
         except Exception as exc:
             yield f"data: {json.dumps({'event': 'error', 'error': str(exc)})}\n\n"
 
@@ -252,7 +275,11 @@ async def record_feedback(
 ):
     try:
         await conv_svc.record_feedback(
-            message_id, feedback=feedback_in.feedback, note=feedback_in.feedback_note
+            message_id,
+            feedback=feedback_in.feedback,
+            note=feedback_in.feedback_note,
+            conversation_id=conversation_id,
+            user_id=current_user.id,
         )
         return {"status": "success", "message_id": message_id, "feedback": feedback_in.feedback}
     except ResourceNotFoundError:

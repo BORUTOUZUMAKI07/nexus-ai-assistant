@@ -104,6 +104,18 @@ class IngestionService:
         # Sanitize control bytes that would fail a UTF-8 DB column / JSONB.
         return text.replace("\x00", "")
 
+    async def _purge_prior_state(self, file_id: UUID, repo: FileRepository) -> None:
+        """
+        Idempotent re-ingest support: wipes any previously-written chunk rows and
+        vector points for the file before the new pipeline writes, so a retry
+        after a partial failure replaces rather than duplicates the index.
+        """
+        await repo.delete_chunks_by_file(file_id)
+        try:
+            await self._vector_store.delete_by_filter(filter_conditions={"file_id": str(file_id)})
+        except Exception as exc:
+            logger.warning("ingest_purge_qdrant_failed", file_id=str(file_id), error=str(exc))
+
     async def ingest_file(
         self,
         file_id: UUID,
@@ -130,6 +142,9 @@ class IngestionService:
                 await repo.update_status(file_id, status="failed", error_message="Empty file or no readable text extracted")
                 return {"status": "failed", "reason": "empty_content", "chunks": 0}
 
+            # Idempotent retry: drop any partial chunks/vectors from an earlier run.
+            await self._purge_prior_state(file_id, repo)
+
             metadata = {
                 "file_id": str(file_id),
                 "filename": filename,
@@ -145,8 +160,15 @@ class IngestionService:
             points = []
             chunks_data = []
 
-            for c in chunks:
-                dense_vec = await self._retriever.generate_embedding(c.content)
+            # Batch embed all chunk contents in one API request
+            chunk_texts = [c.content for c in chunks]
+            dense_vectors = (
+                await self._retriever.generate_embeddings_batch(chunk_texts)
+                if hasattr(self._retriever, "generate_embeddings_batch")
+                else [await self._retriever.generate_embedding(t) for t in chunk_texts]
+            )
+
+            for c, dense_vec in zip(chunks, dense_vectors):
                 sparse_dict = self._retriever.generate_sparse_vector(c.content)
                 point_id = str(uuid4())
 
@@ -192,6 +214,12 @@ class IngestionService:
                 await session.rollback()
             except Exception:
                 pass
+            # Best-effort removal of any points already upserted this run so a
+            # failed ingest never leaves orphaned vectors behind.
+            try:
+                await self._vector_store.delete_by_filter(filter_conditions={"file_id": str(file_id)})
+            except Exception as cleanup_exc:
+                logger.warning("ingestion_failed_cleanup_error", file_id=str(file_id), error=str(cleanup_exc))
             await repo.update_status(file_id, status="failed", error_message=str(exc))
             return {"status": "failed", "error": str(exc), "chunks": 0}
 
@@ -222,6 +250,9 @@ class IngestionService:
             if not text_content.strip():
                 await repo.update_status(file_id, status="failed", error_message="Empty file or no readable text extracted")
                 return {"status": "failed", "reason": "empty_content", "chunks": 0}
+
+            # Idempotent retry: drop any partial chunks/vectors from an earlier run.
+            await self._purge_prior_state(file_id, repo)
 
             metadata = {
                 "file_id": str(file_id),
@@ -255,47 +286,62 @@ class IngestionService:
             child_offset = len(parents_data)
             child_count = 0
 
+            # Flatten child items to batch embed in one API call
+            child_items: list[tuple[Any, Any, Any, str]] = []
             for group in groups:
                 parent = group["parent"]
                 parent_row = parent_row_by_index.get(parent.chunk_index)
                 for child in group["children"]:
-                    embedded_text = f"{child.contextual_prefix}\n{child.content}" if child.contextual_prefix else child.content
-                    dense_vec = await self._retriever.generate_embedding(embedded_text)
-                    sparse_dict = self._retriever.generate_sparse_vector(embedded_text)
-                    point_id = str(uuid4())
+                    embedded_text = (
+                        f"{child.contextual_prefix}\n{child.content}"
+                        if child.contextual_prefix
+                        else child.content
+                    )
+                    child_items.append((parent, parent_row, child, embedded_text))
 
-                    points.append({
-                        "id": point_id,
-                        "vector": {
-                            "dense": dense_vec,
-                            "sparse": sparse_dict,
-                        },
-                        "payload": {
-                            "content": child.content,
-                            "contextual_prefix": child.contextual_prefix,
-                            "embedded_text": embedded_text,
-                            "chunk_index": child.chunk_index + child_offset,
-                            "file_id": str(file_id),
-                            "filename": filename,
-                            "user_id": str(user_id),
-                            "is_parent": False,
-                            "parent_chunk_id": str(parent_row.id) if parent_row else None,
-                            "parent_chunk_content": parent.content,
-                            **child.metadata,
-                        },
-                    })
+            child_texts = [item[3] for item in child_items]
+            dense_vectors = (
+                await self._retriever.generate_embeddings_batch(child_texts)
+                if hasattr(self._retriever, "generate_embeddings_batch")
+                else [await self._retriever.generate_embedding(t) for t in child_texts]
+            )
 
-                    chunks_data.append({
-                        "chunk_index": child.chunk_index + child_offset,
+            for (parent, parent_row, child, embedded_text), dense_vec in zip(child_items, dense_vectors):
+                sparse_dict = self._retriever.generate_sparse_vector(embedded_text)
+                point_id = str(uuid4())
+
+                points.append({
+                    "id": point_id,
+                    "vector": {
+                        "dense": dense_vec,
+                        "sparse": sparse_dict,
+                    },
+                    "payload": {
                         "content": child.content,
-                        "token_count": child.token_count,
-                        "metadata": child.metadata,
-                        "qdrant_point_id": point_id,
-                        "parent_chunk_id": parent_row.id if parent_row else None,
-                        "is_parent": False,
                         "contextual_prefix": child.contextual_prefix,
-                    })
-                    child_count += 1
+                        "embedded_text": embedded_text,
+                        "chunk_index": child.chunk_index + child_offset,
+                        "file_id": str(file_id),
+                        "filename": filename,
+                        "user_id": str(user_id),
+                        "is_parent": False,
+                        "parent_chunk_id": str(parent_row.id) if parent_row else None,
+                        "parent_chunk_content": parent.content,
+                        **child.metadata,
+                    },
+                })
+
+                chunks_data.append({
+                    "chunk_index": child.chunk_index + child_offset,
+                    "content": child.content,
+                    "token_count": child.token_count,
+                    "metadata": child.metadata,
+                    "qdrant_point_id": point_id,
+                    "parent_chunk_id": parent_row.id if parent_row else None,
+                    "is_parent": False,
+                    "contextual_prefix": child.contextual_prefix,
+                })
+                child_count += 1
 
             await repo.add_chunks(file_id, chunks_data)
 
@@ -321,6 +367,11 @@ class IngestionService:
                 await session.rollback()
             except Exception:
                 pass
+            # Best-effort removal of any child points already upserted this run.
+            try:
+                await self._vector_store.delete_by_filter(filter_conditions={"file_id": str(file_id)})
+            except Exception as cleanup_exc:
+                logger.warning("parent_child_ingestion_failed_cleanup_error", file_id=str(file_id), error=str(cleanup_exc))
             await repo.update_status(file_id, status="failed", error_message=str(exc))
             return {"status": "failed", "error": str(exc), "chunks": 0}
 

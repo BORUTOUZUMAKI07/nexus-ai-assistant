@@ -14,8 +14,10 @@ from qdrant_client import AsyncQdrantClient, models
 
 logger = structlog.get_logger(__name__)
 
-COLLECTION_NAME = "nexus_knowledge"
-VECTOR_SIZE = 384  # BAAI/bge-small-en-v1.5 dimensions
+# Single source of truth from settings (was hardcoded) so a renamed collection
+# or a different embedding model can't silently desync the app from the cluster.
+COLLECTION_NAME = settings.QDRANT_COLLECTION_NAME
+VECTOR_SIZE = settings.EMBEDDING_DIMENSION
 
 
 class QdrantService(IVectorStore):
@@ -28,22 +30,47 @@ class QdrantService(IVectorStore):
         else:
             self.client = AsyncQdrantClient(url=settings.QDRANT_URL)
 
-    async def ensure_collection(self) -> None:
+    async def ensure_collection(self, recreate_if_dimension_mismatch: bool = True) -> None:
         """
         Idempotently creates the hybrid collection with:
           - Dense HNSW vectors (cosine, INT8 quantization)
           - Sparse vectors for BM25 keyword recall
           - Payload indexes for fast user/file pre-filtering
+
+        If the collection exists with a different vector size than configured,
+        it automatically recreates the collection to avoid runtime dimension errors.
         """
         collections = await self.client.get_collections()
         exists = any(c.name == COLLECTION_NAME for c in collections.collections)
+
+        if exists and recreate_if_dimension_mismatch:
+            try:
+                info = await self.client.get_collection(COLLECTION_NAME)
+                current_size = None
+                vectors = info.config.params.vectors
+                if isinstance(vectors, dict) and "dense" in vectors:
+                    current_size = getattr(vectors["dense"], "size", None)
+                elif hasattr(vectors, "size"):
+                    current_size = vectors.size
+
+                if current_size and current_size != settings.EMBEDDING_DIMENSION:
+                    logger.warning(
+                        "qdrant_collection_dimension_mismatch_recreating",
+                        collection=COLLECTION_NAME,
+                        existing_dim=current_size,
+                        target_dim=settings.EMBEDDING_DIMENSION,
+                    )
+                    await self.client.delete_collection(COLLECTION_NAME)
+                    exists = False
+            except Exception as e:
+                logger.warning("qdrant_dimension_check_failed", error=str(e))
 
         if not exists:
             await self.client.create_collection(
                 collection_name=COLLECTION_NAME,
                 vectors_config={
                     "dense": models.VectorParams(
-                        size=VECTOR_SIZE,
+                        size=settings.EMBEDDING_DIMENSION,
                         distance=models.Distance.COSINE,
                     )
                 },
@@ -70,7 +97,11 @@ class QdrantService(IVectorStore):
             await self.client.create_payload_index(
                 COLLECTION_NAME, "file_type", models.PayloadSchemaType.KEYWORD
             )
-            logger.info("qdrant_collection_initialized", collection=COLLECTION_NAME)
+            logger.info(
+                "qdrant_collection_initialized",
+                collection=COLLECTION_NAME,
+                dimension=settings.EMBEDDING_DIMENSION,
+            )
         else:
             logger.debug("qdrant_collection_already_exists", collection=COLLECTION_NAME)
 
@@ -81,12 +112,16 @@ class QdrantService(IVectorStore):
         sparse_values: list[float],
         limit: int = 5,
         filter_conditions: dict[str, Any] | None = None,
+        score_threshold: float | None = None,
+        with_vectors: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Executes native hybrid search with multi-stage Prefetch and
         server-side Reciprocal Rank Fusion (RRF).
 
-        Reference: https://qdrant.tech/documentation/concepts/hybrid-queries/
+        ``score_threshold`` is enforced after fusion: RRF-normalised scores vary
+        by bucket size, so a client-side cutoff on the fused score is the only
+        cross-collection-consistent place to filter low-confidence hits.
         """
         must_filters: list[models.Condition] = []
 
@@ -132,16 +167,30 @@ class QdrantService(IVectorStore):
             query=models.FusionQuery(fusion=models.Fusion.RRF),
             limit=limit,
             with_payload=True,
+            with_vectors=["dense"] if with_vectors else False,
         )
 
-        return [
-            {
+        hits = []
+        for point in search_results.points:
+            dense_vec = None
+            if with_vectors and point.vector:
+                if isinstance(point.vector, dict):
+                    dense_vec = point.vector.get("dense")
+                elif isinstance(point.vector, list):
+                    dense_vec = point.vector
+
+            hit_item: dict[str, Any] = {
                 "id": str(point.id),
                 "score": point.score,
                 "payload": point.payload or {},
             }
-            for point in search_results.points
-        ]
+            if dense_vec is not None:
+                hit_item["dense_vector"] = dense_vec
+            hits.append(hit_item)
+
+        if score_threshold is not None:
+            hits = [h for h in hits if h["score"] >= score_threshold]
+        return hits
 
     async def upsert_points(self, points: list[dict[str, Any]]) -> None:
         """

@@ -24,6 +24,7 @@ class IVectorStore(ABC):
         sparse_values: list[float],
         limit: int = 5,
         filter_conditions: dict[str, Any] | None = None,
+        with_vectors: bool = False,
     ) -> list[dict[str, Any]]:
         """Execute hybrid dense + sparse vector search with reciprocal rank fusion."""
         pass

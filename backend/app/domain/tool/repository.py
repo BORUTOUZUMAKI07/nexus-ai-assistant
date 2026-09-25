@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
+from backend.app.domain.conversation.models import Conversation
 from backend.app.domain.tool.models import Tool, ToolCall
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -112,7 +113,12 @@ class ToolRepository(BaseRepository[Tool]):
             await self.session.refresh(call)
         return call
 
-    async def get_tool_call(self, tool_call_id: UUID) -> ToolCall | None:
+    async def get_tool_call(self, tool_call_id: UUID, user_id: UUID | None = None) -> ToolCall | None:
         statement = select(ToolCall).where(ToolCall.id == tool_call_id)
+        if user_id:
+            # Scope approval lookups through the conversation the caller owns.
+            statement = statement.join(
+                Conversation, Conversation.id == ToolCall.conversation_id
+            ).where(Conversation.user_id == user_id)
         result = await self.session.exec(statement)
         return result.first()

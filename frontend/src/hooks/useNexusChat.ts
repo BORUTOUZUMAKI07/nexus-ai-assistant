@@ -73,6 +73,8 @@ export interface NexusMessage {
   model?: string;
   annotations?: NexusAnnotation[];
   createdAt?: string;
+  /** base64 data URL of an attached image (user messages only) */
+  imageDataUrl?: string;
 }
 
 export interface UseNexusChatOptions {
@@ -80,11 +82,15 @@ export interface UseNexusChatOptions {
   userId?: string;
   mode?: "normal" | "agent" | "code" | "research";
   model?: string;
+  /** Called once when the backend assigns a real UUID to a newly-created conversation. */
+  onConversationCreated?: (newConversationId: string) => void;
 }
 
 export interface SendMessageOptions {
   mode?: "normal" | "agent" | "code" | "research";
   conversationId?: string;
+  /** base64 data URL for an image the user has attached */
+  imageDataUrl?: string;
 }
 
 export function useNexusChat(options: UseNexusChatOptions = {}) {
@@ -102,9 +108,12 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   const messagesRef = useRef(messages);
   const loadingRef = useRef(isLoading);
   const abortRef = useRef<AbortController | null>(null);
+  // Stable ref for the conversation-created callback — avoids re-binding sendMessage.
+  const onConversationCreatedRef = useRef(options.onConversationCreated);
 
   useEffect(() => {
     optionsRef.current = options;
+    onConversationCreatedRef.current = options.onConversationCreated;
   }, [options]);
 
   useEffect(() => {
@@ -142,7 +151,9 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   const sendMessage = useCallback(
     async (content: string, sendOptions?: SendMessageOptions) => {
       const trimmed = content.trim();
-      if (!trimmed || loadingRef.current) return;
+      const imageDataUrl = sendOptions?.imageDataUrl;
+      if (!trimmed && !imageDataUrl) return;
+      if (loadingRef.current) return;
 
       setError(null);
       setPendingHITL(null);
@@ -158,6 +169,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         id: userMsgId,
         role: "user",
         content: trimmed,
+        imageDataUrl,
         createdAt: new Date().toISOString(),
       };
       const assistantMsg: NexusMessage = {
@@ -190,18 +202,32 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       };
 
       try {
+        // Build multimodal message list — user message may carry an image
+        const backendMessages = [...history, userMsg].map((m) => {
+          if (m.imageDataUrl) {
+            // Multimodal content array for vision
+            return {
+              role: m.role,
+              content: [
+                { type: "text", text: m.content || "What's in this image?" },
+                {
+                  type: "image_url",
+                  image_url: { url: m.imageDataUrl },
+                },
+              ],
+            };
+          }
+          return { role: m.role, content: m.content };
+        });
+
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
           body: JSON.stringify({
-            messages: [...history, userMsg].map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
+            messages: backendMessages,
             conversationId,
             mode,
-            userId: optionsRef.current.userId ?? "anonymous",
           }),
         });
 
@@ -213,91 +239,117 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         const decoder = new TextDecoder();
         let streamContent = "";
         let streamError: string | null = null;
+        // Track whether the backend assigned a new conversation id so we can
+        // surface it to the page via onConversationCreated.
+        let resolvedConversationId: string | null = null;
 
-        readLoop: while (true) {
+        // SSE lines can be split across network chunks (and JSON payloads may
+        // even contain literal newlines), so any trailing partial line is
+        // carried into the next iteration instead of being parsed eagerly.
+        let buffer = "";
+        const processLine = (line: string) => {
+          if (!line) return;
+
+          // Structured stream error (Vercel AI SDK 3: prefix)
+          if (line.startsWith("3:")) {
+            const raw = line.slice(2);
+            try {
+              streamError = JSON.parse(raw);
+            } catch {
+              streamError = raw;
+            }
+            return;
+          }
+
+          // Text delta
+          if (line.startsWith("0:")) {
+            const raw = line.slice(2);
+            try {
+              streamContent += JSON.parse(raw);
+            } catch {
+              streamContent += raw;
+            }
+            patchAssistant(streamContent, annotations);
+            return;
+          }
+
+          // Annotations
+          if (!line.startsWith("8:")) return;
+          try {
+            const parsed: unknown[] = JSON.parse(line.slice(2));
+            if (!Array.isArray(parsed)) return;
+            for (const ann of parsed) {
+              const typed = ann as NexusAnnotation;
+              if (typed.type === "reasoning") {
+                reasoningBuffer += typed.data.content ?? "";
+              } else if (typed.type === "citation") {
+                citations.push(typed.data);
+              } else if (typed.type === "tool_call") {
+                toolCalls.push({ ...typed.data, status: "running" });
+              } else if (typed.type === "tool_result") {
+                const call = toolCalls.find(
+                  (c) => c.tool_call_id === typed.data.tool_call_id
+                );
+                if (call) {
+                  call.status = "error" in typed.data ? "error" : "completed";
+                  call.result = typed.data.result;
+                }
+                annotations.push(typed);
+              } else if (typed.type === "hitl_request") {
+                setPendingHITL(typed.data);
+                annotations.push(typed);
+              } else if (
+                (ann as { type: string; data?: { thread_id?: string } }).type === "conversation_created"
+              ) {
+                // Backend resolved a new conversation UUID — capture it for the callback.
+                const newId = (ann as { type: string; data: { thread_id: string } }).data?.thread_id;
+                if (newId) resolvedConversationId = newId;
+              }
+            }
+            const next: NexusAnnotation[] = [
+              ...annotations,
+              ...(reasoningBuffer
+                ? [
+                    {
+                      type: "reasoning" as const,
+                      data: { content: reasoningBuffer },
+                    },
+                  ]
+                : []),
+              ...citations.map(
+                (c): CitationAnnotation => ({ type: "citation", data: c })
+              ),
+              ...toolCalls.map(
+                (t): ToolCallAnnotation => ({
+                  type: "tool_call",
+                  data: t,
+                })
+              ),
+            ];
+            patchAssistant(streamContent, next);
+          } catch {
+            // Ignore malformed annotation payloads
+          }
+        };
+
+        while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split("\n");
+          buffer += chunk;
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
 
           for (const line of lines) {
-            if (!line) continue;
-
-            // Structured stream error (Vercel AI SDK 3: prefix)
-            if (line.startsWith("3:")) {
-              const raw = line.slice(2);
-              try {
-                streamError = JSON.parse(raw);
-              } catch {
-                streamError = raw;
-              }
-              break readLoop;
-            }
-
-            // Text delta
-            if (line.startsWith("0:")) {
-              const raw = line.slice(2);
-              try {
-                streamContent += JSON.parse(raw);
-              } catch {
-                streamContent += raw;
-              }
-              patchAssistant(streamContent, annotations);
-            } else if (line.startsWith("8:")) {
-              // Annotations
-              try {
-                const parsed: unknown[] = JSON.parse(line.slice(2));
-                if (!Array.isArray(parsed)) continue;
-                for (const ann of parsed) {
-                  const typed = ann as NexusAnnotation;
-                  if (typed.type === "reasoning") {
-                    reasoningBuffer += typed.data.content ?? "";
-                  } else if (typed.type === "citation") {
-                    citations.push(typed.data);
-                  } else if (typed.type === "tool_call") {
-                    toolCalls.push({ ...typed.data, status: "running" });
-                  } else if (typed.type === "tool_result") {
-                    const call = toolCalls.find(
-                      (c) => c.tool_call_id === typed.data.tool_call_id
-                    );
-                    if (call) {
-                      call.status = "error" in typed.data ? "error" : "completed";
-                      call.result = typed.data.result;
-                    }
-                    annotations.push(typed);
-                  } else if (typed.type === "hitl_request") {
-                    setPendingHITL(typed.data);
-                    annotations.push(typed);
-                  }
-                }
-                const next: NexusAnnotation[] = [
-                  ...annotations,
-                  ...(reasoningBuffer
-                    ? [
-                        {
-                          type: "reasoning" as const,
-                          data: { content: reasoningBuffer },
-                        },
-                      ]
-                    : []),
-                  ...citations.map(
-                    (c): CitationAnnotation => ({ type: "citation", data: c })
-                  ),
-                  ...toolCalls.map(
-                    (t): ToolCallAnnotation => ({
-                      type: "tool_call",
-                      data: t,
-                    })
-                  ),
-                ];
-                patchAssistant(streamContent, next);
-              } catch {
-                // Ignore malformed annotation payloads
-              }
-            }
+            processLine(line);
+            if (streamError) break;
           }
+          if (streamError) break;
         }
+
+        // Flush a final line that arrived without a trailing newline.
+        if (buffer && !streamError) processLine(buffer);
 
         const finalAnnotations: NexusAnnotation[] = [
           ...(reasoningBuffer
@@ -319,6 +371,10 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         // Even on a mid-stream error keep whatever already streamed so a failed
         // answer is never silently replaced by a blank bubble.
         patchAssistant(streamContent, finalAnnotations);
+        // Fire the conversation-created callback if the backend assigned a new id.
+        if (resolvedConversationId && !conversationId && onConversationCreatedRef.current) {
+          onConversationCreatedRef.current(resolvedConversationId);
+        }
         if (streamError) {
           setError(new Error(streamError));
           return;
@@ -349,6 +405,15 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   }, []);
 
   const reload = useCallback(async () => {
+    // A reload must supersede whatever stream (if any) is still running. Abort
+    // it and reset the loading ref synchronously so the follow-up send is not
+    // swallowed by the in-flight guard.
+    abortRef.current?.abort();
+    abortRef.current = null;
+    loadingRef.current = false;
+    setIsLoading(false);
+    setError(null);
+
     const msgs = messagesRef.current;
     const lastUser = [...msgs].reverse().find((m) => m.role === "user");
     if (!lastUser) return;

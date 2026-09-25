@@ -5,6 +5,7 @@ Route handlers depend on this abstraction, not on UserRepository directly (DIP).
 """
 import time
 from datetime import timedelta
+from uuid import UUID
 
 import structlog
 from backend.app.core.config import settings
@@ -21,7 +22,7 @@ from backend.app.core.security import (
 from backend.app.domain.user.models import User
 from backend.app.domain.user.repository import UserRepository
 from backend.app.domain.user.schemas import TokenResponse, UserCreate
-from backend.app.infrastructure.cache.redis_client import redis_service
+from backend.app.infrastructure.cache.redis_client import get_cache_service
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
@@ -78,7 +79,7 @@ class AuthService:
     async def refresh(self, refresh_token_str: str) -> TokenResponse:
         """Issue a new access token from a valid, single-use refresh token."""
         payload = decode_token(refresh_token_str)
-        if not payload or payload.get("type") != "refresh":
+        if payload.get("type") != "refresh":
             raise AuthenticationError("Invalid or expired refresh token.")
 
         jti = payload.get("jti")
@@ -88,13 +89,21 @@ class AuthService:
         # Single-use guard: mark this refresh token jti as consumed in Redis.
         # If it was already redeemed, refuse the exchange (reuse detection).
         ttl_seconds = max(1, int(payload["exp"]) - int(time.time()))
-        first_use = await redis_service.set_if_absent(
+        first_use = await get_cache_service().set_if_absent(
             f"refresh:used:{jti}", "1", ttl_seconds=ttl_seconds
         )
         if not first_use:
             raise AuthenticationError("Refresh token has already been used.")
 
-        user = await self._repo.get_by_id(payload.get("sub"))
+        sub_str = payload.get("sub")
+        if not sub_str:
+            raise AuthenticationError("Invalid token subject.")
+        try:
+            user_id = UUID(str(sub_str))
+        except (ValueError, TypeError):
+            raise AuthenticationError("Invalid user ID in token.")
+
+        user = await self._repo.get_by_id(user_id)
         if not user or not user.is_active:
             raise AuthenticationError("User not found or inactive.")
 
@@ -110,3 +119,16 @@ class AuthService:
             token_type="bearer",
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
+
+    async def revoke_refresh_token(self, refresh_token_str: str) -> None:
+        """Revoke a refresh token by recording its jti in Redis until its expiration."""
+        try:
+            payload = decode_token(refresh_token_str)
+            jti = payload.get("jti")
+            exp = payload.get("exp")
+            if jti and exp:
+                ttl_seconds = max(1, int(exp) - int(time.time()))
+                await get_cache_service().set(f"refresh:used:{jti}", "1", ttl_seconds=ttl_seconds)
+        except Exception:
+            # Best-effort revocation: expired or malformed tokens cannot be re-used anyway
+            pass

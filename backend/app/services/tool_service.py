@@ -56,9 +56,9 @@ class ToolService:
         logger.info("tool_executed", tool_name=tool_name, status=result.get("status"))
         return result
 
-    async def approve_tool_call(self, approval: ToolApprovalRequest) -> dict[str, Any]:
-        """Resolve a pending HITL approval request."""
-        call = await self._repo.get_tool_call(approval.tool_call_id)
+    async def approve_tool_call(self, approval: ToolApprovalRequest, user_id: UUID) -> dict[str, Any]:
+        """Resolve a pending HITL approval request (scoped to the caller's conversations)."""
+        call = await self._repo.get_tool_call(approval.tool_call_id, user_id=user_id)
         if not call:
             raise ResourceNotFoundError("ToolCall", str(approval.tool_call_id))
 

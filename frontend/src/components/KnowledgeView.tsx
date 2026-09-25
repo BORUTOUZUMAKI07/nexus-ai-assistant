@@ -158,7 +158,7 @@ export const KnowledgeView: React.FC = () => {
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={isUploading}
-          className="px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-50 text-white text-xs font-medium transition-all inline-flex items-center gap-2"
+          className="px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-50 text-[var(--accent-foreground)] text-xs font-semibold transition-all inline-flex items-center gap-2 shadow-sm"
         >
           {isUploading ? (
             <>
@@ -277,7 +277,7 @@ export const KnowledgeView: React.FC = () => {
           <button
             onClick={handleSearch}
             disabled={isSearching || !searchQuery.trim()}
-            className="px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-50 text-white text-xs font-medium flex items-center gap-1.5 transition-all"
+            className="px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-50 text-[var(--accent-foreground)] text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm"
           >
             {isSearching ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />

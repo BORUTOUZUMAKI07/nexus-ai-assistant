@@ -46,7 +46,28 @@ async def upload_file(
     otherwise it is ingested synchronously in the request.
     """
     filename = file.filename or "uploaded_document"
-    file_bytes = await file.read()
+    # Enforce an upload size ceiling BEFORE buffering the whole body into
+    # memory: rejects oversized uploads early instead of loading them.
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if file.size is not None and file.size > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds the {settings.MAX_UPLOAD_SIZE_MB}MB upload limit.",
+        )
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        part = await file.read(1024 * 1024)
+        if not part:
+            break
+        total += len(part)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File exceeds the {settings.MAX_UPLOAD_SIZE_MB}MB upload limit.",
+            )
+        chunks.append(part)
+    file_bytes = b"".join(chunks)
     try:
         db_file = await file_svc.upload(
             file_bytes=file_bytes,
@@ -84,15 +105,19 @@ async def upload_file(
 @router.get("", response_model=list[FileResponse])
 async def list_files(
     conversation_id: UUID | None = None,
+    limit: int = 50,
+    offset: int = 0,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
     file_svc: FileService = Depends(get_file_service),
 ):
-    """List all files belonging to the authenticated user."""
+    """List all files belonging to the authenticated user (paginated)."""
     return await file_svc.list_files(
         user_id=current_user.id,
         session=session,
         conversation_id=conversation_id,
+        limit=min(max(limit, 1), 100),
+        offset=max(offset, 0),
     )
 
 

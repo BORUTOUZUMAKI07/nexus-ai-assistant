@@ -9,14 +9,7 @@
  */
 
 const API_BASE = "/api";
-import {
-  clearSession,
-  getAccessToken,
-  getRefreshToken,
-  setAccessToken,
-  setRefreshToken,
-  SESSION_EXPIRED_EVENT,
-} from "./auth";
+import { clearSession, SESSION_EXPIRED_EVENT } from "./auth";
 
 // ─── Types (mirror backend Pydantic schemas) ────────────────────────────────
 
@@ -169,11 +162,10 @@ export interface HITLFeedback {
 
 // ─── Auth helpers ────────────────────────────────────────────────────────────
 
+// The browser never holds a token: /api/* route handlers read the httpOnly
+// access cookie server-side and attach Authorization themselves (lib/proxy.ts).
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = { ...(extra ?? {}) };
-  const token = getAccessToken();
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  return headers;
+  return { ...(extra ?? {}) };
 }
 
 async function parseError(res: Response, fallback: string): Promise<Error> {
@@ -207,9 +199,10 @@ function sleep(ms: number): Promise<void> {
 // ─── Silent session refresh ───────────────────────────────────────────────────
 // The backend access token expires after ACCESS_TOKEN_EXPIRE_MINUTES and the
 // refresh token is single-use (rotated on every exchange). When an
-// authenticated call comes back 401, exchange the stored refresh token for a
-// fresh pair and retry the request once. Only one refresh may run at a time;
-// if it fails the session is cleared and the app is bounced to /signin.
+// authenticated call comes back 401, POST /api/auth/refresh — which reads the
+// httpOnly refresh cookie server-side, exchanges it, and re-bakes both cookies
+// — then retry the request once. Only one refresh may run at a time; if it
+// fails the session is cleared and the app is bounced to /signin.
 
 const NO_AUTO_REFRESH_PATHS = ["/api/auth/login", "/api/auth/register", "/api/auth/refresh"];
 
@@ -222,22 +215,16 @@ let refreshInFlight: Promise<boolean> | null = null;
 async function refreshAccessToken(): Promise<boolean> {
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
-      const refreshToken = getRefreshToken();
-      if (!refreshToken) return false;
+      // No body needed: the route handler reads the refresh token from its
+      // httpOnly cookie. The browser attaches it automatically.
       const res = await fetch(`${API_BASE}/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: refreshToken }),
+        body: "{}",
       });
       if (!res.ok) return false;
-      const data = (await res.json()) as {
-        access_token?: string;
-        refresh_token?: string;
-      };
-      if (!data.access_token || !data.refresh_token) return false;
-      setAccessToken(data.access_token);
-      setRefreshToken(data.refresh_token);
-      return true;
+      const data = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+      return Boolean(data?.ok);
     })().finally(() => {
       refreshInFlight = null;
     });
@@ -254,17 +241,6 @@ function notifySessionExpired(): void {
   }
 }
 
-// A retry after silent refresh must re-bake the Authorization header, because
-// the token was captured when the caller built `init` and is now stale.
-function withFreshAuth(init: RequestInit | undefined): RequestInit | undefined {
-  const token = getAccessToken();
-  if (!token) return init;
-  const headers = init?.headers ? new Headers(init.headers) : undefined;
-  if (!headers || !headers.has("authorization")) return init;
-  headers.set("authorization", `Bearer ${token}`);
-  return { ...init, headers };
-}
-
 async function nexusFetch(
   url: string,
   init: RequestInit | undefined,
@@ -273,10 +249,11 @@ async function nexusFetch(
   const res = await fetch(url, init);
   if (res.status === 401 && !retried && !isAuthRoute(url)) {
     if (await refreshAccessToken()) {
-      return nexusFetch(url, withFreshAuth(init), true);
+      // Cookies were re-baked server-side; retry the identical request.
+      return nexusFetch(url, init, true);
     }
     // Terminal: refresh declined or refresh token already gone.
-    clearSession();
+    await clearSession();
     notifySessionExpired();
   }
   return res;
@@ -341,17 +318,28 @@ export async function fetchConversation(
 }
 
 export async function createConversation(
-  title?: string,
+  titleOrOptions?: string | { title?: string; mode?: ConversationMode; model?: string },
   mode: ConversationMode = "normal",
   model?: string
 ): Promise<Conversation> {
+  let title = "New Conversation";
+  let convMode = mode;
+  let convModel = model;
+  if (typeof titleOrOptions === "object" && titleOrOptions !== null) {
+    title = titleOrOptions.title ?? "New Conversation";
+    convMode = titleOrOptions.mode ?? "normal";
+    convModel = titleOrOptions.model;
+  } else if (typeof titleOrOptions === "string") {
+    title = titleOrOptions;
+  }
+
   const res = await nexusFetch(`${API_BASE}/conversations`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
-      title: title ?? "New Conversation",
-      mode,
-      ...(model ? { model } : {}),
+      title,
+      mode: convMode,
+      ...(convModel ? { model: convModel } : {}),
     }),
   });
   if (!res.ok) throw new Error(`Create conversation failed: ${res.status}`);
@@ -378,6 +366,23 @@ export async function updateConversation(
     body: JSON.stringify(patch),
   });
   if (!res.ok) throw new Error(`Update conversation failed: ${res.status}`);
+  return res.json();
+}
+
+export async function forkConversation(
+  id: string,
+  forkMessageId: string,
+  branchName?: string
+): Promise<Conversation> {
+  const res = await nexusFetch(`${API_BASE}/conversations/${id}/fork`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      fork_message_id: forkMessageId,
+      branch_name: branchName ?? "Forked Branch",
+    }),
+  });
+  if (!res.ok) throw new Error(`Fork conversation failed: ${res.status}`);
   return res.json();
 }
 
@@ -503,6 +508,26 @@ export async function addAPIKey(key: APIKeyCreate): Promise<APIKey> {
   return res.json();
 }
 
+// ─── Message Feedback ─────────────────────────────────────────────────────────
+
+export async function sendMessageFeedback(
+  conversationId: string,
+  messageId: string,
+  feedback: "thumbs_up" | "thumbs_down",
+  note?: string
+): Promise<{ status: string }> {
+  const res = await nexusFetch(
+    `${API_BASE}/conversations/${conversationId}/messages/${messageId}/feedback`,
+    {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ feedback, feedback_note: note ?? null }),
+    }
+  );
+  if (!res.ok) throw new Error(`Feedback failed: ${res.status}`);
+  return res.json();
+}
+
 // ─── HITL ────────────────────────────────────────────────────────────────────
 
 export async function sendHITLFeedback(
@@ -518,6 +543,32 @@ export async function sendHITLFeedback(
 }
 
 // ─── Authentication ──────────────────────────────────────────────────────────
+
+export interface CurrentUser {
+  id?: string;
+  email?: string;
+  role?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Resolves the caller's session via /api/auth/me. The browser cannot read the
+ * httpOnly access cookie, so this server-side probe is the source of truth for
+ * "am I signed in" and which UI sections (e.g. Admin) are visible.
+ */
+export async function fetchCurrentUser(): Promise<{
+  authenticated: boolean;
+  user?: CurrentUser;
+}> {
+  const res = await fetch(`${API_BASE}/auth/me`, { method: "GET" });
+  if (!res.ok) return { authenticated: false };
+  const data = (await res.json().catch(() => null)) as {
+    authenticated?: boolean;
+    user?: CurrentUser;
+  } | null;
+  if (!data) return { authenticated: res.ok };
+  return { authenticated: Boolean(data.authenticated), user: data.user };
+}
 
 export async function registerUser(payload: {
   email: string;
@@ -537,16 +588,12 @@ export async function registerUser(payload: {
 export async function loginUser(payload: {
   email: string;
   password: string;
-}): Promise<{
-  access_token: string;
-  refresh_token: string;
-  token_type: string;
-}> {
+}): Promise<{ ok: boolean }> {
   const res = await nexusFetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw await parseError(res, "Invalid email or password");
-  return res.json();
+  return (await res.json()) as { ok: boolean };
 }

@@ -381,7 +381,7 @@ def test_sparse_vector_indices_are_unique_under_hash_collisions():
 async def test_retrieve_multi_merges_and_caps_top_k(monkeypatch):
     svc = RetrievalService()
 
-    async def fake_retrieve(self, query, user_id, file_ids=None, top_k=5, score_threshold=0.35):
+    async def fake_retrieve(self, query, user_id, file_ids=None, top_k=5, score_threshold=0.35, **kwargs):
         return [{"id": query, "score": 0.7, "payload": {"chunk_index": 0, "content": query}}]
 
     monkeypatch.setattr(RetrievalService, "retrieve", fake_retrieve)
@@ -410,7 +410,7 @@ class _FakeRetriever(IRetriever):
     async def retrieve(self, *args, **kwargs):
         raise NotImplementedError
 
-    async def retrieve_multi(self, queries, user_id, file_ids=None, top_k=5, score_threshold=0.35):
+    async def retrieve_multi(self, queries, user_id, file_ids=None, top_k=5, score_threshold=0.35, **kwargs):
         self.queries = list(queries)
         return [
             {"file_id": str(user_id), "chunk_index": 0, "content": "Evidence text.",

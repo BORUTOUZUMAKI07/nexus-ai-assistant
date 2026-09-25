@@ -2,6 +2,7 @@ import { test as base, type Page, type Route } from "@playwright/test"
 
 export const AUTH_COOKIE = "nexus_access_token"
 export const TEST_TOKEN = "test-access-token"
+export const ADMIN_TOKEN = "test-admin-token"
 
 export const TEST_CONVERSATION = {
   id: "conv-100",
@@ -47,6 +48,45 @@ export function mockApi(page: Page) {
   async function setup() {
     await page.route("**/api/**", (route) => {
       const url = route.request().url()
+      const cookieStr = route.request().headers()["cookie"] ?? ""
+      const hasToken = cookieStr
+        .split(";")
+        .some((c) => c.trim().startsWith(`${AUTH_COOKIE}=`))
+
+      // The app gates on /api/auth/me since the httpOnly access cookie is not
+      // readable from page scripts. Authenticated exactly when the access token
+      // cookie is present; the Admin nav is derived from the role in the probe.
+      if (url.includes("/api/auth/me")) {
+        const tokenMatch = cookieStr
+          .split(";")
+          .map((c) => c.trim())
+          .find((c) => c.startsWith(`${AUTH_COOKIE}=`))
+        const token = tokenMatch ? decodeURIComponent(tokenMatch.slice(AUTH_COOKIE.length + 1)) : ""
+        const admin = token === ADMIN_TOKEN
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(
+            hasToken
+              ? {
+                  authenticated: true,
+                  user: { id: "user-1", email: "test@nexus.ai", role: admin ? "admin" : "user" },
+                }
+              : { authenticated: false }
+          ),
+        })
+      }
+      // Sign-out clears the access cookie the same way the real route does.
+      if (url.includes("/api/auth/logout")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          headers: {
+            "Set-Cookie": `${AUTH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`,
+          },
+          body: JSON.stringify({ message: "Logged out successfully" }),
+        })
+      }
       if (url.includes("/api/chat")) {
         const body = route.request().postDataJSON?.() ?? {}
         entry.capturedChatRequests.push(body)
@@ -73,6 +113,13 @@ export function mockApi(page: Page) {
 export function setupAuthMocks(page: Page) {
   const mocks = mockApi(page)
 
+  const authCookieHeaders = (accessToken: string) => ({
+    // Playwright's Route.fulfill only accepts a flat headers dict, so a single
+    // Set-Cookie is set. The access cookie is the one the /api/auth/me gate
+    // tests for; the refresh cookie isn't consumed by any e2e assertion.
+    "Set-Cookie": `${AUTH_COOKIE}=${accessToken}; Path=/; Max-Age=604800; SameSite=Lax`,
+  })
+
   mocks.route(/\/api\/auth\/login$/, (route) => {
     const body = route.request().postDataJSON?.() ?? {}
     if (body.password !== "password123") {
@@ -85,11 +132,18 @@ export function setupAuthMocks(page: Page) {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({
-        access_token: TEST_TOKEN,
-        refresh_token: "test-refresh-token",
-        token_type: "bearer",
-      }),
+      headers: authCookieHeaders(TEST_TOKEN),
+      // Mirrors the real route handler: the browser only learns success/failure.
+      body: JSON.stringify({ ok: true }),
+    })
+  })
+
+  mocks.route(/\/api\/auth\/refresh$/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: authCookieHeaders("test-refreshed-access-token"),
+      body: JSON.stringify({ ok: true }),
     })
   })
 

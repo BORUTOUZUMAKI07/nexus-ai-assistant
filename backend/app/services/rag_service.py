@@ -69,13 +69,15 @@ class RAGService:
             # 1. Query rewriting (multi-query expansion + conditional HyDE)
             queries = self._rewriter.rewrite(query)
 
-            # 2. Multi-query hybrid search (child→parent resolved)
+            # 2. Multi-query hybrid search with Dense MMR (child→parent resolved & diversified)
             candidates = await self._retriever.retrieve_multi(
                 queries=queries,
                 user_id=user_id,
                 file_ids=file_ids,
                 top_k=top_k,
                 score_threshold=score_threshold,
+                use_mmr=True,
+                mmr_lambda=0.7,
             )
 
             # 3. Cross-Encoder / FlashRank Reranking

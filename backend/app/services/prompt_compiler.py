@@ -7,17 +7,27 @@ import hashlib
 import json
 
 import structlog
+from backend.app.core.config import settings
 from backend.app.domain.prompt.models import Skill
 from backend.app.domain.user.models import UserMemory
 from backend.app.infrastructure.cache.cag_service import cag_service
+from pathlib import Path
 
 logger = structlog.get_logger(__name__)
 
-SYSTEM_BASE_PROMPT = """You are Nexus AI, an advanced, highly capable, and transparent AI assistant.
-You strictly adhere to factual accuracy, domain expertise, and rigorous logic.
-Always provide well-structured, clear, and comprehensive explanations.
-When code or data analysis is required, use available tools and interpret execution outputs meticulously.
-When citations are available, ground your answers directly in the retrieved evidence."""
+def load_prompt(name: str) -> str:
+    """Load a prompt template text file from the configured prompt directory.
+    The file should be named `<name>.txt`.
+    """
+    file_path = Path(settings.PROMPT_DIR) / f"{name}.txt"
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        logger.error("prompt_load_failed", name=name, error=str(exc))
+        return ""
+
+# Load the base system prompt from `system_prompt.txt`
+SYSTEM_BASE_PROMPT = load_prompt("system_prompt")
 
 
 class PromptCompiler:

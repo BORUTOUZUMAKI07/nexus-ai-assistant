@@ -1,46 +1,80 @@
 @import "tailwindcss";
 
 /*
- * Nexus AI design system
- * Tokens follow the shadcn-style system used across the sibling projects
- * (ai-civic-issue-monitoring, url-shortner): near-black neutral surfaces,
- * hairline oklab-friendly borders, a muted radius vocabulary (6px controls /
- * 12px cards), and a single emerald accent reserved for primary actions.
- * Status colors are the only other hues in play.
+ * Nexus AI — Refero Styles Specification (Linear & Cursor inspired)
+ * Built on Void (#08090a), Carbon (#0f1011), Obsidian (#161718),
+ * hairline Graphite (#23252a) borders, Paper (#ffffff) type, and
+ * the iconic Electric Acid Lime (#e4f222) primary action accent.
  */
 :root {
   /* Surfaces */
-  --bg-main: #08090a;
-  --bg-surface: #11131a;
-  --bg-surface-elevated: #1b1e27;
-  --bg-glass: rgba(17, 19, 26, 0.82);
-  --bg-glass-hover: rgba(27, 30, 39, 0.92);
+  --bg-main: #08090a; /* Void */
+  --bg-surface: #0f1011; /* Carbon */
+  --bg-surface-elevated: #161718; /* Obsidian */
+  --bg-surface-tint: #23252a; /* Slate / Interactive */
+  --bg-glass: rgba(15, 16, 17, 0.85);
+  --bg-glass-hover: rgba(22, 23, 24, 0.95);
 
-  /* Borders */
-  --border-subtle: #23262f;
-  --border-strong: #353a46;
-  --border-active: #10b981;
+  /* Hairline Borders */
+  --border-subtle: #23252a; /* Graphite hairline */
+  --border-strong: #383b3f; /* Smoke hairline */
+  --border-active: #e4f222;
 
-  /* Text */
-  --text-primary: #f2f2f2;
-  --text-secondary: #d7dbe3;
-  --text-muted: #9aa0ae;
-  --text-faint: #6b7280;
+  /* Typography */
+  --text-primary: #ffffff; /* Paper */
+  --text-secondary: #d0d6e0; /* Mist */
+  --text-muted: #8a8f98; /* Fog */
+  --text-faint: #62666d; /* Ash */
 
-  /* Brand accent (single source of truth for primary actions) */
-  --accent: #10b981;
-  --accent-hover: #34d399;
-  --accent-soft: rgba(16, 185, 129, 0.14);
-  --accent-violet: #2dd4bf;
-  --accent-cyan: #38bdf8;
+  /* Primary Action: Electric Acid Lime (Refero / Linear flagship) */
+  --accent: #e4f222;
+  --accent-foreground: #08090a;
+  --accent-hover: #f0fc44;
+  --accent-soft: rgba(228, 242, 34, 0.12);
+  --accent-glow: rgba(228, 242, 34, 0.3);
 
-  /* Status only */
-  --status-success: #10b981;
-  --status-danger: #ef4444;
+  /* Supporting Chromatic Accents */
+  --accent-pulse-green: #27a644;
+  --accent-violet: #6366f1; /* Iris Violet */
+  --accent-cyan: #02b8cc; /* Signal Teal */
+  --accent-lavender: #8b5cf6;
+
+  /* Status Colors */
+  --status-success: #27a644;
+  --status-danger: #eb5757;
   --status-warning: #f59e0b;
 
-  /* Reserved for the product mark only, never chrome */
-  --grad-brand: linear-gradient(135deg, #10b981 0%, #2dd4bf 50%, #38bdf8 100%);
+  /* Brand Mark & Hero Atmosphere */
+  --grad-brand: linear-gradient(135deg, #e4f222 0%, #02b8cc 50%, #6366f1 100%);
+  --grad-hero-floor: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(228, 242, 34, 0.15), rgba(99, 102, 241, 0.08) 50%, transparent 80%);
+}
+
+/* Optional themes switchable by user */
+[data-theme="cyan"] {
+  --accent: #02b8cc;
+  --accent-foreground: #08090a;
+  --accent-hover: #38d6e8;
+  --accent-soft: rgba(2, 184, 204, 0.15);
+  --accent-glow: rgba(2, 184, 204, 0.35);
+  --border-active: #02b8cc;
+}
+
+[data-theme="violet"] {
+  --accent: #6366f1;
+  --accent-foreground: #ffffff;
+  --accent-hover: #818cf8;
+  --accent-soft: rgba(99, 102, 241, 0.15);
+  --accent-glow: rgba(99, 102, 241, 0.35);
+  --border-active: #6366f1;
+}
+
+[data-theme="emerald"] {
+  --accent: #10b981;
+  --accent-foreground: #ffffff;
+  --accent-hover: #34d399;
+  --accent-soft: rgba(16, 185, 129, 0.15);
+  --accent-glow: rgba(16, 185, 129, 0.35);
+  --border-active: #10b981;
 }
 
 * {
@@ -327,4 +361,46 @@ body {
 }
 .stream-dot:nth-child(3) {
   animation-delay: 0.4s;
+}
+
+/* Refero Styles Button & Badge Utilities */
+.btn-electric {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  font-weight: 600;
+  border-radius: 9999px;
+  box-shadow: 0 0 20px var(--accent-glow);
+  transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-electric:hover {
+  background-color: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 0 28px var(--accent-glow);
+}
+
+.btn-ghost-pill {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  border-radius: 9999px;
+  transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-ghost-pill:hover {
+  background-color: var(--bg-surface-elevated);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid var(--border-subtle);
+  background-color: var(--bg-surface);
+  padding: 0.35rem 0.85rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }

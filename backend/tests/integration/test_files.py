@@ -69,9 +69,11 @@ class FakeFileService:
         return await repo.update_status(db_file_id, "indexed", chunk_count=1)
 
     @staticmethod
-    async def list_files(*, user_id, session, conversation_id=None):
+    async def list_files(
+        *, user_id, session, conversation_id=None, limit=50, offset=0
+    ):
         return await FileRepository(session).get_by_user(
-            user_id, conversation_id=conversation_id
+            user_id, conversation_id=conversation_id, limit=limit, offset=offset
         )
 
     @staticmethod

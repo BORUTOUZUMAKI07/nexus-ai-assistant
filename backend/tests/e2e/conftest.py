@@ -88,11 +88,13 @@ def _stub_tool_gateway(monkeypatch):
 
 
 @pytest.fixture(scope="session")
-def live_server():
+def live_server(redis_backend):
     """Start the app on a live socket once per session; stop it afterwards.
 
     Uses a dedicated ``nexus_e2e`` database inside a PostgreSQL testcontainer
     so the live tier stays isolated from the ``nexus_test`` integration DB.
+    Requesting ``redis_backend`` repoints the process-wide cache singletons to
+    a local Redis container before the server thread serves any request.
     """
     from _testcontainers import get_postgres_url
 

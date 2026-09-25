@@ -44,6 +44,8 @@ export const SettingsView: React.FC = () => {
   const [memoryContent, setMemoryContent] = useState("");
   const [memoryCategory, setMemoryCategory] = useState("preference");
   const [memoryBusy, setMemoryBusy] = useState(false);
+  const [memorySearch, setMemorySearch] = useState("");
+  const [memoryFilter, setMemoryFilter] = useState<string>("all");
 
   const [keyProvider, setKeyProvider] = useState("groq");
   const [keyValue, setKeyValue] = useState("");
@@ -164,6 +166,15 @@ export const SettingsView: React.FC = () => {
     );
   }
 
+  // Computed filtered memories
+  const filteredMemories = memories.filter((m) => {
+    const matchesFilter = memoryFilter === "all" || m.category === memoryFilter;
+    const matchesSearch = !memorySearch ||
+      m.content.toLowerCase().includes(memorySearch.toLowerCase()) ||
+      m.category.toLowerCase().includes(memorySearch.toLowerCase());
+    return matchesFilter && matchesSearch;
+  });
+
   return (
     <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto space-y-8">
       <div className="flex items-center justify-between">
@@ -179,10 +190,10 @@ export const SettingsView: React.FC = () => {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-50 text-white text-xs font-medium transition-all"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-50 text-[var(--accent-foreground)] text-xs font-semibold shadow-sm transition-all"
         >
           {savedNotice ? (
-            <CheckCircle2 className="w-4 h-4 text-white" />
+            <CheckCircle2 className="w-4 h-4 text-[var(--accent-foreground)]" />
           ) : saving ? (
             <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
@@ -302,7 +313,7 @@ export const SettingsView: React.FC = () => {
           <button
             onClick={handleAddKey}
             disabled={keyBusy || !keyValue.trim()}
-            className="flex items-center justify-center gap-1.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-40 px-3 py-2 text-xs font-medium text-white transition-colors"
+            className="flex items-center justify-center gap-1.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-40 px-3 py-2 text-xs font-semibold text-[var(--accent-foreground)] shadow-sm transition-colors"
           >
             {keyBusy ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -353,6 +364,11 @@ export const SettingsView: React.FC = () => {
       <div className="glass-panel p-6 space-y-4">
         <h3 className="text-sm font-medium text-white flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2">
           <Brain className="w-4 h-4 text-[var(--accent)]" /> Persistent memories
+          {memories.length > 0 && (
+            <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent-hover)] border border-[var(--accent)]/30">
+              {memories.length} active
+            </span>
+          )}
         </h3>
         <p className="text-xs text-[var(--text-muted)]">
           Facts and preferences Nexus remembers across conversations.
@@ -390,13 +406,46 @@ export const SettingsView: React.FC = () => {
           </button>
         </div>
 
-        {memories.length === 0 ? (
+        {/* Search + Category filter pills */}
+        {memories.length > 0 && (
+          <div className="space-y-2">
+            <input
+              value={memorySearch}
+              onChange={(e) => setMemorySearch(e.target.value)}
+              placeholder="Search memories…"
+              className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] placeholder:text-[var(--text-faint)]"
+            />
+            <div className="flex flex-wrap gap-1.5">
+              {["all", "preference", "role", "fact", "skill"].map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setMemoryFilter(cat)}
+                  className={`px-2.5 py-1 rounded-full text-[10px] font-medium uppercase tracking-wide transition-colors ${
+                    memoryFilter === cat
+                      ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
+                      : "bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-white"
+                  }`}
+                >
+                  {cat}
+                  {cat !== "all" && (
+                    <span className="ml-1 opacity-60">
+                      ({memories.filter((m) => m.category === cat).length})
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {filteredMemories.length === 0 ? (
           <p className="text-xs text-[var(--text-muted)]">
-            No memories stored yet.
+            {memorySearch || memoryFilter !== "all" ? "No memories match your filter." : "No memories stored yet."}
           </p>
         ) : (
           <div className="space-y-2">
-            {memories.map((m) => (
+            {filteredMemories.map((m) => (
               <div
                 key={m.id}
                 className="p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] flex items-center justify-between text-xs"

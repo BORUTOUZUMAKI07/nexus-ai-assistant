@@ -29,5 +29,7 @@ async def get_evaluations(
     usage_svc: UsageService = Depends(get_usage_service),
 ):
     return await usage_svc.get_evaluations(
-        conversation_id=conversation_id, limit=limit
+        user_id=current_user.id,
+        conversation_id=conversation_id,
+        limit=min(max(limit, 1), 200),
     )

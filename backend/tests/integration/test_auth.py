@@ -128,7 +128,7 @@ async def test_login_inactive_user_401(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_refresh_token_rotates(client):
+async def test_refresh_token_rotates(client, redis_backend):
     email = f"refresh-{uuid.uuid4().hex[:8]}@example.com"
     password = "StrongPass123!"
     await client.post(
@@ -165,7 +165,7 @@ async def test_refresh_invalid_token_401(client):
 
 
 @pytest.mark.asyncio
-async def test_refresh_token_is_single_use(client):
+async def test_refresh_token_is_single_use(client, redis_backend):
     email = f"reuse-{uuid.uuid4().hex[:8]}@example.com"
     password = "StrongPass123!"
     await client.post(

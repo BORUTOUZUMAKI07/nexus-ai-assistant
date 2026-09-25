@@ -26,8 +26,8 @@ class MCPClientManager:
 
         tools_list = []
         try:
-            # FastMCP tools
-            server_tools = await mcp.get_tools()
+            # FastMCP tools (installed ``fastmcp`` exposes ``list_tools``).
+            server_tools = await mcp.list_tools()
             for t in server_tools:
                 tools_list.append({
                     "type": "function",

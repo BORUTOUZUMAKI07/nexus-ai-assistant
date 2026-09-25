@@ -29,6 +29,23 @@ class ConversationRepository(BaseRepository[Conversation]):
         result = await self.session.exec(statement)
         return result.first()
 
+    async def get_message_by_id(
+        self, message_id: UUID, conversation_id: UUID | None = None, user_id: UUID | None = None
+    ) -> Message | None:
+        """
+        Resolves a message, optionally verifying it belongs to a conversation
+        owned by ``user_id`` (IDOR guard for cross-tenant feedback writes).
+        """
+        statement = select(Message).where(Message.id == message_id)
+        if conversation_id:
+            statement = statement.where(Message.conversation_id == conversation_id)
+        if user_id:
+            statement = statement.join(
+                Conversation, Conversation.id == Message.conversation_id
+            ).where(Conversation.user_id == user_id)
+        result = await self.session.exec(statement)
+        return result.first()
+
     async def get_all_by_user(
         self,
         user_id: UUID,
@@ -88,10 +105,17 @@ class ConversationRepository(BaseRepository[Conversation]):
             )
         )
 
-        # Token-level children of the conversation's messages.
+        # Token-level children of the conversation's messages (FK → messages.id).
         await self.session.exec(
             delete(MessageAttachment)
             .where(MessageAttachment.message_id.in_(message_sub))
+        )
+
+        # ToolCall rows reference messages.id via a NO-ACTION FK — they MUST be
+        # removed before messages or Postgres raises an IntegrityError and the
+        # whole deletion rolls back.
+        await self.session.exec(
+            delete(ToolCall).where(ToolCall.conversation_id == conv_id)
         )
 
         # Messages of the conversation (self-referential bulk delete).
@@ -99,12 +123,9 @@ class ConversationRepository(BaseRepository[Conversation]):
             delete(Message).where(Message.conversation_id == conv_id)
         )
 
-        # Usage/tool telemetry keyed to the conversation or its messages.
+        # Usage telemetry keyed to the conversation.
         await self.session.exec(
             delete(UsageLog).where(UsageLog.conversation_id == conv_id)
-        )
-        await self.session.exec(
-            delete(ToolCall).where(ToolCall.conversation_id == conv_id)
         )
 
         # Files attached to the conversation (and their chunks/metadata).
@@ -129,11 +150,6 @@ class ConversationRepository(BaseRepository[Conversation]):
         )
         result = await self.session.exec(statement)
         return list(result.all())
-
-    async def get_message_by_id(self, message_id: UUID) -> Message | None:
-        statement = select(Message).where(Message.id == message_id)
-        result = await self.session.exec(statement)
-        return result.first()
 
     async def add_message(
         self,
@@ -176,8 +192,18 @@ class ConversationRepository(BaseRepository[Conversation]):
         await self.session.refresh(message)
         return message
 
-    async def record_feedback(self, message_id: UUID, feedback: str, note: str | None = None) -> Message | None:
-        message = await self.get_message_by_id(message_id)
+    async def record_feedback(
+        self,
+        message_id: UUID,
+        feedback: str,
+        note: str | None = None,
+        conversation_id: UUID | None = None,
+        user_id: UUID | None = None,
+    ) -> Message | None:
+        """Records feedback, scoped to the owning conversation/user (IDOR guard)."""
+        message = await self.get_message_by_id(
+            message_id, conversation_id=conversation_id, user_id=user_id
+        )
         if message:
             message.user_feedback = feedback
             message.feedback_note = note
@@ -188,7 +214,9 @@ class ConversationRepository(BaseRepository[Conversation]):
 
     # Branching / Forking
     async def fork_conversation(self, user_id: UUID, parent_conv_id: UUID, fork_message_id: UUID, branch_name: str) -> Conversation:
-        parent_conv = await self.get_by_id(parent_conv_id)
+        # IDOR guard: scope the parent lookup to the requesting user so a stranger's
+        # conversation can never be forked/read.
+        parent_conv = await self.get_by_id(parent_conv_id, user_id=user_id)
         if not parent_conv:
             raise ValueError("Parent conversation not found")
 

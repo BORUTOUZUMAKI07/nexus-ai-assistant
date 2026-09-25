@@ -12,6 +12,7 @@ import {
   Pin,
   Sparkles,
   LogOut,
+  GitFork,
 } from "lucide-react";
 
 export interface ConversationItem {
@@ -28,11 +29,14 @@ interface SidebarProps {
   onSelectConversation: (id: string) => void;
   onNewChat: () => void;
   onDeleteConversation: (id: string, e: React.MouseEvent) => void;
+  onForkConversation?: (id: string, e: React.MouseEvent) => void;
   activeTab: "chat" | "files" | "settings" | "usage" | "admin";
   setActiveTab: (tab: "chat" | "files" | "settings" | "usage" | "admin") => void;
   currentModel: string;
   onChangeModel: (model: string) => void;
   onSignOut?: () => void;
+  /** When false (the default) the Admin nav item is hidden entirely. */
+  showAdmin?: boolean;
 }
 
 interface NavItem {
@@ -47,12 +51,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectConversation,
   onNewChat,
   onDeleteConversation,
+  onForkConversation,
   activeTab,
   setActiveTab,
   currentModel,
   onChangeModel,
   onSignOut,
-}) => {
+  showAdmin = false,
+}: SidebarProps) => {
   const models = [
     { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B", provider: "Groq (Fast)" },
     { id: "deepseek-r1-distill-llama-70b", name: "DeepSeek R1", provider: "Reasoning" },
@@ -66,7 +72,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { tab: "files", label: "Knowledge", Icon: FileText },
     { tab: "usage", label: "Usage", Icon: BarChart2 },
     { tab: "settings", label: "Settings", Icon: Sliders },
-    { tab: "admin", label: "Admin", Icon: Sparkles },
+    // Admin is only visible to admins; non-admins who somehow land here are
+    // bounced back to chat by the parent page.
+    ...(showAdmin ? [{ tab: "admin" as const, label: "Admin", Icon: Sparkles }] : []),
   ];
 
   const renderConversation = (c: ConversationItem) => (
@@ -83,12 +91,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-70" />
         <span className="truncate">{c.title}</span>
       </div>
-      <button
-        onClick={(e) => onDeleteConversation(c.id, e)}
-        className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--status-danger)] p-0.5 transition-opacity"
-      >
-        <Trash2 className="w-3.5 h-3.5" />
-      </button>
+      <div className="flex items-center gap-1">
+        {onForkConversation && (
+          <button
+            onClick={(e) => onForkConversation(c.id, e)}
+            title="Fork/Branch conversation"
+            className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent)] p-0.5 transition-opacity"
+          >
+            <GitFork className="w-3.5 h-3.5" />
+          </button>
+        )}
+        <button
+          onClick={(e) => onDeleteConversation(c.id, e)}
+          title="Delete conversation"
+          className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--status-danger)] p-0.5 transition-opacity"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
     </div>
   );
 
@@ -146,7 +166,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-3">
         <button
           onClick={onNewChat}
-          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-medium transition-all active:scale-[0.98]"
+          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-foreground)] text-xs font-semibold shadow-sm transition-all active:scale-[0.98]"
         >
           <Plus className="w-4 h-4" />
           <span>New conversation</span>

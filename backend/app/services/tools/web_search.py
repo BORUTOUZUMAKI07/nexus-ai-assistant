@@ -6,7 +6,10 @@ Implements the priority ladder:
   3. DuckDuckGo (zero-key resilient fallback)
 """
 import asyncio
+import ipaddress
+import socket
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 from backend.app.core.config import settings
@@ -15,6 +18,95 @@ logger = structlog.get_logger(__name__)
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 TAVILY_MAX_TOKENS = 4000
+
+# Protected network ranges an SSRF-mitigated fetch must never connect to.
+_PRIVATE_NETS = [
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.0.0.0/24"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("224.0.0.0/4"),
+    ipaddress.ip_network("240.0.0.0/4"),
+    ipaddress.ip_network("::/128"),       # unspecified
+    ipaddress.ip_network("::1/128"),      # loopback
+    ipaddress.ip_network("fc00::/7"),     # unique local
+    ipaddress.ip_network("fe80::/10"),    # link-local
+    ipaddress.ip_network("ff00::/8"),     # multicast
+]
+_SSRF_BLOCKED_HOSTS = {"localhost", "localhost.localdomain", "metadata.google.internal"}
+
+
+def _is_reserved_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(ip in net for net in _PRIVATE_NETS)
+
+
+async def _validate_public_url(url: str) -> str:
+    """
+    SSRF guard: ensures ``url`` is http(s), points at a non-reserved hostname/IP,
+    and that the host's first DNS resolution is a globally routable address.
+    Returns the sanitized URL or raises ValueError.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Only http/https URLs are allowed (got scheme '{parsed.scheme}')")
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError("URL must include a hostname")
+
+    hostname = host.rstrip(".").lower()
+    if hostname in _SSRF_BLOCKED_HOSTS or hostname.endswith(".local") or hostname.endswith(".internal"):
+        raise ValueError(f"Host '{hostname}' is not a publicly routable destination")
+
+    # Literal IP fast-path: reject reserved/private/protected ranges outright.
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        if _is_reserved_ip(ip) or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise ValueError(f"Host '{hostname}' is a private/reserved address")
+        return url
+
+    # Hostname → resolve and check every returned address.
+    resolved = await asyncio.to_thread(socket.getaddrinfo, hostname, None)
+    for _family, _socktype, _proto, _canon, sockaddr in resolved:
+        try:
+            addr = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if _is_reserved_ip(addr) or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            raise ValueError(f"Host '{hostname}' resolves to a private/reserved address ({addr})")
+    return url
+
+
+async def _fetch_with_ssrf_guard(url: str, *, timeout: float = 10.0, max_bytes: int = 1_500_000) -> tuple[int, str, bytes]:
+    """
+    Fetches ``url`` while re-validating every redirect against the SSRF guard.
+    Returns (status_code, final_url, body).
+    """
+    import httpx
+
+    current = await _validate_public_url(url)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        for _ in range(10):  # hard redirect cap
+            response = await client.get(current, headers={"User-Agent": "NexusAI/1.0"})
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("location")
+                if not location:
+                    return response.status_code, current, response.content
+                from urllib.parse import urljoin
+
+                current = await _validate_public_url(urljoin(current, location))
+                continue
+            if len(response.content) > max_bytes:
+                return response.status_code, current, response.content[:max_bytes]
+            return response.status_code, current, response.content
+    return response.status_code, current, response.content
 
 
 class WebSearchResult:
@@ -119,7 +211,8 @@ class WebSearchService:
         from firecrawl import FirecrawlApp
 
         app = FirecrawlApp(api_key=self.firecrawl_key)
-        search_res = app.search(query=query, params={"limit": max_results})
+        # Firecrawl SDK is synchronous — never block the event loop.
+        search_res = await asyncio.to_thread(app.search, query=query, params={"limit": max_results})
         if not search_res or not isinstance(search_res, dict):
             return []
 
@@ -181,9 +274,16 @@ class WebSearchService:
                 from firecrawl import FirecrawlApp
 
                 app = FirecrawlApp(api_key=self.firecrawl_key)
-                scrape_res = app.scrape_url(url, params={"formats": ["markdown"]})
-                markdown_content = scrape_res.get("markdown", "")
-                title = scrape_res.get("metadata", {}).get("title", url)
+                # SDK v1: keyword args, not params dict. Blocking SDK → run off-loop.
+                scrape_res = await asyncio.to_thread(
+                    app.scrape_url, url, formats=["markdown"]
+                )
+                if hasattr(scrape_res, "markdown"):
+                    markdown_content = scrape_res.markdown or ""
+                    title = (scrape_res.metadata or {}).get("title", url) if hasattr(scrape_res, "metadata") else url
+                else:
+                    markdown_content = scrape_res.get("markdown", "")
+                    title = scrape_res.get("metadata", {}).get("title", url)
                 return {
                     "url": url,
                     "title": title,
@@ -193,24 +293,24 @@ class WebSearchService:
             except Exception as exc:
                 logger.warning("firecrawl_scrape_failed_falling_back_to_httpx", url=url, error=str(exc))
 
-        # Fallback to basic httpx + html-to-markdown if Firecrawl is unavailable
+        # Fallback to basic httpx + html-to-markdown if Firecrawl is unavailable.
+        # Every hop is SSRF-validated (scheme, host, DNS resolution, redirects).
         try:
             import html2text
-            import httpx
 
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                response = await client.get(url, headers={"User-Agent": "NexusAI/1.0"})
-                if response.status_code == 200:
-                    h = html2text.HTML2Text()
-                    h.ignore_links = False
-                    h.ignore_images = True
-                    text = h.handle(response.text)
-                    return {
-                        "url": url,
-                        "title": url,
-                        "content": text[:15000],  # Limit content size
-                        "success": True,
-                    }
+            status_code, final_url, content = await _fetch_with_ssrf_guard(url)
+            if status_code == 200:
+                h = html2text.HTML2Text()
+                h.ignore_links = False
+                h.ignore_images = True
+                text = h.handle(content.decode("utf-8", errors="replace"))
+                return {
+                    "url": final_url,
+                    "title": final_url,
+                    "content": text[:15000],  # Limit content size
+                    "success": True,
+                }
+            logger.warning("basic_http_scrape_non_200", url=url, status_code=status_code)
         except Exception as exc:
             logger.error("basic_http_scrape_failed", url=url, error=str(exc))
 
