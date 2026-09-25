@@ -62,6 +62,12 @@ async def approve_tool_call(
 ):
     """Resolves a pending Human-In-The-Loop approval request."""
     try:
-        return await tool_svc.approve_tool_call(approval, user_id=current_user.id)
+        result = await tool_svc.approve_tool_call(approval, user_id=current_user.id)
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)
+
+    # Translate the service's domain outcome into the appropriate HTTP status.
+    # A replayed or concurrently resolved approval must not look like success.
+    if result.get("status") == "conflict":
+        raise HTTPException(status_code=409, detail=result.get("message", "Approval conflict"))
+    return result
