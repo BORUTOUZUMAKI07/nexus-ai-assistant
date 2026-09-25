@@ -170,11 +170,12 @@ class ToolGateway:
             return await web_search_service.scrape_url(url=url)
 
         elif tool_name in ("calculator", "calculate_expression"):
-            import math
             expression = args.get("expression", "")
-            # Safe math eval
-            allowed_names = {k: v for k, v in math.__dict__.items() if not k.startswith("__")}
-            result = eval(expression, {"__builtins__": None}, allowed_names)
+            # Reuse the restricted AST evaluator exposed by the MCP calculator.
+            # Import lazily to avoid initializing MCP integrations for other tools.
+            from backend.app.mcp.server import _safe_math_eval
+
+            result = _safe_math_eval(expression)
             return {"expression": expression, "result": result}
 
         else:
