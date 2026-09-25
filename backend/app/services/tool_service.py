@@ -68,11 +68,18 @@ class ToolService:
                 "message": "This tool call is not awaiting approval or has already been resolved.",
             }
 
-        await self._repo.update_tool_call(
+        resolved = await self._repo.resolve_pending_approval(
             tool_call_id=approval.tool_call_id,
-            status="approved" if approval.approved else "rejected",
-            is_approved=approval.approved,
+            user_id=user_id,
+            approved=approval.approved,
         )
+        if not resolved:
+            return {
+                "status": "conflict",
+                "tool_call_id": approval.tool_call_id,
+                "message": "This approval was already resolved or is no longer pending.",
+            }
+
         return {
             "status": "success",
             "tool_call_id": approval.tool_call_id,
