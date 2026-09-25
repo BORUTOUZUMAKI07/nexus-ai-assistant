@@ -331,3 +331,30 @@ async def test_approval_rejects_unexpected_fields(
     refreshed = await repo.get_tool_call(call.id)
     assert refreshed.status == "requires_approval"
     assert refreshed.is_approved is False
+
+@pytest.mark.asyncio
+async def test_approval_rejects_overlong_reason(
+    client, user_auth_headers, db_session, conversation_id
+):
+    """Unbounded user-provided approval reasons are rejected at validation."""
+    repo = ToolRepository(db_session)
+    call = await repo.log_tool_call(
+        conversation_id=conversation_id,
+        tool_name="web_search",
+        input_args={"query": "reason-bound"},
+        status="requires_approval",
+        requires_approval=True,
+    )
+    response = await client.post(
+        "/api/v1/tools/approval",
+        json={
+            "tool_call_id": str(call.id),
+            "approved": True,
+            "reason": "x" * 1001,
+        },
+        headers=user_auth_headers,
+    )
+    assert response.status_code == 422
+    refreshed = await repo.get_tool_call(call.id)
+    assert refreshed.status == "requires_approval"
+    assert refreshed.is_approved is False
