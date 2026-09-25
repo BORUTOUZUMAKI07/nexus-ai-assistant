@@ -126,9 +126,11 @@ class ToolGateway:
 
         # 4. Dispatch to actual tool implementation
         try:
+            # Tool arguments can contain credentials, prompts, or user content.
+            # Keep traces to non-sensitive dimensions only.
             async with trace_span(
                 f"tool_execute_{tool_name}",
-                {"tool_name": tool_name, "user_id": str(user_id), "arguments": str(arguments)[:500]},
+                {"tool_name": tool_name, "user_id": str(user_id)},
             ):
                 result = await self._dispatch(tool_name, arguments)
             duration_ms = (time.time() - start_time) * 1000
