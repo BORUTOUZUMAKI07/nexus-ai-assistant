@@ -287,3 +287,20 @@ async def test_execute_tool_hides_foreign_conversation_and_does_not_log(
         )
     ).all()
     assert calls == []
+
+@pytest.mark.asyncio
+async def test_execute_tool_rejects_client_approval_override(
+    client, user_auth_headers, conversation_id
+):
+    """Clients must not be able to submit internal approval-control fields."""
+    response = await client.post(
+        "/api/v1/tools/execute",
+        json={
+            "tool_name": "web_search",
+            "arguments": {"query": "approval bypass"},
+            "conversation_id": str(conversation_id),
+            "is_user_approved": True,
+        },
+        headers=user_auth_headers,
+    )
+    assert response.status_code == 422
