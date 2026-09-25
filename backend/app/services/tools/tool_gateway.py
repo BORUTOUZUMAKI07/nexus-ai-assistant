@@ -55,7 +55,7 @@ class ToolGateway:
             with open(self.permissions_config_path, encoding="utf-8") as f:
                 return yaml.safe_load(f) or {}
         except Exception as exc:
-            logger.warning("failed_to_load_permissions_yaml_using_defaults", error=str(exc))
+            logger.warning("failed_to_load_permissions_yaml_using_defaults", error_type=type(exc).__name__)
             return {
                 "automatic": ["web_search", "web_scrape", "calculator"],
                 "approval_required": ["execute_python", "file_write", "terminal_command"],
@@ -119,7 +119,7 @@ class ToolGateway:
         try:
             allowed, _ = await redis_client.check_rate_limit(rate_key, limit=20, window_seconds=60)
         except Exception as exc:
-            logger.warning("redis_rate_limit_skipped_redis_unavailable", error=str(exc))
+            logger.warning("redis_rate_limit_skipped_redis_unavailable", error_type=type(exc).__name__)
             allowed = True
         if not allowed:
             raise ToolExecutionError("Tool execution rate limit exceeded. Please wait a minute.")
@@ -145,11 +145,11 @@ class ToolGateway:
         except Exception as exc:
             duration_ms = (time.time() - start_time) * 1000
             metrics_collector.record_error(f"tool_{tool_name}_{type(exc).__name__}")
-            logger.error("tool_dispatch_failed", tool_name=tool_name, error=str(exc))
+            logger.error("tool_dispatch_failed", tool_name=tool_name, error_type=type(exc).__name__)
             return {
                 "status": "error",
                 "tool_name": tool_name,
-                "error": str(exc),
+                "error": "Tool execution failed. Please try again or contact support.",
                 "duration_ms": duration_ms,
             }
 
