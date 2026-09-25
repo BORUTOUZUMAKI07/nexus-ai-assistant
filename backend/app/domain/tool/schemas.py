@@ -65,4 +65,4 @@ class ToolApprovalRequest(BaseModel):
 
     tool_call_id: UUID
     approved: bool
-    reason: str | None = None
+    reason: str | None = Field(default=None, max_length=1000)
