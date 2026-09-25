@@ -181,6 +181,49 @@ async def test_approve_unknown_tool_call_404(client, user_auth_headers):
     assert resp.status_code == 404
 
 @pytest.mark.asyncio
+async def test_approval_api_hides_foreign_users_tool_call(
+    client, db_session, conversation_id
+):
+    """The HTTP endpoint must not disclose or resolve another user's call."""
+    from backend.app.core.security import create_access_token
+    from backend.app.domain.user.repository import UserRepository
+    from backend.app.domain.user.schemas import UserCreate
+
+    repo = ToolRepository(db_session)
+    call = await repo.log_tool_call(
+        conversation_id=conversation_id,
+        tool_name="web_search",
+        input_args={"query": "owner-only"},
+        status="requires_approval",
+        requires_approval=True,
+    )
+
+    foreign_user = await UserRepository(db_session).create(
+        UserCreate(
+            email=f"foreign-{uuid.uuid4().hex}@example.com",
+            username=f"foreign-{uuid.uuid4().hex}",
+            password="TestPass123!",
+            full_name="Foreign User",
+        )
+    )
+    token = create_access_token(
+        foreign_user.id,
+        role=foreign_user.role,
+        additional_claims={"email": foreign_user.email},
+    )
+    response = await client.post(
+        "/api/v1/tools/approval",
+        json={"tool_call_id": str(call.id), "approved": True},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+    refreshed = await repo.get_tool_call(call.id)
+    assert refreshed.status == "requires_approval"
+    assert refreshed.is_approved is False
+
+
+@pytest.mark.asyncio
 async def test_foreign_user_cannot_resolve_pending_tool_call(
     db_session, conversation_id
 ):
