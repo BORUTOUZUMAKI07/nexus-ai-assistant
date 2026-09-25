@@ -8,6 +8,7 @@ import uuid
 import pytest
 from backend.app.domain.tool.models import ToolCall
 from backend.app.domain.tool.schemas import ToolCreate, ToolUpdate
+from backend.app.api.v1.tools import ToolExecuteRequest
 from pydantic import ValidationError
 from backend.app.domain.tool.repository import ToolRepository
 from sqlmodel import select
@@ -387,4 +388,28 @@ def test_tool_update_accepts_partial_valid_update():
     update = ToolUpdate.model_validate({"timeout_seconds": 120})
     assert update.timeout_seconds == 120
     assert update.description is None
+
+@pytest.mark.parametrize("tool_name", ["", " " * 3, "x" * 129])
+def test_tool_execute_request_rejects_invalid_tool_name(tool_name):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ToolExecuteRequest.model_validate(
+            {
+                "tool_name": tool_name,
+                "arguments": {},
+                "conversation_id": str(uuid.uuid4()),
+            }
+        )
+
+
+def test_tool_execute_request_accepts_supported_tool_name():
+    request = ToolExecuteRequest.model_validate(
+        {
+            "tool_name": "web_search",
+            "arguments": {"query": "hello"},
+            "conversation_id": str(uuid.uuid4()),
+        }
+    )
+    assert request.tool_name == "web_search"
 
