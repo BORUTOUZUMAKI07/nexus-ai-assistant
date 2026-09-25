@@ -142,6 +142,15 @@ class QdrantService(IVectorStore):
         by bucket size, so a client-side cutoff on the fused score is the only
         cross-collection-consistent place to filter low-confidence hits.
         """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer between 1 and 100")
+        if len(dense_vector) != settings.EMBEDDING_DIMENSION:
+            raise ValueError("dense_vector dimension must match EMBEDDING_DIMENSION")
+        if len(sparse_indices) != len(sparse_values):
+            raise ValueError("sparse_indices and sparse_values must have equal lengths")
+        if any(isinstance(index, bool) or not isinstance(index, int) or index < 0 for index in sparse_indices):
+            raise ValueError("sparse indices must be non-negative integers")
+
         must_filters: list[models.Condition] = []
 
         if filter_conditions:
@@ -241,7 +250,14 @@ class QdrantService(IVectorStore):
         logger.debug("qdrant_points_upserted", count=len(qdrant_points))
 
     async def delete_by_filter(self, filter_conditions: dict[str, Any]) -> None:
-        """Deletes all points matching a filter — used when a file is deleted."""
+        """Deletes points matching a narrowly scoped, non-empty filter."""
+        if not isinstance(filter_conditions, dict) or not filter_conditions:
+            raise ValueError("A non-empty deletion filter is required")
+        allowed_keys = {"file_id", "user_id"}
+        if not set(filter_conditions).issubset(allowed_keys):
+            raise ValueError("Deletion filters may only use file_id or user_id")
+        if any(not isinstance(value, str) or not value.strip() for value in filter_conditions.values()):
+            raise ValueError("Deletion filter values must be non-empty strings")
         must_filters = [
             models.FieldCondition(key=k, match=models.MatchValue(value=v))
             for k, v in filter_conditions.items()
