@@ -248,3 +248,42 @@ async def test_foreign_user_cannot_resolve_pending_tool_call(
     assert refreshed.status == "requires_approval"
     assert refreshed.is_approved is False
 
+@pytest.mark.asyncio
+async def test_execute_tool_hides_foreign_conversation_and_does_not_log(
+    client, db_session, conversation_id
+):
+    """A caller cannot execute a tool against a conversation they do not own."""
+    from backend.app.core.security import create_access_token
+    from backend.app.domain.user.repository import UserRepository
+    from backend.app.domain.user.schemas import UserCreate
+
+    foreign_user = await UserRepository(db_session).create(
+        UserCreate(
+            email=f"exec-foreign-{uuid.uuid4().hex}@example.com",
+            username=f"exec-foreign-{uuid.uuid4().hex}",
+            password="TestPass123!",
+            full_name="Foreign Executor",
+        )
+    )
+    token = create_access_token(
+        foreign_user.id,
+        role=foreign_user.role,
+        additional_claims={"email": foreign_user.email},
+    )
+    response = await client.post(
+        "/api/v1/tools/execute",
+        json={
+            "tool_name": "web_search",
+            "arguments": {"query": "must-not-run"},
+            "conversation_id": str(conversation_id),
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+    calls = (
+        await db_session.exec(
+            select(ToolCall).where(ToolCall.conversation_id == conversation_id)
+        )
+    ).all()
+    assert calls == []
