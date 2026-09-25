@@ -445,6 +445,14 @@ async def hitl_feedback(
     except ResourceNotFoundError:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    # Modified arguments are not yet applied by the graph resume node. Reject
+    # this action explicitly rather than silently executing the original args.
+    if body.action == "modify":
+        raise HTTPException(
+            status_code=422,
+            detail="Modified tool arguments are not supported yet. Reject this request and submit a new request with the desired changes.",
+        )
+
     # Serialize with any active stream on the same thread.
     if not await _acquire_stream_slot(thread_id):
         raise HTTPException(
