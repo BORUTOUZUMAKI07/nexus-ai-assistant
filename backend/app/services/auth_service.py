@@ -53,6 +53,17 @@ class AuthService:
 
     async def login(self, identifier: str, password: str) -> TokenResponse:
         """Authenticate user by email or username + password, return token pair."""
+        # OAuth2PasswordRequestForm accepts unbounded form strings, so enforce
+        # credential limits here as well as in the JSON registration schemas.
+        if (
+            not isinstance(identifier, str)
+            or not identifier.strip()
+            or len(identifier) > 320
+            or not isinstance(password, str)
+            or not 1 <= len(password) <= 128
+        ):
+            raise AuthenticationError("Incorrect email/username or password.")
+
         user = await self._repo.get_by_email(identifier)
         if not user:
             user = await self._repo.get_by_username(identifier)
