@@ -179,3 +179,29 @@ async def test_approve_unknown_tool_call_404(client, user_auth_headers):
         headers=user_auth_headers,
     )
     assert resp.status_code == 404
+
+@pytest.mark.asyncio
+async def test_foreign_user_cannot_resolve_pending_tool_call(
+    db_session, conversation_id
+):
+    """The atomic approval resolver must enforce conversation ownership."""
+    repo = ToolRepository(db_session)
+    call = await repo.log_tool_call(
+        conversation_id=conversation_id,
+        tool_name="web_search",
+        input_args={"query": "private"},
+        status="requires_approval",
+        requires_approval=True,
+    )
+
+    resolved = await repo.resolve_pending_approval(
+        tool_call_id=call.id,
+        user_id=uuid.uuid4(),
+        approved=True,
+    )
+
+    assert resolved is False
+    refreshed = await repo.get_tool_call(call.id)
+    assert refreshed.status == "requires_approval"
+    assert refreshed.is_approved is False
+
