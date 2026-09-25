@@ -39,21 +39,37 @@ class ToolService:
             status="running",
         )
 
-        result = await tool_gateway.execute_tool(
-            tool_name=tool_name,
-            arguments=arguments,
-            user_id=user_id,
-            is_user_approved=is_user_approved,
-        )
+        try:
+            result = await tool_gateway.execute_tool(
+                tool_name=tool_name,
+                arguments=arguments,
+                user_id=user_id,
+                is_user_approved=is_user_approved,
+            )
+        except Exception as exc:
+            # Keep persisted execution history truthful if validation, rate limiting,
+            # or an unexpected gateway failure raises before returning a result.
+            await self._repo.update_tool_call(
+                tool_call_id=call_log.id,
+                status="failed",
+                error_message=f"Tool execution failed ({type(exc).__name__}).",
+            )
+            logger.error(
+                "tool_execution_failed",
+                tool_name=tool_name,
+                error_type=type(exc).__name__,
+            )
+            raise
 
+        result_status = result.get("status", "completed")
         await self._repo.update_tool_call(
             tool_call_id=call_log.id,
-            status=result.get("status", "completed"),
+            status="failed" if result_status == "error" else result_status,
             output_result=result.get("result"),
             error_message=result.get("error"),
             execution_time_ms=result.get("duration_ms", 0.0),
         )
-        logger.info("tool_executed", tool_name=tool_name, status=result.get("status"))
+        logger.info("tool_executed", tool_name=tool_name, status=result_status)
         return result
 
     async def approve_tool_call(self, approval: ToolApprovalRequest, user_id: UUID) -> dict[str, Any]:
