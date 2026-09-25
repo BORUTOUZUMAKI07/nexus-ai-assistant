@@ -7,6 +7,8 @@ import uuid
 
 import pytest
 from backend.app.domain.tool.models import ToolCall
+from backend.app.domain.tool.schemas import ToolCreate, ToolUpdate
+from pydantic import ValidationError
 from backend.app.domain.tool.repository import ToolRepository
 from sqlmodel import select
 
@@ -358,3 +360,31 @@ async def test_approval_rejects_overlong_reason(
     refreshed = await repo.get_tool_call(call.id)
     assert refreshed.status == "requires_approval"
     assert refreshed.is_approved is False
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"name": "x", "description": "desc"},
+        {"name": "bad tool name", "description": "desc"},
+        {"name": "valid_tool", "description": "desc", "timeout_seconds": 0},
+        {"name": "valid_tool", "description": "desc", "timeout_seconds": 301},
+        {"name": "valid_tool", "description": "desc", "category": ""},
+        {"name": "valid_tool", "description": "x" * 2001},
+    ],
+)
+def test_tool_create_rejects_invalid_metadata(payload):
+    with pytest.raises(ValidationError):
+        ToolCreate.model_validate(payload)
+
+
+@pytest.mark.parametrize("timeout", [0, 301])
+def test_tool_update_rejects_out_of_range_timeout(timeout):
+    with pytest.raises(ValidationError):
+        ToolUpdate.model_validate({"timeout_seconds": timeout})
+
+
+def test_tool_update_accepts_partial_valid_update():
+    update = ToolUpdate.model_validate({"timeout_seconds": 120})
+    assert update.timeout_seconds == 120
+    assert update.description is None
+
