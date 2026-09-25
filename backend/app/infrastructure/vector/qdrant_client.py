@@ -76,8 +76,13 @@ class QdrantService(IVectorStore):
                     )
                     await self.client.delete_collection(COLLECTION_NAME)
                     exists = False
+            except ValueError:
+                # A known dimension mismatch is a configuration/migration
+                # problem; never swallow it and continue with an incompatible
+                # collection.
+                raise
             except Exception as e:
-                logger.warning("qdrant_dimension_check_failed", error=str(e))
+                logger.warning("qdrant_dimension_check_failed", error_type=type(e).__name__)
 
         if not exists:
             await self.client.create_collection(
