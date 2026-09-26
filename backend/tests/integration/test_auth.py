@@ -272,3 +272,27 @@ async def test_public_auth_routes_return_429_when_rate_limited(
     assert len(calls) == 1
     assert calls[0]["limit"] == limit
     assert calls[0]["window_seconds"] == 60
+
+
+
+@pytest.mark.asyncio
+async def test_refresh_route_returns_429_when_rate_limited(client, monkeypatch):
+    from backend.app.infrastructure.cache.redis_client import redis_service
+
+    calls = []
+
+    async def deny_request(**kwargs):
+        calls.append(kwargs)
+        return False, 0
+
+    monkeypatch.setattr(redis_service, "check_rate_limit", deny_request)
+    response = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": "syntactically.valid.token"},
+    )
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "60"
+    assert len(calls) == 1
+    assert calls[0]["identifier"].startswith("auth:refresh:")
+    assert calls[0]["limit"] == 20
