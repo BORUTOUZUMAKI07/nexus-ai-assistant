@@ -16,7 +16,7 @@ from backend.app.domain.user.schemas import (
     UserSettingsUpdate,
 )
 from backend.app.services.user_settings_service import UserSettingsService
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -40,10 +40,12 @@ async def update_settings(
 
 @router.get("/memories", response_model=list[UserMemoryResponse])
 async def list_memories(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=1000000),
     current_user: User = Depends(get_current_user),
     settings_svc: UserSettingsService = Depends(get_user_settings_service),
 ):
-    return await settings_svc.list_memories(current_user.id)
+    return await settings_svc.list_memories(current_user.id, limit=limit, offset=offset)
 
 
 @router.post("/memories", response_model=UserMemoryResponse, status_code=status.HTTP_201_CREATED)
@@ -69,10 +71,12 @@ async def delete_memory(
 
 @router.get("/keys", response_model=list[APIKeyResponse])
 async def list_api_keys(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=1000000),
     current_user: User = Depends(get_current_user),
     settings_svc: UserSettingsService = Depends(get_user_settings_service),
 ):
-    return await settings_svc.list_api_keys(current_user.id)
+    return await settings_svc.list_api_keys(current_user.id, limit=limit, offset=offset)
 
 
 @router.post("/keys", response_model=APIKeyResponse, status_code=status.HTTP_201_CREATED)
