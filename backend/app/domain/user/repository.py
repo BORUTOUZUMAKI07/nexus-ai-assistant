@@ -79,11 +79,11 @@ class UserRepository(BaseRepository[User]):
         return settings
 
     # Memories
-    async def get_memories(self, user_id: UUID, active_only: bool = True) -> list[UserMemory]:
+    async def get_memories(\n        self, user_id: UUID, active_only: bool = True, limit: int = 50, offset: int = 0\n    ) -> list[UserMemory]:
         statement = select(UserMemory).where(UserMemory.user_id == user_id)
         if active_only:
             statement = statement.where(UserMemory.is_active == True)
-        statement = statement.order_by(UserMemory.created_at.desc())
+        statement = statement.order_by(UserMemory.created_at.desc()).offset(offset).limit(limit)
         result = await self.session.exec(statement)
         return list(result.all())
 
@@ -112,8 +112,14 @@ class UserRepository(BaseRepository[User]):
         return False
 
     # BYOK API Keys
-    async def get_api_keys(self, user_id: UUID) -> list[APIKey]:
-        statement = select(APIKey).where(APIKey.user_id == user_id, APIKey.is_active == True)
+    async def get_api_keys(self, user_id: UUID, limit: int = 50, offset: int = 0) -> list[APIKey]:
+        statement = (
+            select(APIKey)
+            .where(APIKey.user_id == user_id, APIKey.is_active == True)
+            .order_by(APIKey.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
         result = await self.session.exec(statement)
         return list(result.all())
 
