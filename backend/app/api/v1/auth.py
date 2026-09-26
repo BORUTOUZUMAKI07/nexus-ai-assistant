@@ -95,6 +95,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
 async def logout(
+    request: Request,
     token_in: TokenRefresh | None = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_optional),
     auth_svc: AuthService = Depends(get_auth_service),
@@ -103,6 +104,7 @@ async def logout(
     Revoke refresh token in Redis and complete logout.
     Uses auto_error=False so expired access tokens never block logging out.
     """
+    await _enforce_auth_rate_limit(request, action="logout", limit=20)
     if token_in and token_in.refresh_token:
         await auth_svc.revoke_refresh_token(token_in.refresh_token)
     return {"message": "Logged out successfully"}
