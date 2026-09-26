@@ -79,7 +79,9 @@ class UserRepository(BaseRepository[User]):
         return settings
 
     # Memories
-    async def get_memories(\n        self, user_id: UUID, active_only: bool = True, limit: int = 50, offset: int = 0\n    ) -> list[UserMemory]:
+    async def get_memories(
+        self, user_id: UUID, active_only: bool = True, limit: int = 50, offset: int = 0
+    ) -> list[UserMemory]:
         statement = select(UserMemory).where(UserMemory.user_id == user_id)
         if active_only:
             statement = statement.where(UserMemory.is_active == True)
