@@ -103,3 +103,10 @@ async def test_evaluations_round_trip(client, user_auth_headers, db_session, tes
 async def test_evaluations_requires_auth(client):
     resp = await client.get("/api/v1/usage/summary")
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["?limit=0", "?limit=201"])
+async def test_evaluations_limit_is_validated(client, user_auth_headers, query):
+    response = await client.get(f"/api/v1/usage/evaluations{query}", headers=user_auth_headers)
+    assert response.status_code == 422
