@@ -35,8 +35,8 @@ class UserSettingsService:
             user_id, settings_in.model_dump(exclude_unset=True)
         )
 
-    async def list_memories(self, user_id: UUID):
-        return await self._repo.get_memories(user_id)
+    async def list_memories(self, user_id: UUID, *, limit: int = 50, offset: int = 0):
+        return await self._repo.get_memories(user_id, limit=limit, offset=offset)
 
     async def add_memory(self, user_id: UUID, mem_in: UserMemoryCreate):
         return await self._repo.create_memory(
@@ -52,8 +52,8 @@ class UserSettingsService:
         if not success:
             raise ResourceNotFoundError("Memory", str(memory_id))
 
-    async def list_api_keys(self, user_id: UUID):
-        return await self._repo.get_api_keys(user_id)
+    async def list_api_keys(self, user_id: UUID, *, limit: int = 50, offset: int = 0):
+        return await self._repo.get_api_keys(user_id, limit=limit, offset=offset)
 
     async def save_api_key(self, user_id: UUID, provider: str, raw_key: str, label: str):
         return await self._repo.save_api_key(
