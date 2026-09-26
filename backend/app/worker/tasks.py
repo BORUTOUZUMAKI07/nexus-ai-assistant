@@ -81,6 +81,12 @@ def process_file_indexing_task(self, file_id_str: str) -> dict:
                     session=session,
                     conversation_id=db_file.conversation_id,
                 )
+                # The ingestion service reports handled pipeline failures as a
+                # result payload rather than raising. Convert those to exceptions
+                # here so Celery retries transient embedding/vector/database faults.
+                if result.get("status") != "success":
+                    reason = result.get("reason") or result.get("error") or "ingestion_failed"
+                    raise RuntimeError(f"File ingestion did not succeed: {reason}")
                 return result
             finally:
                 tmp_path.unlink(missing_ok=True)
