@@ -28,7 +28,9 @@ class TokenResponse(BaseModel):
 
 
 class TokenRefresh(BaseModel):
-    refresh_token: str
+    model_config = ConfigDict(extra="forbid")
+
+    refresh_token: str = Field(min_length=1, max_length=4096)
 
 
 class UserUpdate(BaseModel):
