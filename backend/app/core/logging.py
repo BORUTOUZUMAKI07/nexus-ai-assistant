@@ -47,6 +47,14 @@ def setup_logging() -> None:
         structlog.processors.UnicodeDecoder(),
     ]
 
+    # Log-hygiene guard (MD §8.6): scrub PII/secrets from every event before
+    # rendering when enabled. Placed after exception formatting so tracebacks
+    # are scrubbed too, and before the renderer so JSON output is clean.
+    if settings.PII_REDACTION_ENABLED:
+        from backend.app.core.redaction import redact_event
+
+        shared_processors = shared_processors + [redact_event]
+
     if settings.ENVIRONMENT == "production":
         processors = shared_processors + [
             structlog.processors.dict_tracebacks,

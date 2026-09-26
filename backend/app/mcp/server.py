@@ -29,6 +29,7 @@ except ImportError:
                     return FastAPI()
 
 import ast
+import json
 import math
 import operator
 
@@ -200,6 +201,77 @@ def get_permissions_matrix() -> str:
     from backend.app.services.tools.tool_gateway import tool_gateway
 
     return str(tool_gateway.permissions_config)
+
+
+@mcp.resource("nexus://system/capabilities")
+def get_advanced_capabilities() -> str:
+    """
+    Declare the server's advanced MCP primitive support (MD §7.7):
+    Elicitations = supported (structured human input via the signed REST
+    bridge), Roots = declared scopes, Sampling = not supported (a
+    client-owned primitive this server never initiates).
+    """
+    return json.dumps({
+        "server": "nexus-mcp",
+        "capabilities": {
+            "tools": True,
+            "resources": True,
+            "prompts": True,
+            "elicitations": {
+                "supported": True,
+                "description": "Structured human-input requests parked server-side; "
+                               "answers are accepted only from the owning user via the "
+                               "authenticated REST endpoint POST /api/v1/tools/elicitations/{id}/respond.",
+            },
+            "roots": {
+                "supported": True,
+                "declared_roots": [
+                    {"uri": "database://conversations", "description": "Conversation/usage telemetry tables"},
+                    {"uri": "qdrant://nexus_knowledge", "description": "Embedded document corpus"},
+                    {"uri": "e2b://sandbox", "description": "Ephemeral code-execution microVMs (no filesystem persistence)"},
+                ],
+                "description": "Server declares the scopes it operates within; clients control what they expose.",
+            },
+            "sampling": {
+                "supported": False,
+                "description": "Sampling is a client-owned primitive; this server never delegates generation to a host LLM.",
+            },
+        },
+    }, indent=2)
+
+
+@mcp.tool()
+async def request_user_input(conversation_id: str, message: str, schema_json: str, title: str = "Action needed") -> str:
+    """
+    Park a structured human-input request (MCP elicitation) against a
+    conversation. The user answers through the authenticated REST endpoint;
+    this tool returns the pending elicitation id (single-use, expiry-bounded).
+    """
+    from uuid import UUID
+
+    from backend.app.infrastructure.database.session import async_session_factory
+    from backend.app.services.tools.elicitations import ElicitationService
+
+    try:
+        schema = json.loads(schema_json)
+        convo_uuid = UUID(conversation_id)
+    except Exception as exc:
+        return f"Error: schema_json must be valid JSON and conversation_id a UUID — {exc}"
+
+    async with async_session_factory() as session:
+        service = ElicitationService(session)
+        parked = await service.park_elicitation(
+            conversation_id=convo_uuid,
+            schema=schema,
+            message=message,
+            title=title,
+        )
+    return (
+        f"Elicitation parked (id: {parked['elicitation_id']}). "
+        "The human answers via POST /api/v1/tools/elicitations/{id}/respond "
+        "using their own authenticated session; the request expires "
+        "automatically if unanswered."
+    )
 
 
 # ==========================================

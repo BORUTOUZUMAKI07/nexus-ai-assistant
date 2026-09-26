@@ -136,6 +136,39 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = Field(default=100)
     RATE_LIMIT_STREAM_COST: int = Field(default=5)
 
+    # ── PII Redaction ──────────────────────────────────────────────────────────
+    # When True, a structlog processor scrubs emails, phone numbers, SSNs,
+    # credit cards, IPs and bearer/secret tokens from every emitted log event
+    # (industry-grade log hygiene — MD §8.6 security/privacy checklist).
+    PII_REDACTION_ENABLED: bool = Field(default=False)
+    PII_REDACTION_REPLACEMENT: str = Field(default="[REDACTED]")
+
+    # ── Observability: Langfuse (optional, env-gated) ─────────────────────────
+    # Wires the LiteLLM success/failure callbacks into Langfuse when enabled so
+    # every completion/stream is traceable with token+cost accounting (the #1
+    # industry expectation for agent products). No-op when disabled or when the
+    # langfuse package is not installed.
+    LANGFUSE_ENABLED: bool = Field(default=False)
+    LANGFUSE_HOST: str | None = Field(default=None, description="Langfuse base URL (defaults to https://cloud.langfuse.com)")
+    LANGFUSE_PUBLIC_KEY: str | None = Field(default=None)
+    LANGFUSE_SECRET_KEY: str | None = Field(default=None)
+
+    # ── Response Caching (semantic-cost redaction, MD §8.5) ───────────────────
+    # Exact-normalized-query response cache for the synchronous message path.
+    # Keyed per user+model; stores the generated text + token/cost telemetry so
+    # repeated identical questions skip the LLM round-trip. Fail-open.
+    RESPONSE_CACHE_ENABLED: bool = Field(default=False)
+    RESPONSE_CACHE_TTL_SECONDS: int = Field(default=3600)
+    RESPONSE_CACHE_MIN_LENGTH: int = Field(default=8, description="Minimum query length eligible for caching")
+
+    # ── Experiments / Canary-Shadow (MD §6.6 safe release) ────────────────────
+    # Deterministic user-bucket assignment for shadow/gradual prompt release.
+    # EXPERIMENTS_CONFIG_PATH may point at a YAML file describing experiments
+    # and variant weights; when unset, experiments resolve to their default
+    # variant (zero behavioral change).
+    EXPERIMENTS_CONFIG_PATH: str | None = Field(default=None)
+    EXPERIMENTS_DEFAULT_BUCKETS: int = Field(default=100)
+
     # ── RAG ────────────────────────────────────────────────────────────────────
     RAG_TOP_K: int = Field(default=20)
     RAG_RERANK_TOP_N: int = Field(default=5)

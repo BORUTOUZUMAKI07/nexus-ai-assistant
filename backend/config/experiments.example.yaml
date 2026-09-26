@@ -1,0 +1,12 @@
+# Canary/Shadow experiments (MD §6.6 safe-release pattern).
+# Point EXPERIMENTS_CONFIG_PATH at a file like this to enable gradual,
+# bucket-consistent release of prompt/model variants. Users are assigned to a
+# variant deterministically (HMAC of experiment+user), so a user never flaps
+# between variants across requests.
+#
+# Copy to `experiments.yaml` and enable only when you actually want a canary.
+experiments:
+  chat_system_prompt:
+    variants: ["control", "canary_balanced"]
+    weights: [90, 10]
+    default: "control"

@@ -15,6 +15,7 @@ from backend.app.core.exceptions import (
 )
 from backend.app.domain.tool.repository import ToolRepository
 from backend.app.domain.tool.schemas import ToolApprovalRequest
+from backend.app.services.tools.elicitations import ELICITATION_TOOL_NAME
 from backend.app.services.tools.tool_gateway import tool_gateway
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -84,6 +85,14 @@ class ToolService:
         pending = await self._repo.get_tool_call(approval.tool_call_id, user_id=user_id)
         if not pending:
             raise ResourceNotFoundError("ToolCall", str(approval.tool_call_id))
+
+        if pending.tool_name == ELICITATION_TOOL_NAME:
+            # Elicitations are structured human-input requests, not tool runs:
+            # approving them via /tools/approval would attempt to "execute" a
+            # synthetic tool. Route through the elicitation endpoint instead.
+            raise ApprovalConsumedError(
+                message="Elicitations are resolved via POST /tools/elicitations/{id}/respond, not /tools/approval."
+            )
 
         if approval.approved:
             created_at = pending.created_at
