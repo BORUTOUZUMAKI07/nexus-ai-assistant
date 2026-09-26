@@ -214,3 +214,30 @@ async def test_fork_copies_messages_up_to_fork_point(
     assert len(messages) == 2
     assert messages[0]["role"] == "user"
     assert messages[1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["?limit=0", "?limit=101", "?offset=-1", "?offset=1000001"])
+async def test_conversation_pagination_rejects_out_of_bounds(client, user_auth_headers, query):
+    response = await client.get(f"/api/v1/conversations{query}", headers=user_auth_headers)
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_conversation_create_rejects_unknown_fields(client, user_auth_headers):
+    response = await client.post(
+        "/api/v1/conversations",
+        json={"title": "Bounded", "unexpected_admin_flag": True},
+        headers=user_auth_headers,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_conversation_title_length_is_bounded(client, user_auth_headers):
+    response = await client.post(
+        "/api/v1/conversations",
+        json={"title": "x" * 201},
+        headers=user_auth_headers,
+    )
+    assert response.status_code == 422
