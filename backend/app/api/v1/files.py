@@ -23,7 +23,7 @@ from backend.app.domain.file.schemas import (
 from backend.app.domain.user.models import User
 from backend.app.services.file_service import FileService
 from backend.app.services.rag_service import RAGService
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi import File as FastAPIFile
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -105,8 +105,8 @@ async def upload_file(
 @router.get("", response_model=list[FileResponse])
 async def list_files(
     conversation_id: UUID | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=1000000),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
     file_svc: FileService = Depends(get_file_service),
@@ -116,8 +116,8 @@ async def list_files(
         user_id=current_user.id,
         session=session,
         conversation_id=conversation_id,
-        limit=min(max(limit, 1), 100),
-        offset=max(offset, 0),
+        limit=limit,
+        offset=offset,
     )
 
 
