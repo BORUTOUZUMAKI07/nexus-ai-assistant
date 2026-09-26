@@ -25,6 +25,12 @@ tools:
     timeout_seconds: 5
     required_roles: ["user", "admin", "moderator"]
 
+  calculate_expression:
+    description: "Safely evaluate mathematical expressions (MCP alias of calculator)"
+    mode: "automatic"
+    timeout_seconds: 5
+    required_roles: ["user", "admin", "moderator"]
+
   web_scrape:
     description: "Scrape and clean a specific URL content using Firecrawl"
     mode: "automatic"

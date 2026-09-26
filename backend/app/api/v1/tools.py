@@ -22,7 +22,11 @@ class ToolExecuteRequest(BaseModel):
     tool_name: str
     arguments: dict[str, Any]
     conversation_id: UUID
-    is_user_approved: bool = False
+    # NOTE: there is intentionally NO is_user_approved field here. Approval is a
+    # server-side decision (SEC-01): a client must never be able to declare its
+    # own approval. Approval-required tools return status=requires_approval plus
+    # a tool_call_id; the human approves that exact call via POST /tools/approval,
+    # and only THEN does the server execute it.
 
 
 @router.get("", response_model=list[dict[str, Any]])
@@ -52,7 +56,6 @@ async def execute_tool_endpoint(
         arguments=req.arguments,
         conversation_id=req.conversation_id,
         user_id=current_user.id,
-        is_user_approved=req.is_user_approved,
     )
 
 

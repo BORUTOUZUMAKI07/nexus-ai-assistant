@@ -8,7 +8,11 @@ import { TOKEN_COOKIE } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+// Server-only backend address (see lib/proxy.ts — never a NEXT_PUBLIC_ var).
+const BACKEND_URL =
+  process.env.BACKEND_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://127.0.0.1:8000";
 
 export async function POST(req: NextRequest) {
   const cookieStore = await cookies();

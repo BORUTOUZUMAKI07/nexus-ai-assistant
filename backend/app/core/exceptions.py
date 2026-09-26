@@ -175,6 +175,18 @@ class ToolPermissionError(NexusException):
     message = "Tool execution requires explicit human-in-the-loop (HITL) approval."
 
 
+class ApprovalExpiredError(NexusException):
+    status_code = status.HTTP_410_GONE
+    error_code = "APPROVAL_EXPIRED"
+    message = "The approval request has expired and can no longer be resolved."
+
+
+class ApprovalConsumedError(NexusException):
+    status_code = status.HTTP_409_CONFLICT
+    error_code = "APPROVAL_ALREADY_CONSUMED"
+    message = "This approval request has already been resolved and cannot be reused."
+
+
 class SandboxTimeoutError(NexusException):
     status_code = status.HTTP_504_GATEWAY_TIMEOUT
     error_code = "SANDBOX_TIMEOUT"

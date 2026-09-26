@@ -9,7 +9,15 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { TOKEN_COOKIE } from "./auth";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+// Server-only backend address. Do NOT use a NEXT_PUBLIC_ variable here: this
+// value must never reach the client bundle (it exposes the internal host/port
+// and bakes the address in at build time). BACKEND_URL is read from the
+// server environment at request time; the NEXT_PUBLIC_API_URL fallback keeps
+// older local setups working.
+const BACKEND_URL =
+  process.env.BACKEND_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://127.0.0.1:8000";
 
 export async function backendFetch(path: string, init?: RequestInit) {
   const cookieStore = await cookies();

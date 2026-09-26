@@ -58,3 +58,7 @@ class AgentState(TypedDict):
     # Error handling & Recovery
     retry_count: int
     error: str | None
+
+    # ARQ (Attentive Reasoning Queries) — constraint check output from orchestrator
+    # Keys: needs_tool, safety_flag, recency_needed, ambiguous — all bool.
+    arq_flags: dict[str, bool] | None

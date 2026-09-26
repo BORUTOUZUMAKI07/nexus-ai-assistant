@@ -28,6 +28,7 @@ from backend.app.domain.conversation.schemas import (
 from backend.app.domain.usage.schemas import UsageLogCreate
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.infrastructure.database.session import async_session_factory
 from backend.app.services.conversation_service import ConversationService
 from backend.app.services.evaluation.guardrail_service import guardrail_service
 from backend.app.services.evaluation.quality_service import quality_service
@@ -47,14 +48,18 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 # fresh turn would double-run tools and corrupt the checkpointer. Guards track
 # which threads are actively streaming so runaway concurrent runs are rejected
 # (409) instead of duplicating execution.
+#
+# A single registry lock guards the active set. It is held only for O(1)
+# bookkeeping — never during streaming — so contention is negligible, while the
+# check-and-add is atomic (a release racing two acquires can never let both
+# through) and there is no per-thread dict to leak or evict.
 _active_stream_threads: set[str] = set()
-_stream_thread_locks: dict[str, asyncio.Lock] = {}
+_stream_registry_lock = asyncio.Lock()
 
 
 async def _acquire_stream_slot(thread_id: str) -> bool:
     """Claims the streaming slot for ``thread_id``. Returns False if already in use."""
-    lock = _stream_thread_locks.setdefault(thread_id, asyncio.Lock())
-    async with lock:
+    async with _stream_registry_lock:
         if thread_id in _active_stream_threads:
             return False
         _active_stream_threads.add(thread_id)
@@ -62,8 +67,7 @@ async def _acquire_stream_slot(thread_id: str) -> bool:
 
 
 async def _release_stream_slot(thread_id: str) -> None:
-    lock = _stream_thread_locks.setdefault(thread_id, asyncio.Lock())
-    async with lock:
+    async with _stream_registry_lock:
         _active_stream_threads.discard(thread_id)
 
 
@@ -242,6 +246,15 @@ async def stream_conversation(
                 ]
                 text_to_validate = " ".join(text_parts).strip()
                 sanitized_text = guardrail_service.validate_input(text_to_validate) if text_to_validate else ""
+                # In-place rewrite of the text parts so the graph never sees the
+                # original (unsanitized) content — parity with the text branch.
+                if isinstance(user_messages[-1], dict) and isinstance(user_messages[-1].get("content"), list):
+                    user_messages[-1]["content"] = [
+                        {**p, "text": sanitized_text}
+                        if isinstance(p, dict) and p.get("type") == "text"
+                        else p
+                        for p in user_messages[-1]["content"]
+                    ]
                 user_msg = await conv_svc.add_message(
                     conversation_id=convo_uuid,
                     role="user",
@@ -339,52 +352,61 @@ async def stream_conversation(
             latency_ms = (time.time() - start_time) * 1000
 
             # Persist the assistant reply so history survives the (stateless) graph.
+            # The writes run on a FRESH dedicated session rather than the
+            # request-scoped one: when a client disconnects mid-stream, FastAPI
+            # may tear down the request session (close/rollback) while this
+            # block is still running — a fresh session is never closed out from
+            # under us, so streaming replies are not lost to session teardown.
             if emitted_text.strip():
                 try:
-                    prompt_tok = ai_client.count_tokens(
-                        " ".join(
-                            m.get("content", "") if isinstance(m, dict) else str(m)
-                            for m in user_messages
-                        ),
-                        settings.DEFAULT_MODEL,
-                    )
-                    comp_tok = ai_client.count_tokens(emitted_text, settings.DEFAULT_MODEL)
-                    cost_usd = cost_tracking_service.calculate_cost(settings.DEFAULT_MODEL, prompt_tok, comp_tok)
-                    quality = quality_service.evaluate_response_quality(
-                        user_messages[-1].get("content", "") if user_messages and isinstance(user_messages[-1], dict) else (str(user_messages[-1]) if user_messages else ""),
-                        emitted_text,
-                        prompt_tok + comp_tok,
-                        latency_ms,
-                    )
+                    async with async_session_factory() as session:
+                        persist_conv_svc = ConversationService(session)
+                        persist_usage_svc = UsageService(session)
+                        prompt_tok = ai_client.count_tokens(
+                            " ".join(
+                                m.get("content", "") if isinstance(m, dict) else str(m)
+                                for m in user_messages
+                            ),
+                            settings.DEFAULT_MODEL,
+                        )
+                        comp_tok = ai_client.count_tokens(emitted_text, settings.DEFAULT_MODEL)
+                        cost_usd = cost_tracking_service.calculate_cost(settings.DEFAULT_MODEL, prompt_tok, comp_tok)
+                        quality = quality_service.evaluate_response_quality(
+                            user_messages[-1].get("content", "") if user_messages and isinstance(user_messages[-1], dict) else (str(user_messages[-1]) if user_messages else ""),
+                            emitted_text,
+                            prompt_tok + comp_tok,
+                            latency_ms,
+                        )
 
-                    assistant_msg = await conv_svc.add_message(
-                        conversation_id=convo_uuid,
-                        role="assistant",
-                        content=emitted_text,
-                        parent_message_id=user_msg.id if user_msg else None,
-                        model=settings.DEFAULT_MODEL,
-                    )
-                    await usage_svc._repo.log_usage(
-                        UsageLogCreate(
-                            user_id=current_user.id,
+                        assistant_msg = await persist_conv_svc.add_message(
                             conversation_id=convo_uuid,
-                            message_id=assistant_msg.id,
+                            role="assistant",
+                            content=emitted_text,
+                            parent_message_id=user_msg.id if user_msg else None,
                             model=settings.DEFAULT_MODEL,
+                        )
+                        await persist_usage_svc._repo.log_usage(
+                            UsageLogCreate(
+                                user_id=current_user.id,
+                                conversation_id=convo_uuid,
+                                message_id=assistant_msg.id,
+                                model=settings.DEFAULT_MODEL,
+                                prompt_tokens=prompt_tok,
+                                completion_tokens=comp_tok,
+                                latency_ms=latency_ms,
+                                cost_usd=cost_usd,
+                                metadata_json={"quality": quality},
+                            )
+                        )
+                        await cost_tracking_service.record_cost_log(
+                            session=session,
+                            user_id=current_user.id,
+                            model=settings.DEFAULT_MODEL,
+                            provider="groq",
                             prompt_tokens=prompt_tok,
                             completion_tokens=comp_tok,
-                            latency_ms=latency_ms,
-                            cost_usd=cost_usd,
-                            metadata_json={"quality": quality},
                         )
-                    )
-                    await cost_tracking_service.record_cost_log(
-                        session=usage_svc._repo.session,
-                        user_id=current_user.id,
-                        model=settings.DEFAULT_MODEL,
-                        provider="groq",
-                        prompt_tokens=prompt_tok,
-                        completion_tokens=comp_tok,
-                    )
+                        await session.commit()
                 except Exception as exc:
                     logger.warning("agentic_assistant_message_persist_failed", thread_id=thread_id, error=str(exc))
 
@@ -398,9 +420,23 @@ async def stream_conversation(
                     yield f"data: {json.dumps({'type': 'critique', 'critique': critique, 'revision_count': values.get('revision_count', 0)})}\n\n"
                 yield f"data: {json.dumps({'type': 'quality', 'evidence_score': values.get('evidence_score', 0.0), 'evidence_gate_passed': values.get('evidence_gate_passed', None)})}\n\n"
             if snapshot is not None and getattr(snapshot, "next", None):
+                # LangGraph stores interrupts on snapshot.tasks[].interrupts (the
+                # __interrupt__ values key does not exist). surface the latest
+                # interrupt value + thread id so the client can render the
+                # pending action and POST the resume to the right conversation.
+                interrupt_payload = None
+                for task in snapshot.tasks or []:
+                    intr_list = getattr(task, "interrupts", None) or []
+                    if intr_list:
+                        interrupt_payload = getattr(intr_list[-1], "value", None)
+                        break
                 payload = json.dumps({
                     "type": "hitl_request",
+                    "thread_id": thread_id,
                     "state": {"next": list(snapshot.next), "ts": str(snapshot.created_at)},
+                    "tool_name": (interrupt_payload or {}).get("tool_name"),
+                    "arguments": (interrupt_payload or {}).get("arguments"),
+                    "reason": (interrupt_payload or {}).get("reason"),
                 })
                 yield f"data: {payload}\n\n"
 
@@ -409,10 +445,10 @@ async def stream_conversation(
         except Exception as exc:
             logger.exception("stream_error", thread_id=thread_id, error=str(exc))
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
-
         finally:
             await _release_stream_slot(thread_id)
-            yield "data: [DONE]\n\n"
+
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -458,7 +494,13 @@ async def hitl_feedback(
         snapshot = await orchestrator_graph.aget_state(
             {"configurable": {"thread_id": thread_id, "user_id": str(current_user.id)}}
         )
-        pending_interrupts = (snapshot.values.get("__interrupt__") or []) if snapshot and snapshot.values else []
+        # LangGraph exposes interrupts under snapshot.tasks[].interrupts, NOT
+        # snapshot.values["__interrupt__"] — the old read was always empty,
+        # which made every HITL resume return a false 400.
+        pending_interrupts = []
+        if snapshot is not None:
+            for task in snapshot.tasks or []:
+                pending_interrupts.extend(getattr(task, "interrupts", None) or [])
         if not pending_interrupts:
             raise HTTPException(status_code=400, detail="This conversation is not waiting for an approval.")
         from backend.app.agents.orchestrator.hitl import is_approval_expired

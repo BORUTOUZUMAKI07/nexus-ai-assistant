@@ -57,7 +57,11 @@ class AuthService:
         if not user:
             user = await self._repo.get_by_username(identifier)
 
-        if not user or not verify_password(password, user.hashed_password):
+        if (
+            not user
+            or user.hashed_password is None
+            or not verify_password(password, user.hashed_password)
+        ):
             raise AuthenticationError("Incorrect email/username or password.")
         if not user.is_active:
             raise AuthenticationError("User account is inactive.")

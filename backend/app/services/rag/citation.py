@@ -56,7 +56,10 @@ class CitationService:
         and token overlap with source chunks to estimate grounding score (0.0 to 1.0).
         """
         if not citations:
-            return 1.0  # No RAG context provided, metric not applicable
+            # No evidence retrieved → the response is ungrounded. Returning 1.0
+            # here was an inverted fail mode: retrieval failure maximized the
+            # trust score.
+            return 0.0
 
         citation_markers = re.findall(r"\[(\d+)\]", response_text)
         if not citation_markers:

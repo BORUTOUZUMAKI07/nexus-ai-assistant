@@ -49,6 +49,20 @@ async def get_current_user(
     if payload.get("type") != "access":
         raise credentials_exception
 
+    # Reject access tokens that were blacklisted on logout. Fail-open when the
+    # cache is unavailable so an offline Redis never bricks authentication.
+    # NOTE: only the cache READ sits in the try — the raise must stay outside,
+    # or the except would swallow the 401 it just produced.
+    jti = payload.get("jti")
+    if jti:
+        is_blacklisted = False
+        try:
+            is_blacklisted = await get_cache_service().is_token_blacklisted(str(jti))
+        except Exception:
+            is_blacklisted = False
+        if is_blacklisted:
+            raise credentials_exception
+
     user_id_str: str = payload.get("sub")
     if user_id_str is None:
         raise credentials_exception
