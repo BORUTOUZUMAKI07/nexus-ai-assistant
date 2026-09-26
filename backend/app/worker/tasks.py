@@ -46,17 +46,26 @@ def process_file_indexing_task(self, file_id_str: str) -> dict:
             repo = FileRepository(session)
             db_file = await repo.get_by_id(file_id)
             if not db_file:
-                logger.error("celery_file_not_found", file_id=file_id_str)
+                logger.warning("celery_file_not_found", file_id=file_id_str)
                 return {"status": "failed", "error": "file_not_found"}
+
+            if db_file.status == "indexed":
+                logger.info("celery_indexing_already_completed", file_id=file_id_str)
+                return {"status": "skipped", "reason": "already_indexed"}
+
+            claimed = await repo.claim_indexing(file_id)
+            if not claimed:
+                logger.info("celery_indexing_claim_unavailable", file_id=file_id_str, current_status=db_file.status)
+                return {"status": "skipped", "reason": "already_claimed_or_not_pending"}
 
             # storage_path is a Supabase object path, not a local file — pull the
             # raw bytes down to a temp file before chunking.
             try:
                 raw_bytes = await storage_client.download(db_file.storage_path)
             except Exception as exc:
-                logger.error("celery_file_download_failed", file_id=file_id_str, error=str(exc))
                 await repo.update_status(file_id, status="failed", error_message="Storage download failed")
-                return {"status": "failed", "error": "storage_download_failed"}
+                logger.warning("celery_file_download_failed", file_id=file_id_str, error_type=type(exc).__name__, retry_count=self.request.retries)
+                raise
 
             suffix = Path(db_file.original_filename or db_file.filename).suffix
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -79,7 +88,14 @@ def process_file_indexing_task(self, file_id_str: str) -> dict:
     try:
         return run_async(_execute())
     except Exception as exc:
-        logger.exception("celery_indexing_failed", file_id=file_id_str, error=str(exc))
+        logger.error("celery_indexing_failed", file_id=file_id_str, error_type=type(exc).__name__, retry_count=self.request.retries)
+        async def _mark_retryable_failure():
+            async with async_session_factory() as session:
+                await FileRepository(session).update_status(file_id, status="failed", error_message="Indexing temporarily failed")
+        try:
+            run_async(_mark_retryable_failure())
+        except Exception as status_exc:
+            logger.warning("celery_indexing_failure_status_update_failed", file_id=file_id_str, error_type=type(status_exc).__name__)
         raise self.retry(exc=exc)
 
 
