@@ -241,38 +241,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   // ── Voice recording ──────────────────────────────────────────────────────
 
-  const startRecording = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType });
-      audioChunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        await transcribeBlob(blob);
-      };
-      recorder.start(250); // collect chunks every 250 ms
-      mediaRecorderRef.current = recorder;
-      setIsRecording(true);
-    } catch {
-      alert("Microphone access denied. Please allow microphone access in your browser.");
-    }
-  }, []);
-
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
-    }
-    setIsRecording(false);
-  }, []);
-
-  const transcribeBlob = async (blob: Blob) => {
+  const transcribeBlob = useCallback(async (blob: Blob) => {
     setIsTranscribing(true);
     try {
       const formData = new FormData();
@@ -304,7 +273,40 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     } finally {
       setIsTranscribing(false);
     }
-  };
+  }, []);
+
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        await transcribeBlob(blob);
+      };
+      recorder.start(250); // collect chunks every 250 ms
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+    } catch {
+      alert("Microphone access denied. Please allow microphone access in your browser.");
+    }
+  }, [transcribeBlob]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+  }, []);
+
+
 
   const handleMicClick = () => {
     if (isRecording) {
