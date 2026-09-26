@@ -8,7 +8,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { TOKEN_COOKIE } from "@/lib/auth";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+// Server-only backend address (see lib/proxy.ts — never a NEXT_PUBLIC_ var).
+const BACKEND_URL =
+  process.env.BACKEND_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://127.0.0.1:8000";
 
 export const runtime = "nodejs"; // Must be Node.js for native fetch streaming
 
@@ -18,12 +22,28 @@ const CONVERSATION_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ detail: "invalid_json_body" }, { status: 400 });
+  }
   const {
     messages,
     conversationId,
     mode = "normal",
-  } = body;
+  } = body as {
+    messages?: unknown;
+    conversationId?: unknown;
+    mode?: unknown;
+  };
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return NextResponse.json({ detail: "messages_required" }, { status: 400 });
+  }
+  if (messages.length > 80) {
+    return NextResponse.json({ detail: "too_many_messages" }, { status: 400 });
+  }
 
   if (
     conversationId != null &&
@@ -37,6 +57,8 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
+
+  const streamMode = typeof mode === "string" ? mode : "normal";
 
   const cookieStore = await cookies();
   const accessToken = cookieStore.get(TOKEN_COOKIE)?.value;
@@ -57,9 +79,12 @@ export async function POST(req: NextRequest) {
             },
             body: JSON.stringify({
               messages,
-              mode,
+              mode: streamMode,
               stream: true,
             }),
+            // Forward the client abort so pressing Stop cancels the upstream
+            // LLM stream instead of draining it to completion (token billing).
+            signal: req.signal,
           }
         );
 
@@ -74,6 +99,7 @@ export async function POST(req: NextRequest) {
         const reader = backendRes.body.getReader();
         const textDecoder = new TextDecoder();
         let buffer = "";
+        let doneReceived = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -86,7 +112,13 @@ export async function POST(req: NextRequest) {
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
             const data = line.slice(6).trim();
-            if (data === "[DONE]") break;
+            if (data === "[DONE]") {
+              // Terminate the outer read loop, not just this line loop — the
+              // backend closes its generator right after, but a keep-alive
+              // must not leave us looping forever.
+              doneReceived = true;
+              break;
+            }
 
             try {
               const parsed = JSON.parse(data);
@@ -132,6 +164,8 @@ export async function POST(req: NextRequest) {
                 const data = {
                   ...parsed,
                   type: "hitl_request",
+                  // Backend now sends the resolved UUID in the event; fall back
+                  // to the client-supplied id only for legacy payloads.
                   thread_id: parsed.thread_id ?? conversationId ?? "new",
                   request:
                     parsed.reason ??
@@ -160,6 +194,7 @@ export async function POST(req: NextRequest) {
               // Non-JSON SSE lines are skipped
             }
           }
+          if (doneReceived) break;
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Stream error";

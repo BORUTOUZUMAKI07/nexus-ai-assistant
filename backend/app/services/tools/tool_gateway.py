@@ -16,7 +16,7 @@ from uuid import UUID
 import structlog
 import yaml
 from backend.app.core.exceptions import ToolExecutionError
-from backend.app.infrastructure.cache.redis_client import redis_client
+from backend.app.infrastructure.cache.redis_client import redis_service
 from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.tools.code_execution import code_executor
@@ -115,9 +115,9 @@ class ToolGateway:
         # 3. Rate Limit Check (20 tool calls per minute per user)
         # Fail-open when Redis is unavailable: rate limiting degrades gracefully
         # instead of crashing the request, since Redis is not core to execution.
-        rate_key = f"rate_limit:tool:{user_id}"
+        rate_key = f"tool:{user_id}"
         try:
-            allowed, _ = await redis_client.check_rate_limit(rate_key, limit=20, window_seconds=60)
+            allowed, _ = await redis_service.check_rate_limit(rate_key, limit=20, window_seconds=60)
         except Exception as exc:
             logger.warning("redis_rate_limit_skipped_redis_unavailable", error=str(exc))
             allowed = True
@@ -170,11 +170,11 @@ class ToolGateway:
             return await web_search_service.scrape_url(url=url)
 
         elif tool_name in ("calculator", "calculate_expression"):
-            import math
+            # Restricted AST interpreter — NEVER eval() (sandbox escape vector).
+            # Mirrors mcp/server._safe_math_eval; lazy import avoids cycles.
+            from backend.app.mcp.server import _safe_math_eval
             expression = args.get("expression", "")
-            # Safe math eval
-            allowed_names = {k: v for k, v in math.__dict__.items() if not k.startswith("__")}
-            result = eval(expression, {"__builtins__": None}, allowed_names)
+            result = _safe_math_eval(expression)
             return {"expression": expression, "result": result}
 
         else:

@@ -7,6 +7,7 @@ from uuid import UUID
 from backend.app.domain.base_repository import BaseRepository
 from backend.app.domain.conversation.models import Conversation
 from backend.app.domain.tool.models import Tool, ToolCall
+from sqlalchemy import update
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -122,3 +123,34 @@ class ToolRepository(BaseRepository[Tool]):
             ).where(Conversation.user_id == user_id)
         result = await self.session.exec(statement)
         return result.first()
+
+    async def claim_tool_call_for_approval(
+        self, tool_call_id: UUID, user_id: UUID, approved: bool
+    ) -> ToolCall | None:
+        """
+        Atomically resolve a pending tool call (SEC-06 single-use consumption).
+
+        An UPDATE ... RETURNING free of the ``is_approved IS NULL`` guard is the
+        commit point of an approval: exactly one of N concurrent approve/reject
+        requests can claim the row. Returns the claimed call or None when it does
+        not exist, is not owned by ``user_id``, or was already resolved.
+        """
+        stmt = (
+            update(ToolCall)
+            .where(
+                ToolCall.id == tool_call_id,
+                ToolCall.is_approved.is_(None),
+                ToolCall.conversation_id.in_(
+                    select(Conversation.id).where(Conversation.user_id == user_id)
+                ),
+            )
+            .values(status="running" if approved else "rejected", is_approved=approved)
+            .returning(ToolCall)
+        )
+        result = await self.session.execute(stmt)
+        row = result.first()
+        await self.session.commit()
+        if row is None:
+            return None
+        await self.session.refresh(row[0])
+        return row[0]

@@ -28,6 +28,8 @@ describe("ChatInput", () => {
       enableWeb: false,
       enableCode: false,
       attachments: [],
+      agentMode: "deep",
+      imageDataUrl: undefined,
     })
     expect((textarea as HTMLTextAreaElement).value).toBe("")
   })
@@ -44,6 +46,8 @@ describe("ChatInput", () => {
       enableWeb: false,
       enableCode: false,
       attachments: [],
+      agentMode: "deep",
+      imageDataUrl: undefined,
     })
   })
 
@@ -62,6 +66,8 @@ describe("ChatInput", () => {
       enableWeb: true,
       enableCode: true,
       attachments: [],
+      agentMode: "deep",
+      imageDataUrl: undefined,
     })
   })
 

@@ -4,6 +4,7 @@ Pure HTTP transport layer — delegates all auth use cases to AuthService (SRP +
 """
 from backend.app.api.deps import get_auth_service, get_current_user
 from backend.app.core.exceptions import AuthenticationError, UserAlreadyExistsError
+from backend.app.core.security import decode_token
 from backend.app.domain.user.models import User
 from backend.app.domain.user.schemas import (
     TokenRefresh,
@@ -11,9 +12,11 @@ from backend.app.domain.user.schemas import (
     UserCreate,
     UserResponse,
 )
+from backend.app.infrastructure.cache.redis_client import get_cache_service
 from backend.app.services.auth_service import AuthService
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordRequestForm
+import time
 
 bearer_optional = HTTPBearer(auto_error=False)
 
@@ -72,6 +75,19 @@ async def logout(
     Revoke refresh token in Redis and complete logout.
     Uses auto_error=False so expired access tokens never block logging out.
     """
+    # Blacklist the current access token (by jti) so it dies immediately
+    # instead of living out its TTL. Fail-open: a malformed/expired token or
+    # an offline Redis must never prevent logout.
+    if credentials and credentials.credentials:
+        try:
+            payload = decode_token(credentials.credentials)
+            jti = payload.get("jti")
+            if jti:
+                exp = payload.get("exp")
+                ttl_seconds = max(1, int(exp) - int(time.time())) if exp else 3600
+                await get_cache_service().blacklist_token(str(jti), ttl_seconds)
+        except Exception:
+            pass
     if token_in and token_in.refresh_token:
         await auth_svc.revoke_refresh_token(token_in.refresh_token)
     return {"message": "Logged out successfully"}

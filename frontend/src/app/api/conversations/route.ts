@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { proxyJson } from "@/lib/proxy";
 
 export async function GET(req: NextRequest) {
@@ -8,7 +8,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ detail: "invalid_json_body" }, { status: 400 });
+  }
   return proxyJson("/conversations", {
     method: "POST",
     body: JSON.stringify(body),

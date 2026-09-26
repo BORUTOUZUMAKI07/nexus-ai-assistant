@@ -159,11 +159,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       enableWeb,
       enableCode,
       attachments,
+      agentMode,
       imageDataUrl: imageDataUrl ?? undefined,
     };
-    if (agentMode !== "deep") {
-      options.agentMode = agentMode;
-    }
     onSendMessage(content, options);
     setContent("");
     setAttachments([]);
@@ -241,37 +239,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   // ── Voice recording ──────────────────────────────────────────────────────
 
-  const startRecording = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType });
-      audioChunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        await transcribeBlob(blob);
-      };
-      recorder.start(250); // collect chunks every 250 ms
-      mediaRecorderRef.current = recorder;
-      setIsRecording(true);
-    } catch {
-      alert("Microphone access denied. Please allow microphone access in your browser.");
-    }
-  }, []);
-
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
-    }
-    setIsRecording(false);
-  }, []);
-
   const transcribeBlob = async (blob: Blob) => {
     setIsTranscribing(true);
     try {
@@ -305,6 +272,52 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       setIsTranscribing(false);
     }
   };
+
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        await transcribeBlob(blob);
+      };
+      recorder.start(250); // collect chunks every 250 ms
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+    } catch {
+      alert("Microphone access denied. Please allow microphone access in your browser.");
+    }
+  }, [transcribeBlob]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+  }, []);
+
+  // Release the microphone if the component unmounts mid-recording
+  // (switching conversations or signing out while the mic is live).
+  useEffect(() => {
+    return () => {
+      const rec = mediaRecorderRef.current;
+      if (rec && rec.state !== "inactive") {
+        try {
+          rec.stop();
+        } catch {
+          // recorder already in a terminal state
+        }
+      }
+    };
+  }, []);
 
   const handleMicClick = () => {
     if (isRecording) {

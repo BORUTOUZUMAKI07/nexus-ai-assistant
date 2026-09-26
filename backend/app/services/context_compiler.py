@@ -18,6 +18,16 @@ MODEL_CONTEXT_LIMITS = {
 }
 
 
+def _normalize_model(model: str) -> str:
+    """Strip a litellm provider prefix so lookups hit MODEL_CONTEXT_LIMITS.
+
+    Callers pass `settings.DEFAULT_MODEL` = ``groq/llama-3.3-70b-versatile``,
+    which never matches the unprefixed keys above — every lookup silently fell
+    back to ``default: 32768`` and compaction kicked in ~4x too early.
+    """
+    return model.rsplit("/", 1)[-1] if "/" in model else model
+
+
 class ContextCompiler:
     """
     Manages the conversational context window and compaction.
@@ -34,7 +44,7 @@ class ContextCompiler:
         return ai_client.count_tokens(text, model)
 
     def get_max_context(self, model: str) -> int:
-        return MODEL_CONTEXT_LIMITS.get(model, MODEL_CONTEXT_LIMITS["default"])
+        return MODEL_CONTEXT_LIMITS.get(_normalize_model(model), MODEL_CONTEXT_LIMITS["default"])
 
     async def summarize_messages(self, messages_to_compress: list[Message], model: str) -> str:
         """

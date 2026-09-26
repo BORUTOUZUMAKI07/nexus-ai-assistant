@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
-from backend.app.domain.file.models import File, FileChunk
+from backend.app.domain.file.models import File, FileChunk, FileMetadata
 from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -56,11 +56,12 @@ class FileRepository(BaseRepository[File]):
         await self.session.refresh(db_file)
         return db_file
 
-    async def update_status(self, file_id: UUID, status: str, chunk_count: int = 0, error_message: str | None = None) -> File | None:
+    async def update_status(self, file_id: UUID, status: str, chunk_count: int | None = None, error_message: str | None = None) -> File | None:
         db_file = await self.get_by_id(file_id)
         if db_file:
             db_file.status = status
-            db_file.chunk_count = chunk_count
+            if chunk_count is not None:
+                db_file.chunk_count = chunk_count
             db_file.error_message = error_message
             db_file.updated_at = datetime.now(UTC).replace(tzinfo=None)
             self.session.add(db_file)
@@ -115,6 +116,11 @@ class FileRepository(BaseRepository[File]):
         # parent_chunk_id FK) before the file row is removed.
         await self.session.exec(
             delete(FileChunk).where(FileChunk.file_id == file_id)
+        )
+        # FileMetadata rows carry a live FK to files.id — remove them too or
+        # Postgres raises an IntegrityError on any file with metadata rows.
+        await self.session.exec(
+            delete(FileMetadata).where(FileMetadata.file_id == file_id)
         )
         await self.session.delete(db_file)
         await self.session.commit()

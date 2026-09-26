@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import os
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -94,11 +95,14 @@ def decode_token(token: str) -> dict[str, Any]:
 
 # AES-256-GCM Encryption for User BYOK API Keys
 def get_aes_key() -> bytes:
-    """Derives a fixed 32-byte key from settings.ENCRYPTION_KEY."""
+    """Derives a fixed 32-byte key from settings.ENCRYPTION_KEY.
+
+    SHA-256 of the raw secret yields the full 32 bytes regardless of the
+    configured key length or format (never truncate/pad: raw[:32] on a
+    64-hex-char key only kept 32 ASCII chars = 16 bytes of entropy).
+    """
     raw = settings.ENCRYPTION_KEY.encode()
-    if len(raw) < 32:
-        return raw.ljust(32, b"0")
-    return raw[:32]
+    return hashlib.sha256(raw).digest()
 
 
 def encrypt_api_key(plain_key: str) -> str:

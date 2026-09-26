@@ -87,6 +87,23 @@ _BIN_OPS = {
 }
 _UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
 
+# CPU/memory DoS guard for the AST evaluator: `10**999999999` or
+# `math.factorial(10**8)` would otherwise allocate a multi-gigabyte int.
+_MAX_EXPONENT = 1000
+_MAX_RESULT_MAGNITUDE = 10**1000  # ~1001 digits
+
+
+def _check_result(value: float | int) -> float | int:
+    """Reject non-finite or absurdly large computation results."""
+    if isinstance(value, float):
+        import math as _math
+
+        if _math.isinf(value) or _math.isnan(value):
+            raise ValueError("Result is not a finite number")
+    if isinstance(value, (int, float)) and abs(value) > _MAX_RESULT_MAGNITUDE:
+        raise ValueError("Result out of safe range")
+    return value
+
 
 def _safe_math_eval(expression: str) -> float | int:
     """
@@ -112,12 +129,18 @@ def _safe_math_eval(expression: str) -> float | int:
             op_fn = _BIN_OPS.get(type(node.op))
             if op_fn is None:
                 raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
-            return op_fn(_eval(node.left), _eval(node.right))
+            left = _eval(node.left)
+            right = _eval(node.right)
+            if type(node.op) is ast.Pow:
+                if abs(right) > _MAX_EXPONENT:
+                    raise ValueError(f"Exponent too large (max {_MAX_EXPONENT})")
+                return _check_result(left**right)
+            return _check_result(op_fn(left, right))
         if isinstance(node, ast.UnaryOp):
             op_fn = _UNARY_OPS.get(type(node.op))
             if op_fn is None:
                 raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
-            return op_fn(_eval(node.operand))
+            return _check_result(op_fn(_eval(node.operand)))
         if isinstance(node, ast.Name):
             if node.id in _ALLOWED_MATH_NAMES:
                 return _ALLOWED_MATH_NAMES[node.id]
@@ -130,7 +153,7 @@ def _safe_math_eval(expression: str) -> float | int:
             fn = _ALLOWED_MATH_NAMES[node.func.id]
             if not callable(fn):
                 raise ValueError(f"'{node.func.id}' is not a function")
-            return fn(*(_eval(arg) for arg in node.args))
+            return _check_result(fn(*(_eval(arg) for arg in node.args)))
         raise ValueError(f"Unsupported expression element: {type(node).__name__}")
 
     return _eval(tree)

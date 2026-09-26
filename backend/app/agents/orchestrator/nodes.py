@@ -195,6 +195,55 @@ class ActionChoice(BaseModel):
     action: Literal["RESEARCH", "CODE", "ANSWER"]
 
 
+# ── ARQ: Attentive Reasoning Query flags ─────────────────────────────────────
+# Lightweight constraint-check that runs before the main routing decision.
+# Prevents instruction drift and detects policy/tool violations early so
+# the synthesizer never silently ignores them mid-conversation.
+# Based on §2.2 (Attentive Reasoning Queries) of AI_Engineering_Complete_Notes.
+_ARQ_PROMPT_TEMPLATE = """
+You are a constraint-checker for an AI assistant. Analyse the user request below
+and return a compact JSON object with EXACTLY these keys — no others:
+  "needs_tool"   : true if the task requires an external tool (web search, code exec, file read)
+  "safety_flag"  : true if the request touches PII, harmful content, or violates AI safety policy
+  "recency_needed" : true if answering well requires real-time or post-training-cutoff data
+  "ambiguous"    : true if the request is underspecified and a clarifying question would help
+
+User request: {query}
+
+Respond with ONLY the JSON object and nothing else.
+"""
+
+
+async def _run_arq(query: str) -> dict[str, bool]:
+    """Runs ARQ constraint check. Fails open (all False) on any parse error."""
+    default: dict[str, bool] = {
+        "needs_tool": False,
+        "safety_flag": False,
+        "recency_needed": False,
+        "ambiguous": False,
+    }
+    try:
+        import json
+        raw = await ai_client.completion(
+            messages=[{"role": "user", "content": _ARQ_PROMPT_TEMPLATE.format(query=query[:800])}],
+            model="fast_chat",
+            temperature=0.0,
+            max_tokens=80,
+        )
+        # Strip markdown fences if the model wraps the JSON
+        raw = raw.strip().strip("```json").strip("```").strip()
+        parsed = json.loads(raw)
+        return {
+            "needs_tool": bool(parsed.get("needs_tool", False)),
+            "safety_flag": bool(parsed.get("safety_flag", False)),
+            "recency_needed": bool(parsed.get("recency_needed", False)),
+            "ambiguous": bool(parsed.get("ambiguous", False)),
+        }
+    except Exception as exc:
+        logger.warning("arq_constraint_check_failed_open", error=str(exc))
+        return default
+
+
 async def orchestrator_node(state: AgentState) -> dict[str, Any]:
     """
     Step 2: Core routing node. Decides next action:
@@ -202,6 +251,10 @@ async def orchestrator_node(state: AgentState) -> dict[str, Any]:
     - Dispatch to Coder Subagent
     - Run direct Tool
     - Synthesize Final Response
+
+    ARQ (Attentive Reasoning Query) constraint check runs concurrently with
+    the routing decision to flag safety issues, tool needs, and recency gaps
+    before the synthesizer commits to an answer path.
     """
     messages = state.get("messages", [])
     last_user_raw = (
@@ -234,28 +287,61 @@ async def orchestrator_node(state: AgentState) -> dict[str, Any]:
             "needs current or external information."
         )
 
-    # Direct single-token completion — no instructor/structured-output overhead.
-    # Free-tier models truncate JSON before closing braces; a plain one-word
-    # answer is immune to that failure mode and takes ~1s instead of ~5s.
+    # Run ARQ constraint-check and main routing decision concurrently to
+    # avoid adding an extra serial round-trip on every message.
+    import asyncio as _asyncio
     try:
-        action = await ai_client.completion(
-            messages=[{"role": "user", "content": router_prompt}],
-            model="fast_chat",
-            temperature=0.0,
-            max_tokens=16,
+        action_task = _asyncio.ensure_future(
+            ai_client.completion(
+                messages=[{"role": "user", "content": router_prompt}],
+                model="fast_chat",
+                temperature=0.0,
+                max_tokens=16,
+            )
         )
-        action = action.strip().upper()
-        logger.info("orchestrator_route", action=action)
+        arq_task = _asyncio.ensure_future(_run_arq(last_user_msg))
+        action_raw, arq_flags = await _asyncio.gather(action_task, arq_task, return_exceptions=True)
+
+        if isinstance(action_raw, Exception):
+            logger.warning("orchestrator_route_failed_defaulting_to_answer", error=str(action_raw))
+            action = "ANSWER"
+        else:
+            action = str(action_raw).strip().upper()
+
+        if isinstance(arq_flags, Exception):
+            arq_flags = {"needs_tool": False, "safety_flag": False, "recency_needed": False, "ambiguous": False}
+
+        logger.info(
+            "orchestrator_route",
+            action=action,
+            arq_needs_tool=arq_flags.get("needs_tool"),
+            arq_safety=arq_flags.get("safety_flag"),
+            arq_recency=arq_flags.get("recency_needed"),
+            arq_ambiguous=arq_flags.get("ambiguous"),
+        )
     except Exception as exc:
         logger.warning("orchestrator_route_failed_defaulting_to_answer", error=str(exc))
         action = "ANSWER"
+        arq_flags = {"needs_tool": False, "safety_flag": False, "recency_needed": False, "ambiguous": False}
+
+    # ARQ upgrade: if safety flag raised, short-circuit with an ANSWER path
+    # so no external tools are called on potentially harmful requests.
+    if arq_flags.get("safety_flag"):
+        logger.warning("arq_safety_flag_raised_forcing_direct_answer", query=last_user_msg[:200])
+        return {"subagent_dispatches": [], "task_type": "general", "arq_flags": arq_flags}
+
+    # ARQ upgrade: if recency_needed is flagged but user didn't explicitly
+    # ask for research, nudge the router toward RESEARCH to prevent stale answers.
+    if arq_flags.get("recency_needed") and "ANSWER" in action and mode not in ("code",):
+        logger.info("arq_recency_flag_upgrading_answer_to_research")
+        action = "RESEARCH"
 
     if "RESEARCH" in action:
-        return {"subagent_dispatches": ["researcher"], "task_type": "research"}
+        return {"subagent_dispatches": ["researcher"], "task_type": "research", "arq_flags": arq_flags}
     elif "CODE" in action:
-        return {"subagent_dispatches": ["coder"], "task_type": "code"}
+        return {"subagent_dispatches": ["coder"], "task_type": "code", "arq_flags": arq_flags}
     else:
-        return {"subagent_dispatches": [], "task_type": "general"}
+        return {"subagent_dispatches": [], "task_type": "general", "arq_flags": arq_flags}
 
 
 async def subagent_dispatcher_node(state: AgentState) -> dict[str, Any]:
@@ -295,8 +381,13 @@ async def tool_node(state: AgentState) -> dict[str, Any]:
     ({action: approve|reject|modify, data}) so either HITL resume contract works.
     """
     pending = state.get("pending_tool_calls", [])
-    user_id_str = state.get("user_id", "00000000-0000-0000-0000-000000000000")
-    user_id = UUID(user_id_str)
+    user_id_str = state.get("user_id") or "00000000-0000-0000-0000-000000000000"
+    try:
+        user_id = UUID(user_id_str)
+    except (ValueError, TypeError, AttributeError):
+        # bootstrap_node sets user_id to "" when absent — never let a bad
+        # string crash the execution node.
+        user_id = UUID(int=0)
     tool_results: list[dict[str, Any]] = list(state.get("tool_results", []))
 
     for call in pending:

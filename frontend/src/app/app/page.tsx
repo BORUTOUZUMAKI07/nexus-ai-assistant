@@ -30,7 +30,7 @@ import {
   fetchCurrentUser,
 } from "@/lib/api";
 import { clearSession, SESSION_EXPIRED_EVENT } from "@/lib/auth";
-import { useNexusChat, NexusMessage } from "@/hooks/useNexusChat";
+import { useNexusChat, NexusMessage, NexusAnnotation } from "@/hooks/useNexusChat";
 
 function mapServerMessage(m: ConversationMessage): MessageItem {
   return {
@@ -140,13 +140,45 @@ export default function AppPage() {
         const full = await fetchConversation(convId);
         const mapped = (full.messages ?? []).map(mapServerMessage);
         setMessages(
-          mapped.map((m) => ({
-            id: m.id,
-            role: m.role as "user" | "assistant" | "system",
-            content: m.content,
-            model: m.model,
-            createdAt: m.created_at ?? new Date().toISOString(),
-          }))
+          mapped.map((m): NexusMessage => {
+            // Rebuild the annotation stream from persisted fields so citations,
+            // tool calls and reasoning survive a page reload.
+            const annotations: NexusAnnotation[] = [];
+            if (m.thought_process) {
+              annotations.push({ type: "reasoning", data: { content: m.thought_process } });
+            }
+            for (const c of m.citations ?? []) {
+              annotations.push({
+                type: "citation",
+                data: {
+                  filename: c.filename,
+                  source: c.filename,
+                  content_snippet: c.content_snippet,
+                  score: c.score,
+                },
+              });
+            }
+            for (const t of m.tool_calls ?? []) {
+              annotations.push({
+                type: "tool_call",
+                data: {
+                  tool_name: t.name,
+                  tool_input: (t.args ?? {}) as Record<string, unknown>,
+                  tool_call_id: "",
+                  status: (t.status as "running" | "completed" | "error") ?? "completed",
+                  result: t.result,
+                },
+              });
+            }
+            return {
+              id: m.id,
+              role: m.role as "user" | "assistant" | "system",
+              content: m.content,
+              model: m.model,
+              annotations: annotations.length > 0 ? annotations : undefined,
+              createdAt: m.created_at ?? new Date().toISOString(),
+            };
+          })
         );
       } catch (err) {
         console.warn("Failed to load conversation history:", err);
