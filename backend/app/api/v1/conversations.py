@@ -34,7 +34,7 @@ from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.usage_service import UsageService
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -69,8 +69,8 @@ async def _release_stream_slot(thread_id: str) -> None:
 
 @router.get("", response_model=list[ConversationResponse])
 async def list_conversations(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=1000000),
     archived: bool = False,
     current_user: User = Depends(get_current_user),
     conv_svc: ConversationService = Depends(get_conversation_service),
@@ -148,7 +148,9 @@ async def fork_conversation(
 # ─── Request / Response schemas ──────────────────────────────────────────────
 
 class StreamChatRequest(BaseModel):
-    messages: list[dict]
+    model_config = {"extra": "forbid"}
+
+    messages: list[dict] = Field(min_length=1, max_length=100)
     mode: Literal["normal", "agent", "code", "research"] = "normal"
     stream: bool = True
 
