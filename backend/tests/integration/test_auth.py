@@ -296,3 +296,17 @@ async def test_refresh_route_returns_429_when_rate_limited(client, monkeypatch):
     assert len(calls) == 1
     assert calls[0]["identifier"].startswith("auth:refresh:")
     assert calls[0]["limit"] == 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"refresh_token": ""},
+        {"refresh_token": "x" * 4097},
+        {"refresh_token": "token", "unexpected": "field"},
+    ],
+)
+async def test_refresh_rejects_invalid_payload_shape(client, payload):
+    response = await client.post("/api/v1/auth/refresh", json=payload)
+    assert response.status_code == 422
