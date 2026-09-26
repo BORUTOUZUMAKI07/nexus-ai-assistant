@@ -78,8 +78,10 @@ async def login(
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
     token_in: TokenRefresh,
+    request: Request,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
+    await _enforce_auth_rate_limit(request, action="refresh", limit=20)
     try:
         return await auth_svc.refresh(token_in.refresh_token)
     except AuthenticationError as exc:
