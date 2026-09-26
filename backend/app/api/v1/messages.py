@@ -24,11 +24,14 @@ from backend.app.domain.conversation.schemas import (
 from backend.app.domain.usage.schemas import UsageLogCreate
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.infrastructure.cache.response_cache import response_cache
 from backend.app.services.context_compiler import context_compiler
 from backend.app.services.conversation_service import ConversationService
 from backend.app.services.evaluation.guardrail_service import guardrail_service
 from backend.app.services.evaluation.quality_service import quality_service
+from backend.app.services.experiments import experiment_service
 from backend.app.services.observability.cost_tracking import cost_tracking_service
+from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.prompt_compiler import prompt_compiler
 from backend.app.services.usage_service import UsageService
@@ -72,26 +75,60 @@ async def send_message_sync(
     history = await conv_svc.get_messages(conversation_id)
     target_model = message_in.model or settings.DEFAULT_MODEL
 
+    # Canary/shadow release (MD §6.6): deterministic user-bucket assignment for
+    # the chat system prompt. No-op ("default") unless the experiment is
+    # explicitly configured.
+    experiment_variant = experiment_service.variant_for_user(str(current_user.id), "chat_system_prompt")
+    if experiment_variant != "default":
+        metrics_collector.increment(f"experiment:chat_system_prompt:{experiment_variant}")
+        logger.info("chat_experiment_variant_assigned", prompt_variant=experiment_variant, user_id=str(current_user.id))
+
     system_prompt = await prompt_compiler.compile_system_prompt_cached(
         custom_instructions=message_in.system_prompt_override or conv.system_prompt,
     )
+    if experiment_variant != "default":
+        system_prompt = (
+            f"{system_prompt}\n\n"
+            f"# Experiment Context\n"
+            f"You are running as the '{experiment_variant}' variant of this assistant."
+        )
     formatted_context = await context_compiler.compile_context(
         messages=history,
         system_prompt=system_prompt,
         model=target_model,
     )
 
-    # 5. Generate Completion
-    start_time = time.time()
-    async with trace_span("chat_completion_sync", {"model": target_model, "conversation_id": str(conversation_id)}):
-        response_text = await ai_client.completion(
-            messages=formatted_context,
-            model=target_model,
-        )
-    duration_ms = (time.time() - start_time) * 1000
+    # 4b. Response cache (MD §8.5): repeated identical questions skip the LLM
+    # round-trip. Fail-open and only active when RESPONSE_CACHE_ENABLED.
+    cache_hit_payload = await response_cache.get(str(current_user.id), target_model, sanitized_content)
 
-    prompt_tok = ai_client.count_tokens(str(formatted_context), target_model)
-    comp_tok = ai_client.count_tokens(response_text, target_model)
+    # 5. Generate Completion
+    if cache_hit_payload is not None:
+        response_text = cache_hit_payload["content"]
+        prompt_tok = int(cache_hit_payload.get("tokens_input", 0))
+        comp_tok = int(cache_hit_payload.get("tokens_output", 0))
+        duration_ms = 0.0
+        logger.info("chat_completion_cache_hit", conversation_id=str(conversation_id), model=target_model)
+    else:
+        start_time = time.time()
+        async with trace_span("chat_completion_sync", {"model": target_model, "conversation_id": str(conversation_id)}):
+            response_text = await ai_client.completion(
+                messages=formatted_context,
+                model=target_model,
+            )
+        duration_ms = (time.time() - start_time) * 1000
+
+        prompt_tok = ai_client.count_tokens(str(formatted_context), target_model)
+        comp_tok = ai_client.count_tokens(response_text, target_model)
+        await response_cache.set(
+            str(current_user.id),
+            target_model,
+            sanitized_content,
+            response_text,
+            tokens_input=prompt_tok,
+            tokens_output=comp_tok,
+            cost_usd=cost_tracking_service.calculate_cost(target_model, prompt_tok, comp_tok),
+        )
 
     # 6. Save Assistant Message
     assistant_msg = await conv_svc.add_message(
@@ -119,7 +156,11 @@ async def send_message_sync(
             completion_tokens=comp_tok,
             latency_ms=duration_ms,
             cost_usd=cost_usd,
-            metadata_json={"quality": quality},
+            metadata_json={
+                "quality": quality,
+                "cache_hit": cache_hit_payload is not None,
+                "prompt_variant": experiment_variant,
+            },
         )
     )
     await cost_tracking_service.record_cost_log(

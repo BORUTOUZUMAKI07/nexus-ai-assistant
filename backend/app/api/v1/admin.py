@@ -5,15 +5,19 @@ Provides user management, system health overview, audit logs, and global configu
 from typing import Any
 from uuid import UUID
 
+import structlog
 from backend.app.api.deps import get_current_admin, get_db
 from backend.app.domain.system.service import SystemService
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.cache.redis_client import redis_client
 from backend.app.infrastructure.database.engine import check_database_health
+from backend.app.services.monitoring.drift_service import DriftService
 from backend.app.services.observability.metrics import metrics_collector
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -101,3 +105,27 @@ async def get_system_status(
         "redis_cache": "connected" if redis_healthy else "disconnected",
         "telemetry": telemetry,
     }
+
+
+@router.get("/monitoring/drift")
+async def get_drift_report(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    LLM-era drift report (MD §7.6/§8.8): sliding-window z-score comparison of
+    recent vs immediately-preceding telemetry for latency, cost, error rate,
+    faithfulness-pass rate and hallucination rate. ``detected=true`` means one
+    or more metrics moved >2σ from their baseline window.
+    """
+    service = DriftService(session)
+    try:
+        return await service.drift_report()
+    except Exception as exc:
+        logger.warning("drift_report_query_failed", error=str(exc))
+        return {
+            "detected": False,
+            "drifting_metrics": 0,
+            "detail": {},
+            "error": f"Drift report unavailable: {exc}",
+        }

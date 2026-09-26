@@ -124,6 +124,54 @@ def cache_cleanup_task() -> dict:
     return {"status": "cleaned"}
 
 
+@celery_app.task(name="tasks.periodic_drift_check")
+def periodic_drift_check_task(recent_hours: int = 24) -> dict:
+    """
+    Sliding-window drift check over usage/evaluation telemetry (MD §7.6/§8.8).
+    Logs whether any LLM-era signal moved >2σ from its baseline window; the
+    admin endpoint exposes the full report. No persistence — pure computation
+    over the telemetry tables.
+    """
+    from backend.app.services.monitoring.drift_service import DriftService
+
+    async def _run():
+        async with async_session_factory() as session:
+            service = DriftService(session)
+            report = await service.drift_report()
+            return report
+
+    report = run_async(_run())
+    logger.info(
+        "periodic_drift_check_completed",
+        detected=report.get("detected"),
+        drifting_metrics=report.get("drifting_metrics"),
+    )
+    return {"status": "completed", "detected": report.get("detected", False), "drifting_metrics": report.get("drifting_metrics", 0)}
+
+
+@celery_app.task(name="tasks.prompt_regression_review")
+def prompt_regression_review_task(system_prompt: str, threshold: float = 0.8) -> dict:
+    """
+    Background run of the guardrail golden-set regression gate against a
+    candidate system prompt. Gate result is logged; a failing gate is the
+    prompt change's "CI stopped" equivalent.
+    """
+    from backend.app.services.evaluation.regression_service import prompt_regression_gate
+
+    async def _run():
+        report = await prompt_regression_gate.evaluate_prompt(system_prompt=system_prompt, threshold=threshold)
+        return report
+
+    report = run_async(_run())
+    logger.info(
+        "prompt_regression_review_completed",
+        gate=report.get("gate"),
+        score=report.get("score"),
+        critical_failures=len(report.get("critical_failures", [])),
+    )
+    return {"status": "completed", "gate": report.get("gate"), "score": report.get("score")}
+
+
 def trigger_indexing_pipeline(file_ids: list[str]):
     """
     Celery Canvas: Dispatches parallel indexing jobs as a Group.

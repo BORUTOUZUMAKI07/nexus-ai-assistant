@@ -321,27 +321,51 @@ async def stream_conversation(
                                         yield f"data: {payload}\n\n"
 
                     elif kind == "on_tool_start":
+                        tool_input = event.get("data", {}).get("input", {})
+                        run_id = event.get("run_id")
+                        tool_name = event.get("name")
                         payload = json.dumps({
                             "type": "tool_call",
-                            "tool_name": event.get("name"),
-                            "tool_input": event.get("data", {}).get("input", {}),
-                            "tool_call_id": event.get("run_id"),
+                            "tool_name": tool_name,
+                            "tool_input": tool_input,
+                            "tool_call_id": run_id,
                         })
                         yield f"data: {payload}\n\n"
+                        # AG-UI standardized alias (MD §6.13): live tool-progress
+                        # events with the protocol's field names. New UIs can bind
+                        # to TOOL_CALL_START; existing clients keep tool_call.
+                        agui_payload = json.dumps({
+                            "type": "TOOL_CALL_START",
+                            "messageId": f"ag-{run_id}",
+                            "tool": tool_name,
+                            "input": tool_input,
+                            "timestamp": time.time(),
+                        })
+                        yield f"data: {agui_payload}\n\n"
 
                     elif kind == "on_tool_end":
                         output = event.get("data", {}).get("output")
+                        run_id = event.get("run_id")
+                        tool_name = event.get("name")
                         payload = json.dumps({
                             "type": "tool_result",
-                            "tool_call_id": event.get("run_id"),
+                            "tool_call_id": run_id,
                             "result": str(output)[:2000] if output else None,
                         })
                         yield f"data: {payload}\n\n"
+                        agui_payload = json.dumps({
+                            "type": "TOOL_CALL_COMPLETE",
+                            "messageId": f"ag-{run_id}",
+                            "tool": tool_name,
+                            "output": str(output)[:2000] if output else None,
+                            "timestamp": time.time(),
+                        })
+                        yield f"data: {agui_payload}\n\n"
 
                     elif kind == "on_custom_event":
                         name = event.get("name", "")
                         data = event.get("data", {})
-                        if name in ("citation", "thinking", "hitl_request", "error", "text_delta"):
+                        if name in ("citation", "thinking", "hitl_request", "elicitation_request", "error", "text_delta"):
                             payload = json.dumps({"type": name, **data})
                             yield f"data: {payload}\n\n"
 

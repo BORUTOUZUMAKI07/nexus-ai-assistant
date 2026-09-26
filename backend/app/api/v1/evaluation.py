@@ -3,6 +3,7 @@ Evaluation & Red-Teaming API Router (admin-only).
 Exposes the evaluation service suite — RAGAS, DeepEval, Quality, and the
 RedTeam probe battery — as on-demand endpoints persisted into evaluation_logs.
 """
+import json
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -14,6 +15,7 @@ from backend.app.services.evaluation.deepeval_service import deepeval_service
 from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.evaluation.ragas_service import ragas_service
 from backend.app.services.evaluation.redteam_service import redteam_service
+from backend.app.services.evaluation.regression_service import prompt_regression_gate
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -139,3 +141,96 @@ async def run_redteam_probes(
     """Runs the adversarial probe battery against the input guardrails."""
     suite = await redteam_service.run_probe_suite()
     return {"report": suite, "evaluator": "redteam"}
+
+
+class ArenaRequest(BaseModel):
+    query: str = Field(min_length=1)
+    output_a: str = Field(min_length=1)
+    output_b: str = Field(min_length=1)
+    instructions: str = ""
+
+
+class ConversationalRequest(BaseModel):
+    transcript: list[dict[str, str]] = Field(min_length=1)
+    criteria: str | None = None
+
+
+class PromptRegressionRequest(BaseModel):
+    system_prompt: str = Field(min_length=1)
+    threshold: float = Field(default=0.8, ge=0.0, le=1.0)
+
+
+@router.post("/arena")
+async def run_arena_evaluation(
+    body: ArenaRequest,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    Pairwise "arena as judge" comparison (MD §9.3): does output A beat output B
+    for the same query? Persisted as evaluation logs for A/B prompt decisions.
+    """
+    result = await deepeval_service.evaluate_arena_pair(
+        query=body.query,
+        output_a=body.output_a,
+        output_b=body.output_b,
+        instructions=body.instructions,
+    )
+    row = [result.to_dict()]
+    await _persist_evaluation_logs(
+        session,
+        row,
+        trace_id=str(uuid4()),
+        conversation_id=None,
+        evaluator="arena_judge",
+    )
+    return {"winner": "A" if result.score > 0.5 else ("B" if result.score < 0.5 else "tie"), "result": result.to_dict()}
+
+
+@router.post("/conversational")
+async def run_conversational_eval(
+    body: ConversationalRequest,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    Multi-turn compliance evaluation (MD §9.4) across a full back-and-forth
+    transcript; persisted as evaluation logs.
+    """
+    results = await deepeval_service.evaluate_conversational(
+        transcript=body.transcript,
+        criteria=body.criteria,
+    )
+    rows = [r.to_dict() for r in results]
+    await _persist_evaluation_logs(
+        session,
+        rows,
+        trace_id=str(uuid4()),
+        conversation_id=None,
+        evaluator="conversational",
+    )
+    return {"results": rows, "evaluator": "conversational"}
+
+
+@router.post("/prompt-regression")
+async def run_prompt_regression(
+    body: PromptRegressionRequest,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    CI prompt-regression gate: scores a candidate system prompt against the
+    guardrail golden set. Fails the gate when the score falls below threshold.
+    """
+    report = await prompt_regression_gate.evaluate_prompt(
+        system_prompt=body.system_prompt,
+        threshold=body.threshold,
+    )
+    await _persist_evaluation_logs(
+        session,
+        [{"metric": "prompt_regression", "score": report["score"], "passed": report["passed"], "reason": json.dumps(report)[:500]}],
+        trace_id=str(uuid4()),
+        conversation_id=None,
+        evaluator="prompt_regression",
+    )
+    return report
