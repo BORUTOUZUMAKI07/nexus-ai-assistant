@@ -6,7 +6,7 @@ from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
 from backend.app.domain.file.models import File, FileChunk
-from sqlmodel import delete, select
+from sqlmodel import delete, select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 
@@ -55,6 +55,21 @@ class FileRepository(BaseRepository[File]):
         await self.session.commit()
         await self.session.refresh(db_file)
         return db_file
+
+    async def claim_indexing(self, file_id: UUID) -> bool:
+        """Atomically claim a pending/failed file so duplicate Celery deliveries don't race."""
+        statement = (
+            update(File)
+            .where(File.id == file_id, File.status.in_(["pending", "failed"]))
+            .values(
+                status="processing",
+                error_message=None,
+                updated_at=datetime.now(UTC).replace(tzinfo=None),
+            )
+        )
+        result = await self.session.exec(statement)
+        await self.session.commit()
+        return bool(result.rowcount and result.rowcount > 0)
 
     async def update_status(self, file_id: UUID, status: str, chunk_count: int = 0, error_message: str | None = None) -> File | None:
         db_file = await self.get_by_id(file_id)
