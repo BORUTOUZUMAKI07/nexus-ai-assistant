@@ -310,3 +310,25 @@ async def test_refresh_route_returns_429_when_rate_limited(client, monkeypatch):
 async def test_refresh_rejects_invalid_payload_shape(client, payload):
     response = await client.post("/api/v1/auth/refresh", json=payload)
     assert response.status_code == 422
+
+
+
+@pytest.mark.asyncio
+async def test_logout_is_rate_limited(client, monkeypatch):
+    from backend.app.infrastructure.cache.redis_client import redis_service
+
+    calls = []
+
+    async def deny_request(**kwargs):
+        calls.append(kwargs)
+        return False, 0
+
+    monkeypatch.setattr(redis_service, "check_rate_limit", deny_request)
+    response = await client.post("/api/v1/auth/logout")
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "60"
+    assert len(calls) == 1
+    assert calls[0]["identifier"].startswith("auth:logout:")
+    assert calls[0]["limit"] == 20
+    assert calls[0]["window_seconds"] == 60
