@@ -97,3 +97,27 @@ async def test_list_skills_returns_list(client, user_auth_headers):
     resp = await client.get("/api/v1/prompts/skills", headers=user_auth_headers)
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_prompt_template_rejects_unknown_fields(client, user_auth_headers):
+    response = await client.post(
+        "/api/v1/prompts/templates",
+        json={
+            "title": "Strict schema",
+            "system_prompt": "A sufficiently long system prompt.",
+            "unexpected": "not allowed",
+        },
+        headers=user_auth_headers,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_prompt_template_bounds_system_prompt(client, user_auth_headers):
+    response = await client.post(
+        "/api/v1/prompts/templates",
+        json={"title": "Long prompt", "system_prompt": "x" * 20001},
+        headers=user_auth_headers,
+    )
+    assert response.status_code == 422
