@@ -274,3 +274,22 @@ async def test_file_indexing_claim_is_atomic_and_reclaimable(db_session, test_us
     refreshed = await repo.get_by_id(row.id)
     assert refreshed.status == "processing"
     assert refreshed.error_message is None
+
+
+@pytest.mark.asyncio
+async def test_indexing_claim_rejects_completed_files(db_session, test_user):
+    repo = FileRepository(db_session)
+    row = await repo.create_file(
+        user_id=test_user.id,
+        filename="already-indexed.txt",
+        original_filename="already-indexed.txt",
+        file_type="txt",
+        mime_type="text/plain",
+        size_bytes=5,
+        storage_path="test/already-indexed.txt",
+    )
+    await repo.update_status(row.id, status="indexed", chunk_count=2)
+    assert await repo.claim_indexing(row.id) is False
+    current = await repo.get_by_id(row.id)
+    assert current.status == "indexed"
+    assert current.chunk_count == 2
