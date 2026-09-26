@@ -249,3 +249,28 @@ async def test_upload_invalid_extension_rejected(client, user_auth_headers):
 async def test_file_pagination_rejects_out_of_bounds(client, user_auth_headers, query):
     response = await client.get(f"/api/v1/files{query}", headers=user_auth_headers)
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_file_indexing_claim_is_atomic_and_reclaimable(db_session, test_user):
+    repo = FileRepository(db_session)
+    row = await repo.create_file(
+        user_id=test_user.id,
+        filename="claim-test.txt",
+        original_filename="claim-test.txt",
+        file_type="txt",
+        mime_type="text/plain",
+        size_bytes=12,
+        storage_path="test/claim-test.txt",
+    )
+
+    assert await repo.claim_indexing(row.id) is True
+    # A duplicate delivery cannot claim a row already marked processing.
+    assert await repo.claim_indexing(row.id) is False
+
+    await repo.update_status(row.id, status="failed", error_message="temporary")
+    # Failed tasks can be reclaimed by a Celery retry.
+    assert await repo.claim_indexing(row.id) is True
+    refreshed = await repo.get_by_id(row.id)
+    assert refreshed.status == "processing"
+    assert refreshed.error_message is None
