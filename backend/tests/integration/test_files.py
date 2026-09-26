@@ -242,3 +242,10 @@ async def test_upload_invalid_extension_rejected(client, user_auth_headers):
         headers=user_auth_headers,
     )
     assert resp.status_code == 415
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["?limit=0", "?limit=101", "?offset=-1", "?offset=1000001"])
+async def test_file_pagination_rejects_out_of_bounds(client, user_auth_headers, query):
+    response = await client.get(f"/api/v1/files{query}", headers=user_auth_headers)
+    assert response.status_code == 422
