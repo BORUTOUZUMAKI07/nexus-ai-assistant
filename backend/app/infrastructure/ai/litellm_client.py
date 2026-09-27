@@ -534,7 +534,7 @@ class LiteLLMService:
         """
         Text-to-speech via LiteLLM's speech API. The API key must match the
         provider that serves the configured TTS model (default
-        minimax/speech-01-hd-turbo runs on the free Minimax tier with
+        minimax/speech-02-hd runs on MiniMax's international endpoint with
         MINIMAX_API_KEY). When the key for that provider is absent we raise
         RuntimeError so the API layer returns a clean 501 instead of misrouting
         e.g. an OpenRouter key to a different endpoint.
