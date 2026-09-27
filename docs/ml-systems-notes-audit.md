@@ -131,7 +131,8 @@ Key mapping (evidence legend):
 | **[CANDIDATE]** | 5 (fairness/interpretability, calibration/confidence gate, popularity feedback-loop monitoring, bandit exploration, responsible-ML formalization) |
 | **[OUT-OF-SCOPE] / [N/A]** | remainder (training, compression, self-hosted inference) |
 
-**Genuine candidates worth building (none is training-dependent):**
+**Genuine candidates worth building (none is training-dependent; all five validated
+against current industry practice in `docs/candidates-industry-comparison.md` §Group B):**
 1. **Serving confidence gate** (§5.9) — post-generation confidence/quality gate to flag low-confidence answers.
 2. **Popularity-bucketed hit-rate & coverage monitoring** (§7.5) — detect degenerate feedback loops using logged feedback.
 3. **Bandit-based exploration** (§8.9) — upgrade `experiments.py` from static weighted buckets to a simple epsilon-greedy over logged prompt feedback.
