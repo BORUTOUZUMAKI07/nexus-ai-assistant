@@ -189,6 +189,31 @@ class Settings(BaseSettings):
     # ── Self-Refinement (Critic Subagent) ─────────────────────────────────────
     CRITIC_MAX_REVISIONS: int = Field(default=2, description="Max revision passes of the critic subagent before a draft is accepted as-is")
 
+    # ── Candidate feature sweep (CRAG / confidence / bandit / optimizer) ──────
+    # Knobs for the industry-aligned features landed in the "8 candidates"
+    # milestone. Each is fail-open: wrong tuning degrades gracefully, never
+    # crashes the hot path.
+    CRAG_MAX_REVISIONS: int = Field(
+        default=1,
+        description="CRAG corrective retrieval: max refined local re-queries before falling back to web search",
+    )
+    CONFIDENCE_THRESHOLD: float = Field(
+        default=0.6,
+        description="Calibrated confidence gate: composite confidence below this marks a response low-confidence",
+    )
+    BANDIT_EPSILON: float = Field(
+        default=0.1,
+        description="ε-greedy exploration rate for bandit-selected experiment variants",
+    )
+    BANDIT_REWARD_WINDOW: int = Field(
+        default=200,
+        description="Most-recent reward rows considered when recomputing empirical arm means",
+    )
+    OPTIMIZATION_DEFAULT_CANDIDATES: int = Field(
+        default=3,
+        description="Default candidate rewrites proposed per prompt-optimization run",
+    )
+
     # ── HITL Approvals ────────────────────────────────────────────────────────
     HITL_APPROVAL_TIMEOUT_SECONDS: int = Field(default=900, description="How long a parked HITL approval stays valid before auto-expiring")
 

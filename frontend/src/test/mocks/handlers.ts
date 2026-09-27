@@ -114,6 +114,171 @@ export const mockHookPolicies = [
   },
 ]
 
+export const mockSliceReport = {
+  overall: {
+    requests: 22,
+    error_rate: 0.0455,
+    helpful_rate: 0.7727,
+    avg_latency_ms: 214.3,
+    combined_cost_usd: 0.0009,
+  },
+  slices: [
+    {
+      model: "alpha",
+      provider: "groq",
+      volume: 10,
+      rank: 1,
+      popularity_bucket: "popular",
+      error_rate: 0,
+      avg_latency_ms: 180,
+      cost_usd: 0.0004,
+      helpful_rate: 0.5,
+      flags: ["high_popularity_low_quality"],
+    },
+    {
+      model: "beta",
+      provider: "groq",
+      volume: 8,
+      rank: 2,
+      popularity_bucket: "moderate",
+      error_rate: 0.125,
+      avg_latency_ms: 250,
+      cost_usd: 0.0003,
+      helpful_rate: 1,
+      flags: [],
+    },
+    {
+      model: "gamma",
+      provider: "openai",
+      volume: 4,
+      rank: 3,
+      popularity_bucket: "long_tail",
+      error_rate: 0,
+      avg_latency_ms: 320,
+      cost_usd: 0.0002,
+      helpful_rate: 1,
+      flags: [],
+    },
+  ],
+  popularity_flags: [
+    {
+      slice: "alpha / groq",
+      helpful_rate: 0.5,
+      flags: ["high_popularity_low_quality"],
+    },
+  ],
+}
+
+export const mockFairnessReport = {
+  evaluator_parity: [
+    { group: "deepeval / faithfulness", count: 20, pass_rate: 0.85 },
+    { group: "ragas / answer_relevancy", count: 8, pass_rate: 0.75 },
+  ],
+  model_parity: [
+    { model: "alpha", count: 12, pass_rate: 0.75 },
+    { model: "beta", count: 10, pass_rate: 0.9 },
+  ],
+  provider_error_parity: [
+    { provider: "groq", count: 18, error_rate: 0.0556, flagged: false },
+    { provider: "openai", count: 4, error_rate: 0, flagged: false },
+  ],
+  limitations:
+    "Fairness surface is deliberately slim (population-level parity only). Protected-attribute cohorts are not collected, so statistical-parity claims are out of scope; treat these numbers as an early-warning signal, not an audit conclusion.",
+}
+
+export const mockBanditStatus = {
+  epsilon: 0.1,
+  exploration: "ε-greedy",
+  stats: [
+    { experiment: "chat_system_prompt", variant: "control", reward_count: 41, mean_reward: 0.6341 },
+    { experiment: "chat_system_prompt", variant: "canary_v1", reward_count: 38, mean_reward: 0.7895 },
+  ],
+}
+
+export const mockOptimizationRuns = [
+  {
+    id: "opt-run-1",
+    prompt_key: "chat_system_prompt",
+    status: "completed",
+    candidate_count: 4,
+    accepted_variant: "You are a precise, evidence-first assistant.",
+    baseline_score: 0.625,
+    best_score: 0.8125,
+    average_score: 0.75,
+    promoted: true,
+    created_at: "2026-09-25T09:12:00Z",
+  },
+]
+
+export const mockAuditReport = {
+  controls: {
+    pii_redaction_enabled: true,
+    response_cache_enabled: false,
+    rate_limit_per_minute: 60,
+    totp_available: true,
+  },
+  lifecycle_hooks: { policy_count: 1, enabled: 1, block_policies: 1 },
+  model_provenance: [
+    {
+      model: "alpha",
+      requests: 10,
+      providers: ["groq"],
+      experiment_variants_seen: ["canary_v1"],
+    },
+  ],
+  prompt_provenance: { version_count: 3, latest_timestamp: "2026-09-24T16:00:00Z" },
+  red_team: {
+    run_count: 4,
+    last_run_at: "2026-09-26T08:00:00Z",
+    total_probes: 12,
+    blocked_probes: 9,
+    defense_rate: 0.75,
+  },
+  gdpr: { gdpr_export: 2, gdpr_erasure: 1 },
+  evaluations: [{ evaluator: "deepeval", count: 20, pass_rate: 0.85 }],
+  retention:
+    "Chat data is retained for the active account lifecycle and erased on right-to-erasure; logs keep audit metadata per industry norms. Response cache TTL: 3600s (disabled).",
+  eu_ai_act: {
+    classification: "downstream provider of a general-purpose chatbot",
+    high_risk_articles:
+      "Not directly subject to Art 51-55 (not a high-risk deployer under Annex III for this interface)",
+    transparency_obligations: {
+      art_50: "Limited-risk chatbot transparency obligations apply since 2026-08-02",
+      disclosure: "Users should be disclosed that they interact with an AI system",
+    },
+    gpaI_models: {
+      role: "Downstream provider consuming GPAI models from upstream providers",
+      upstream_obligations:
+        "Art 53 GPAI obligations have applied since 2025-08-02; on-market GPAI models must comply by 2027-08-02",
+    },
+    fines: "Up to EUR 15M or 3% of global annual turnover for non-compliance with applicable obligations",
+    internal_evidence: {
+      iso_iec_42001:
+        "Documented management-system evidence is reusable as control evidence but is NOT Art 17-equivalent",
+      status_date: "2026-09-27",
+    },
+  },
+}
+
+export const mockRedTeamRuns = [
+  {
+    id: "rt-1",
+    created_at: "2026-09-26T08:00:00Z",
+    total_probes: 12,
+    blocked_probes: 9,
+    defense_rate: 0.75,
+    probe_count: 12,
+  },
+  {
+    id: "rt-2",
+    created_at: "2026-09-20T08:00:00Z",
+    total_probes: 10,
+    blocked_probes: 6,
+    defense_rate: 0.6,
+    probe_count: 10,
+  },
+]
+
 // Vercel AI SDK data-stream protocol body for /api/chat
 export function chatStreamBody(
   textFragments = ["Hello from Nexus."],
@@ -462,5 +627,31 @@ export const handlers = [
 
   http.delete("/api/admin/hooks/:id", () =>
     HttpResponse.json(null, { status: 204 })
+  ),
+
+  // ── Admin: slice monitoring / fairness / bandits ─────────────────────────
+  http.get("/api/admin/monitoring/slices", () => HttpResponse.json(mockSliceReport)),
+  http.get("/api/admin/monitoring/fairness", () => HttpResponse.json(mockFairnessReport)),
+  http.get("/api/admin/monitoring/bandits", () => HttpResponse.json(mockBanditStatus)),
+
+  // ── Admin: prompt-optimization run + evidence trail ──────────────────────
+  http.get("/api/admin/optimization/runs", () => HttpResponse.json(mockOptimizationRuns)),
+  http.post("/api/admin/optimization/run", async ({ request }) => {
+    const body = (await request.json()) as { baseline_prompt?: string }
+    return HttpResponse.json(
+      {
+        ...mockOptimizationRuns[0],
+        id: "opt-run-new-1",
+        baseline_prompt: body.baseline_prompt ?? mockOptimizationRuns[0].baseline_score,
+        created_at: new Date().toISOString(),
+      },
+      { status: 201 }
+    )
+  }),
+
+  // ── Admin: responsible-ML / compliance audit surface ─────────────────────
+  http.get("/api/admin/audit", () => HttpResponse.json(mockAuditReport)),
+  http.get("/api/admin/audit/redteam", () =>
+    HttpResponse.json({ runs: mockRedTeamRuns })
   ),
 ]

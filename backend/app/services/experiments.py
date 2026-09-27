@@ -104,6 +104,11 @@ class ExperimentService:
     def list_experiments(self) -> list[str]:
         return list((self._config.get("experiments") or {}).keys())
 
+    def definition(self, experiment: str) -> dict[str, Any]:
+        """Raw experiment definition (variants, weights, bandit mode, epsilon)."""
+        experiments = self._config.get("experiments") or {}
+        return experiments.get(experiment) or {}
+
     def variant_for_user(self, user_id: str, experiment: str) -> str:
         experiments = self._config.get("experiments") or {}
         definition = experiments.get(experiment)

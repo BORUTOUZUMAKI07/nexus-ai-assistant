@@ -280,3 +280,29 @@ regulatory deadline, and the repo already owns ~80% of the underlying data.
 - Fairness/RAI: Microsoft Responsible AI dashboard; Stanford HAI AI Index 2026 (Responsible AI chapter).
 - Red-teaming: PyRIT, Garak, Promptfoo, DeepTeam, Mindgard (2026 roundups); agentic-era red-teaming survey (arXiv:2605.04019).
 - EU AI Act: Regulation (EU) 2024/1689 consolidated text (July 2026); Commission implementation guidance (2026); GPAI Code of Practice (July 2025); Confir.eu GPAI provider-vs-downstream explainer; AIPolicyTracker ISO/IEC 42001 crosswalk; Digital Omnibus timelines.
+
+---
+
+# Appendix — Implementation status (candidate sweep)
+
+All eight validated/replaced candidates shipped on `main` in one sweep (backend +
+frontend + tests; no push). Implementation follows the verdicts above, with the
+scope deliberately kept to record-only / fail-open surfaces where the research
+flagged caution.
+
+| # | Feature | Implementation | Notable scope cuts vs. verdict |
+|---|---|---|---|
+| 1 | CRAG-style corrective retrieval | `services/rag/retrieval_guard.py`; wired into `orchestrator/nodes.py` critic/grader re-retrieve loop | Retriever-grader grades existing citations; corrective action re-queries and only replaces results that strictly improve the mean score; revision budget from `CRAG_MAX_REVISIONS`, fail-open on RAG errors |
+| 2 | Confidence gate with calibrated threshold | `services/confidence_service.py` (composite groundedness score, `calibrated_threshold`, `decide`) | Record-only decision stamped on the synthesizer state; never blocks or rewrites (fail-open by design) |
+| 3 | Popularity-bucketed slice monitoring + fairness | `services/monitoring/slices_service.py` + `/admin/monitoring/slices` & `/fairness` | Fairness kept slim: population-level eval-pass-rate parity + provider error parity only (no protected attributes) |
+| 4 | Responsible-ML audit surface | `services/audit_service.py` + `/admin/audit`, `/admin/audit/redteam`, `/admin/audit/eu-act`; GDPR export/erasure evidence via `audit_logs` | EU AI Act surfaced as an explicit classification statement with dates, not a compliance claim |
+| 5 | Automated prompt-optimization loop | `services/prompt_optimizer.py` + `/admin/optimization/runs` & `/admin/optimization/run` (POST); every run persisted to `prompt_optimization_runs` | Proposer + judge injectable (LLM default, deterministic rubric); promotes only if a candidate beats baseline by the margin; failed runs recorded, never raise |
+| 6 | Schema-enforced structured output | `response_format={"type":"json_object"}` passthrough on `litellm_client`; plan-service planner retries once with- repair, then heuristic fallback | Providers that can't honor the schema get the param dropped (`litellm.drop_params`) |
+| 7 | Bandit exploration (ε-greedy) | `services/bandit_service.py` + `/admin/monitoring/bandits`; rewards fed from `record_feedback` thumbs into `bandit_rewards`; `prompt_variant` stamped on assistant message metadata | Selection only active when the experiment config declares `bandit: true`; contextual/IPS upgrade explicitly out of scope |
+| 8 | Fairness/interpretability slices | Folded into the slice/fairness surface (item 3) | — |
+
+New tables (migration `c1d2e3f4a5b6`): `bandit_rewards`, `prompt_optimization_runs`,
+`redteam_runs`. Verdict items 9 (verbalized sampling) and REFRAG were **not**
+implemented: verbalized sampling was demoted and its real fix (structured
+output, item 6) shipped instead; REFRAG was reclassified out-of-scope (self-
+hosted inference optimization) and replaced by item 1.

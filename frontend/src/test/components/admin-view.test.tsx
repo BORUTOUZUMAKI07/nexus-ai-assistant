@@ -70,4 +70,53 @@ describe("AdminView", () => {
       expect(screen.queryByText("Block shell exec")).not.toBeInTheDocument()
     )
   })
+
+  it("shows slice monitoring and fairness on the Slices & fairness tab", async () => {
+    render(<AdminView />)
+    fireEvent.click(screen.getByText("Slices & fairness"))
+
+    await waitFor(() => expect(screen.getByText("Per-model/provider slices")).toBeInTheDocument())
+    expect(screen.getByText("alpha / groq")).toBeInTheDocument()
+    expect(screen.getByText(/High-volume \/ low-quality flags/)).toBeInTheDocument()
+    expect(screen.getByText("Fairness parity")).toBeInTheDocument()
+    expect(screen.getByText("deepeval / faithfulness")).toBeInTheDocument()
+  })
+
+  it("shows bandit experiment status with win rates", async () => {
+    render(<AdminView />)
+    fireEvent.click(screen.getByText("Slices & fairness"))
+
+    await waitFor(() =>
+      expect(screen.getByText(/Bandit experiments/)).toBeInTheDocument()
+    )
+    expect(screen.getByText("canary_v1")).toBeInTheDocument()
+    expect(screen.getByText(`${(0.7895 * 100).toFixed(1)}%`)).toBeInTheDocument()
+  })
+
+  it("lists the optimization evidence trail and runs a loop", async () => {
+    render(<AdminView />)
+    fireEvent.click(screen.getByText("Optimization"))
+
+    await waitFor(() => expect(screen.getByText("Optimization evidence trail")).toBeInTheDocument())
+    expect(screen.getAllByText("chat_system_prompt").length).toBeGreaterThanOrEqual(1)
+
+    fireEvent.change(screen.getByPlaceholderText(/Current system prompt/), {
+      target: { value: "You are a precise assistant." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Run optimization" }))
+    await waitFor(() => expect(screen.getAllByText("chat_system_prompt").length).toBeGreaterThanOrEqual(2))
+  })
+
+  it("shows the compliance audit surface and EU AI Act classification", async () => {
+    render(<AdminView />)
+    fireEvent.click(screen.getByText("Compliance"))
+
+    await waitFor(() =>
+      expect(screen.getByText(/downstream provider of a general-purpose chatbot/)).toBeInTheDocument()
+    )
+    expect(screen.getByText("System controls")).toBeInTheDocument()
+    expect(screen.getByText("Red team & GDPR")).toBeInTheDocument()
+    expect(screen.getByText("GDPR exports")).toBeInTheDocument()
+    expect(screen.getAllByText(/canary_v1/).length).toBeGreaterThanOrEqual(1)
+  })
 })

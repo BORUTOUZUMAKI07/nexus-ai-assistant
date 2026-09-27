@@ -498,6 +498,7 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
         tok in query_lower
         for tok in ("today", "latest", "news", "current", "recent", "update", "weather", "live", " as of")
     )
+    crag_correction: dict[str, Any] | None = None
     if not retrieval_ok:
         # Vector store unreachable → keep the CRAG fallback (regression guard).
         verdict, score = VERDICT_UNRELATED, 0.0
@@ -510,6 +511,45 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
         verdict, score = retrieval_critique_service.grade(result.citations)
         needs_web_search = verdict in ("insufficient", "unrelated") or wants_recency
 
+        # ── CRAG corrective retrieval (bounded re-retrieve before web fallback) ─
+        # When the initial grade is "insufficient" (weak but present grounding)
+        # and the user is not asking for fresh/current data, run one corrective
+        # local re-query with a refined query variant. Only if that still fails
+        # do we fall through to the web_search supplement below.
+        if verdict == "insufficient" and not wants_recency:
+            try:
+                from backend.app.services.rag.retrieval_guard import (
+                    retrieval_guard_service,
+                )
+
+                correction = await retrieval_guard_service.correct_retrieval(
+                    query=query,
+                    user_id=user_id,
+                    citations=list(result.citations),
+                    verdict=verdict,
+                    rag=rag_service,
+                )
+                if correction["action"] == "re-retrieved":
+                    verdict = correction["verdict"]
+                    score = correction["score"]
+                    citations = [c.model_dump() for c in correction["citations"]]
+                    needs_web_search = verdict in ("insufficient", "unrelated")
+                    crag_correction = {
+                        "action": correction["action"],
+                        "refined_queries": correction["refined_queries"],
+                        "revision_count": correction["revision_count"],
+                        "final_verdict": verdict,
+                        "final_score": round(score, 4),
+                    }
+                    logger.info(
+                        "crag_corrective_requery_succeeded",
+                        refined_queries=correction["refined_queries"],
+                        final_verdict=verdict,
+                        final_score=round(score, 4),
+                    )
+            except Exception as exc:
+                logger.warning("crag_corrective_requery_skipped", error=str(exc))
+
     update: dict[str, Any] = {
         "citations": citations,
         "grader_verdict": verdict,
@@ -517,6 +557,8 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
         "grader_confidence": round(max(0.0, min(1.0, score)), 4),
         "needs_web_search": needs_web_search,
     }
+    if crag_correction is not None:
+        update["crag_correction"] = crag_correction
 
     # 3. CRAG routing: queue web search for the tool node on weak grounding
     if needs_web_search:
@@ -756,6 +798,37 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("evidence_gate_evaluation_failed", error=str(exc))
 
+    # ── Calibrated confidence gate (record-only, fail-open) ───────────────────
+    # The gate never rewrites or blocks a draft — it records a decision
+    # (answer / hedge) any upstream consumer or admin surface can act on.
+    confidence_decision: dict[str, Any] = {
+        "confidence": 0.0,
+        "threshold": 0.0,
+        "pass": True,
+        "action": "answer",
+        "grounded": False,
+        "calibrated": False,
+    }
+    try:
+        from backend.app.domain.file.schemas import RAGCitation
+        from backend.app.services.confidence_service import confidence_service
+
+        conf_citations = [
+            RAGCitation(**c) if not isinstance(c, RAGCitation) else c
+            for c in (state.get("citations") or [])
+        ]
+        confidence_decision = confidence_service.decide(
+            response_text, citations=conf_citations
+        )
+        logger.info(
+            "confidence_gate_evaluated_on_synthesis",
+            confidence=confidence_decision["confidence"],
+            action=confidence_decision["action"],
+            calibrated=confidence_decision["calibrated"],
+        )
+    except Exception as exc:
+        logger.warning("confidence_gate_skipped", error=str(exc))
+
     # ── Save new memories from this exchange via mem0 (background, non-blocking) ──
     if user_id:
         exchange = [
@@ -789,4 +862,5 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         "evidence_gate_passed": evidence_gate_result["passed_gate"],
         "revision_count": revision_count,
         "critique": critique,
+        "confidence_decision": confidence_decision,
     }
