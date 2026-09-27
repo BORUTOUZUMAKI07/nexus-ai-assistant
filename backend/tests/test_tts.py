@@ -1,6 +1,7 @@
 """
 Unit tests for text-to-speech synthesis: provider-key guard (501-equivalent at
-service level) and successful byte output with a stubbed speech API.
+service level) and successful byte output with a stubbed speech API. TTS runs
+on the free Minimax tier by default (MINIMAX_API_KEY).
 """
 import pytest
 from backend.app.core.config import settings
@@ -8,6 +9,7 @@ from backend.app.infrastructure.ai import litellm_client
 
 
 def test_synthesize_speech_raises_without_provider_key(monkeypatch):
+    monkeypatch.setattr(settings, "MINIMAX_API_KEY", None)
     monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
     monkeypatch.setattr(settings, "TOGETHER_API_KEY", None)
     monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)
@@ -21,7 +23,8 @@ def test_synthesize_speech_raises_without_provider_key(monkeypatch):
 
 
 def test_synthesize_speech_returns_audio_bytes(monkeypatch):
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(settings, "MINIMAX_API_KEY", "mm-test")
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
     monkeypatch.setattr(settings, "TOGETHER_API_KEY", None)
     monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)
 
@@ -41,10 +44,11 @@ def test_synthesize_speech_returns_audio_bytes(monkeypatch):
 
 
 def test_synthesize_speech_uses_provider_matching_key(monkeypatch):
-    """Only an OpenRouter key + openai-routed default → clean RuntimeError (501),
-    while an explicit openrouter/… model uses the OpenRouter key."""
+    """Only an OpenRouter key + minimax-routed default → clean RuntimeError
+    (501), while an explicit openrouter/… model uses the OpenRouter key."""
     import asyncio
 
+    monkeypatch.setattr(settings, "MINIMAX_API_KEY", None)
     monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
     monkeypatch.setattr(settings, "TOGETHER_API_KEY", None)
     monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "sk-or-test")
@@ -58,7 +62,7 @@ def test_synthesize_speech_uses_provider_matching_key(monkeypatch):
     monkeypatch.setattr(litellm_client.litellm, "aspeech", fake_aspeech)
     loop = asyncio.get_event_loop()
 
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+    with pytest.raises(RuntimeError, match="MINIMAX_API_KEY"):
         loop.run_until_complete(litellm_client.ai_client.synthesize_speech("x"))
 
     audio = loop.run_until_complete(
