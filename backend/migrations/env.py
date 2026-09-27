@@ -25,6 +25,7 @@ PGBOUNCER_SAFE_CONNECT_ARGS = {
 # Import all models to ensure they are registered with SQLModel metadata
 from backend.app.domain.user.models import User, UserSettings, UserMemory, APIKey
 from backend.app.domain.conversation.models import Conversation, Message, MessageAttachment, ConversationBranch
+from backend.app.domain.experiment.models import BanditReward
 from backend.app.domain.file.models import File, FileChunk, FileMetadata
 from backend.app.domain.tool.models import Tool, ToolCall, ToolPermission
 from backend.app.domain.prompt.models import PromptTemplate, PromptVersion, Skill
@@ -32,6 +33,8 @@ from backend.app.domain.usage.models import UsageLog, CostLog, EvaluationLog
 from backend.app.domain.system.models import SystemConfig, AuditLog
 from backend.app.domain.plan.models import Plan
 from backend.app.domain.hook.models import HookPolicy
+from backend.app.domain.optimization.models import PromptOptimizationRun
+from backend.app.domain.redteam.models import RedTeamRun
 from backend.app.domain.artifact.models import Artifact, ArtifactVersion
 
 # this is the Alembic Config object
