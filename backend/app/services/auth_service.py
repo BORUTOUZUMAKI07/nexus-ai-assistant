@@ -69,6 +69,16 @@ class AuthService:
         token is returned instead; the client exchanges it for the real token
         pair via POST /auth/2fa/verify.
         """
+        # OAuth2PasswordRequestForm accepts unbounded form strings, so enforce
+        # credential limits here as well as in the JSON registration schemas.
+        if (
+            not isinstance(identifier, str)
+            or not identifier.strip()
+            or len(identifier) > 320
+            or not isinstance(password, str)
+            or not 1 <= len(password) <= 128
+        ):
+            raise AuthenticationError("Incorrect email/username or password.")
         user = await self._repo.get_by_email(identifier)
         if not user:
             user = await self._repo.get_by_username(identifier)
@@ -88,7 +98,7 @@ class AuthService:
             preauth = create_access_token(
                 subject=user.id,
                 expires_delta=timedelta(minutes=settings.TOTP_PREAUTH_MINUTES),
-                additional_claims={"type": "preauth"},
+                token_type="preauth",
             )
             logger.info("two_factor_challenge_issued", user_id=str(user.id))
             return TwoFactorChallengeResponse(
@@ -158,7 +168,7 @@ class AuthService:
             preauth = create_access_token(
                 subject=user.id,
                 expires_delta=timedelta(minutes=settings.TOTP_PREAUTH_MINUTES),
-                additional_claims={"type": "preauth"},
+                token_type="preauth",
             )
             logger.info("two_factor_challenge_issued", user_id=str(user.id), via="sso")
             return TwoFactorChallengeResponse(
@@ -221,7 +231,7 @@ class AuthService:
         token = create_access_token(
             subject=user.id,
             expires_delta=timedelta(minutes=settings.EMAIL_VERIFY_TOKEN_MINUTES),
-            additional_claims={"type": "verify_email"},
+            token_type="verify_email",
         )
         link = build_email_link("/verify-email?token=", token)
         result = await email_service.send(
@@ -242,7 +252,7 @@ class AuthService:
         token = create_access_token(
             subject=user.id,
             expires_delta=timedelta(minutes=settings.PASSWORD_RESET_TOKEN_MINUTES),
-            additional_claims={"type": "reset_password"},
+            token_type="reset_password",
         )
         link = build_email_link("/reset-password?token=", token)
         result = await email_service.send(

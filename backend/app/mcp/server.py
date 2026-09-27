@@ -116,8 +116,12 @@ def _safe_math_eval(expression: str) -> float | int:
     """
     if not expression or not expression.strip():
         raise ValueError("Empty expression")
+    if len(expression) > 500:
+        raise ValueError("Expression is too long (maximum 500 characters)")
 
     tree = ast.parse(expression, mode="eval")
+    if sum(1 for _ in ast.walk(tree)) > 100:
+        raise ValueError("Expression is too complex (maximum 100 syntax nodes)")
 
     def _eval(node: ast.AST) -> float | int:
         if isinstance(node, ast.Expression):
@@ -132,9 +136,11 @@ def _safe_math_eval(expression: str) -> float | int:
                 raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
             left = _eval(node.left)
             right = _eval(node.right)
-            if type(node.op) is ast.Pow:
+            if isinstance(node.op, ast.Pow):
                 if abs(right) > _MAX_EXPONENT:
                     raise ValueError(f"Exponent too large (max {_MAX_EXPONENT})")
+                if abs(left) > 1e100:
+                    raise ValueError("Base magnitude exceeds the supported limit")
                 return _check_result(left**right)
             return _check_result(op_fn(left, right))
         if isinstance(node, ast.UnaryOp):
@@ -157,7 +163,7 @@ def _safe_math_eval(expression: str) -> float | int:
             return _check_result(fn(*(_eval(arg) for arg in node.args)))
         raise ValueError(f"Unsupported expression element: {type(node).__name__}")
 
-    return _eval(tree)
+    return _check_result(_eval(tree))
 
 
 @mcp.tool()

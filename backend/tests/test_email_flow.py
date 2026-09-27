@@ -87,7 +87,7 @@ def _token_of(purpose, user_id):
     return create_access_token(
         subject=user_id,
         expires_delta=timedelta(minutes=30),
-        additional_claims={"type": purpose},
+        token_type=purpose,
     )
 
 

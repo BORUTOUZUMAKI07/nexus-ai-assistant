@@ -8,7 +8,7 @@ from backend.app.api.deps import get_current_user, get_usage_service
 from backend.app.domain.usage.schemas import EvaluationLogResponse, UsageSummaryResponse
 from backend.app.domain.user.models import User
 from backend.app.services.usage_service import UsageService
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 router = APIRouter(prefix="/usage", tags=["usage"])
 
@@ -24,12 +24,12 @@ async def get_usage_summary(
 @router.get("/evaluations", response_model=list[EvaluationLogResponse])
 async def get_evaluations(
     conversation_id: UUID | None = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     usage_svc: UsageService = Depends(get_usage_service),
 ):
     return await usage_svc.get_evaluations(
         user_id=current_user.id,
         conversation_id=conversation_id,
-        limit=min(max(limit, 1), 200),
+        limit=limit,
     )

@@ -232,3 +232,103 @@ async def test_me_requires_valid_token(client, user_auth_headers):
     resp = await client.get("/api/v1/auth/me", headers=user_auth_headers)
     assert resp.status_code == 200
     assert resp.json()["id"] is not None
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint,limit", [
+    ("/api/v1/auth/login", 10),
+    ("/api/v1/auth/register", 5),
+])
+async def test_public_auth_routes_return_429_when_rate_limited(
+    client, monkeypatch, endpoint, limit
+):
+    from backend.app.infrastructure.cache.redis_client import redis_service
+
+    calls = []
+
+    async def deny_request(**kwargs):
+        calls.append(kwargs)
+        return False, 0
+
+    monkeypatch.setattr(redis_service, "check_rate_limit", deny_request)
+    if endpoint.endswith("/login"):
+        response = await client.post(
+            endpoint,
+            data={"username": "someone@example.com", "password": "StrongPass123!"},
+        )
+    else:
+        response = await client.post(
+            endpoint,
+            json={
+                "email": f"limited-{uuid.uuid4().hex[:8]}@example.com",
+                "username": f"limited-{uuid.uuid4().hex[:8]}",
+                "password": "StrongPass123!",
+            },
+        )
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "60"
+    assert len(calls) == 1
+    assert calls[0]["limit"] == limit
+    assert calls[0]["window_seconds"] == 60
+
+
+
+@pytest.mark.asyncio
+async def test_refresh_route_returns_429_when_rate_limited(client, monkeypatch):
+    from backend.app.infrastructure.cache.redis_client import redis_service
+
+    calls = []
+
+    async def deny_request(**kwargs):
+        calls.append(kwargs)
+        return False, 0
+
+    monkeypatch.setattr(redis_service, "check_rate_limit", deny_request)
+    response = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": "syntactically.valid.token"},
+    )
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "60"
+    assert len(calls) == 1
+    assert calls[0]["identifier"].startswith("auth:refresh:")
+    assert calls[0]["limit"] == 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"refresh_token": ""},
+        {"refresh_token": "x" * 4097},
+        {"refresh_token": "token", "unexpected": "field"},
+    ],
+)
+async def test_refresh_rejects_invalid_payload_shape(client, payload):
+    response = await client.post("/api/v1/auth/refresh", json=payload)
+    assert response.status_code == 422
+
+
+
+@pytest.mark.asyncio
+async def test_logout_is_rate_limited(client, monkeypatch):
+    from backend.app.infrastructure.cache.redis_client import redis_service
+
+    calls = []
+
+    async def deny_request(**kwargs):
+        calls.append(kwargs)
+        return False, 0
+
+    monkeypatch.setattr(redis_service, "check_rate_limit", deny_request)
+    response = await client.post("/api/v1/auth/logout")
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "60"
+    assert len(calls) == 1
+    assert calls[0]["identifier"].startswith("auth:logout:")
+    assert calls[0]["limit"] == 20
+    assert calls[0]["window_seconds"] == 60

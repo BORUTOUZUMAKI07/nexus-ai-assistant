@@ -36,7 +36,7 @@ from backend.app.services.observability.cost_tracking import cost_tracking_servi
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.org_service import OrganizationService
 from backend.app.services.usage_service import UsageService
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -74,8 +74,8 @@ async def _release_stream_slot(thread_id: str) -> None:
 
 @router.get("", response_model=list[ConversationResponse])
 async def list_conversations(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=1000000),
     archived: bool = False,
     current_user: User = Depends(get_current_user),
     conv_svc: ConversationService = Depends(get_conversation_service),
@@ -170,7 +170,9 @@ async def fork_conversation(
 # ─── Request / Response schemas ──────────────────────────────────────────────
 
 class StreamChatRequest(BaseModel):
-    messages: list[dict]
+    model_config = {"extra": "forbid"}
+
+    messages: list[dict] = Field(min_length=1, max_length=100)
     mode: Literal["normal", "agent", "code", "research"] = "normal"
     stream: bool = True
     # Approved-plan preamble: prepended to the agent system prompt when Plan
@@ -180,7 +182,7 @@ class StreamChatRequest(BaseModel):
 
 class HITLFeedbackRequest(BaseModel):
     action: Literal["approve", "reject", "modify"]
-    data: dict = {}
+    data: dict = Field(default_factory=dict)
 
 
 # ─── Streaming Chat Endpoint ─────────────────────────────────────────────────
@@ -538,6 +540,14 @@ async def hitl_feedback(
     except ResourceNotFoundError:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    # Modified arguments are not yet applied by the graph resume node. Reject
+    # this action explicitly rather than silently executing the original args.
+    if body.action == "modify":
+        raise HTTPException(
+            status_code=422,
+            detail="Modified tool arguments are not supported yet. Reject this request and submit a new request with the desired changes.",
+        )
+
     # Serialize with any active stream on the same thread.
     if not await _acquire_stream_slot(thread_id):
         raise HTTPException(
@@ -560,15 +570,33 @@ async def hitl_feedback(
                 pending_interrupts.extend(getattr(task, "interrupts", None) or [])
         if not pending_interrupts:
             raise HTTPException(status_code=400, detail="This conversation is not waiting for an approval.")
+        # This endpoint resolves one specific tool-approval interrupt. Do not
+        # resume arbitrary/future interrupt types or ambiguous multi-interrupt
+        # snapshots with a generic approval decision.
+        if len(pending_interrupts) != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Multiple pending interruptions cannot be resolved by this endpoint.",
+            )
+
         from backend.app.agents.orchestrator.hitl import is_approval_expired
 
-        for intr in pending_interrupts:
-            payload = getattr(intr, "value", None)
-            if is_approval_expired(payload):
-                raise HTTPException(
-                    status_code=410,
-                    detail="This approval request has expired. Please start a new request.",
-                )
+        interrupt_payload = getattr(pending_interrupts[0], "value", None)
+        if not isinstance(interrupt_payload, dict) or interrupt_payload.get("action") != "tool_approval":
+            raise HTTPException(
+                status_code=409,
+                detail="The pending interruption is not a supported tool approval request.",
+            )
+        if not interrupt_payload.get("tool_name") or not isinstance(interrupt_payload.get("arguments"), dict):
+            raise HTTPException(
+                status_code=409,
+                detail="The pending tool approval payload is invalid.",
+            )
+        if is_approval_expired(interrupt_payload):
+            raise HTTPException(
+                status_code=410,
+                detail="This approval request has expired. Please start a new request.",
+            )
 
         result = await orchestrator_graph.ainvoke(
             Command(resume={"action": body.action, "data": body.data}),

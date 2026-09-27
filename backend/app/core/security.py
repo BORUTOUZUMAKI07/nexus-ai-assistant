@@ -41,12 +41,15 @@ def create_access_token(
     subject: str | UUID,
     role: str | None = None,
     expires_delta: timedelta | None = None,
+    token_type: str = "access",
     additional_claims: dict[str, Any] | None = None,
 ) -> str:
     """Creates a short-lived access token (default 15 minutes).
 
-    Accepts an optional `role` and arbitrary `additional_claims` merged into
-    the JWT payload, so callers declare identity claims through one function.
+    Accepts an optional `role`, a `token_type` (defaults to "access"), and
+    arbitrary `additional_claims` merged into the JWT payload, so callers
+    declare identity claims through one function. Identity and lifetime claims
+    (including ``type``) can never be overridden via ``additional_claims``.
     """
     if expires_delta:
         expire = datetime.now(UTC) + expires_delta
@@ -58,11 +61,21 @@ def create_access_token(
         "exp": expire,
         "iat": datetime.now(UTC),
         "jti": secrets.token_hex(16),
-        "type": "access",
+        "type": token_type,
     }
     if role is not None:
         to_encode["role"] = role
     if additional_claims:
+        # Identity and lifetime claims are controlled exclusively by this
+        # function. Callers must not override subject, expiry, token type, or
+        # token identifier through the extension-claims parameter.
+        reserved_claims = {"sub", "exp", "iat", "jti", "type", "iss", "aud"}
+        collisions = reserved_claims.intersection(additional_claims)
+        if collisions:
+            raise ValueError(
+                "additional_claims cannot override reserved JWT claims: "
+                + ", ".join(sorted(collisions))
+            )
         to_encode.update(additional_claims)
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
 

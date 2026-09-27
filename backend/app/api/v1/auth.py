@@ -4,6 +4,7 @@ Pure HTTP transport layer — delegates all auth use cases to AuthService (SRP +
 """
 import time
 
+import structlog
 from backend.app.api.deps import get_auth_service, get_current_user, get_db, get_oauth_service
 from backend.app.core.exceptions import AuthenticationError, UserAlreadyExistsError
 from backend.app.core.security import decode_token
@@ -23,25 +24,50 @@ from backend.app.domain.user.schemas import (
     UserResponse,
     VerifyEmailRequest,
 )
-from backend.app.infrastructure.cache.redis_client import get_cache_service
+from backend.app.infrastructure.cache.redis_client import get_cache_service, redis_service
 from backend.app.infrastructure.resilience.rate_limit import rate_limit_anon
 from backend.app.services.auth_service import AuthService
 from backend.app.services.oauth_service import OAuthService
 from backend.app.services.two_factor_service import TwoFactorService
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordRequestForm
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 bearer_optional = HTTPBearer(auto_error=False)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = structlog.get_logger(__name__)
+
+
+async def _enforce_auth_rate_limit(request: Request, *, action: str, limit: int) -> None:
+    """Apply a per-client-IP window without trusting unvalidated forwarded headers."""
+    client_host = request.client.host if request.client else "unknown"
+    try:
+        allowed, _remaining = await redis_service.check_rate_limit(
+            identifier=f"auth:{action}:{client_host}",
+            limit=limit,
+            window_seconds=60,
+            cost=1,
+        )
+    except Exception as exc:
+        # Keep authentication available during Redis outages; never log credentials.
+        logger.warning("auth_rate_limit_unavailable", action=action, error_type=type(exc).__name__)
+        return
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many authentication attempts. Please try again in a minute.",
+            headers={"Retry-After": "60"},
+        )
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(
     user_in: UserCreate,
+    request: Request,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
+    await _enforce_auth_rate_limit(request, action="register", limit=5)
     try:
         user = await auth_svc.register(user_in)
         # Best-effort verification email ("notify" leg of email infra).
@@ -57,6 +83,7 @@ async def register_user(
 
 @router.post("/login")
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     auth_svc: AuthService = Depends(get_auth_service),
     _rl: None = rate_limit_anon("auth.login", limit=60, window_seconds=60),
@@ -66,6 +93,7 @@ async def login(
     ``{"status": "2fa_required", "preauth_token": ..., "expires_in": ...}``
     instead; exchange it via POST /auth/2fa/verify.
     """
+    await _enforce_auth_rate_limit(request, action="login", limit=10)
     try:
         return await auth_svc.login(form_data.username, form_data.password)
     except AuthenticationError as exc:
@@ -79,8 +107,10 @@ async def login(
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
     token_in: TokenRefresh,
+    request: Request,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
+    await _enforce_auth_rate_limit(request, action="refresh", limit=20)
     try:
         return await auth_svc.refresh(token_in.refresh_token)
     except AuthenticationError as exc:
@@ -94,6 +124,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
 async def logout(
+    request: Request,
     token_in: TokenRefresh | None = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_optional),
     auth_svc: AuthService = Depends(get_auth_service),
@@ -102,6 +133,7 @@ async def logout(
     Revoke refresh token in Redis and complete logout.
     Uses auto_error=False so expired access tokens never block logging out.
     """
+    await _enforce_auth_rate_limit(request, action="logout", limit=20)
     # Blacklist the current access token (by jti) so it dies immediately
     # instead of living out its TTL. Fail-open: a malformed/expired token or
     # an offline Redis must never prevent logout.

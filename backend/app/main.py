@@ -24,7 +24,7 @@ from backend.app.core.config import settings
 from backend.app.core.exceptions import NexusException
 from backend.app.core.logging import get_logger, setup_logging
 from backend.app.infrastructure.cache.redis_client import redis_client
-from backend.app.infrastructure.database.engine import close_db, init_db
+from backend.app.infrastructure.database.engine import check_database_health, close_db, init_db
 from backend.app.infrastructure.resilience.rate_limit import (
     RateLimitError,
 )
@@ -45,7 +45,7 @@ if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.ENVIRONMENT,
-        traces_sample_rate=1.0,
+        traces_sample_rate=0.1,
     )
     logger.info("sentry_initialized", env=settings.ENVIRONMENT)
 
@@ -64,21 +64,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await init_db()
         logger.info("database_tables_initialized")
     except Exception as exc:
-        logger.warning("database_init_failed_or_offline", error=str(exc))
+        logger.warning("database_init_failed_or_offline", error_type=type(exc).__name__)
 
     # 2. Ping Redis
     try:
         pong = await redis_client.ping()
         logger.info("redis_connection_verified", pong=pong)
     except Exception as exc:
-        logger.warning("redis_offline_continuing_in_degraded_mode", error=str(exc))
+        logger.warning("redis_offline_continuing_in_degraded_mode", error_type=type(exc).__name__)
 
     # 3. Ensure Qdrant Vector Collection exists
     try:
         await vector_db.ensure_collection()
         logger.info("qdrant_collection_verified")
     except Exception as exc:
-        logger.warning("qdrant_init_failed_or_offline", error=str(exc))
+        logger.warning("qdrant_init_failed_or_offline", error_type=type(exc).__name__)
 
     # 4. Open LangGraph AsyncPostgresSaver connection pool (durable short-term memory)
     async with lifespan_graph():
@@ -172,7 +172,7 @@ async def nexus_exception_handler(request: Request, exc: NexusException):
         path=request.url.path,
         status=exc.status_code,
         error_code=exc.error_code,
-        detail=exc.message,
+        detail_length=len(exc.message) if isinstance(exc.message, str) else 0,
     )
     return JSONResponse(
         status_code=exc.status_code,
@@ -186,7 +186,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.error(
         "unhandled_internal_server_error",
         path=request.url.path,
-        error=str(exc),
+        error_type=type(exc).__name__,
         exc_info=True,
     )
     return JSONResponse(
@@ -203,13 +203,25 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # 3. Health check endpoints
 @app.get("/health", tags=["system"])
 async def health_check():
+    """Liveness probe: confirms the ASGI process is responding."""
     return {
         "status": "healthy",
         "service": "Nexus AI Assistant",
-        "environment": settings.ENVIRONMENT,
-        "default_model": settings.DEFAULT_MODEL,
-        "free_tier_ready": True,
     }
+
+
+@app.get("/health/ready", tags=["system"])
+async def readiness_check():
+    """Readiness probe: returns 503 when the primary database is unavailable."""
+    from fastapi.responses import JSONResponse
+
+    database_ready = await check_database_health()
+    if not database_ready:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "not_ready", "database": "unavailable"},
+        )
+    return {"status": "ready", "database": "available"}
 
 
 @app.get("/", tags=["system"])
@@ -269,7 +281,7 @@ try:
                 if mcp_key and settings.MCP_API_KEY and mcp_key == settings.MCP_API_KEY:
                     return True
             except Exception as exc:
-                logger.warning("mcp_auth_check_error", error=str(exc))
+                logger.warning("mcp_auth_check_error", error_type=type(exc).__name__)
             return False
 
         class _MCPAuthMiddleware(BaseHTTPMiddleware):
@@ -286,4 +298,4 @@ try:
         app.mount("/mcp", mcp_subapp)
         logger.info("fastmcp_mounted", path="/mcp", auth_enabled=settings.MCP_AUTH_ENABLED)
 except Exception as exc:
-    logger.warning("fastmcp_mount_failed", error=str(exc))
+    logger.warning("fastmcp_mount_failed", error_type=type(exc).__name__)
