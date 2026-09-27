@@ -2,18 +2,22 @@
 Admin Management Endpoints.
 Provides user management, system health overview, audit logs, and global configuration.
 """
+import importlib.util
 from typing import Any
 from uuid import UUID
 
 import structlog
 from backend.app.api.deps import get_current_admin, get_db
+from backend.app.core.config import settings
 from backend.app.domain.system.service import SystemService
+from backend.app.domain.usage.models import CostLog
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.cache.redis_client import redis_client
 from backend.app.infrastructure.database.engine import check_database_health
 from backend.app.services.monitoring.drift_service import DriftService
 from backend.app.services.observability.metrics import metrics_collector
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -129,3 +133,59 @@ async def get_drift_report(
             "detail": {},
             "error": f"Drift report unavailable: {exc}",
         }
+
+
+@router.get("/monitoring/observability")
+async def get_observability_status(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    Single admin surface for the observability stack (MD §8.3/§8.8): which
+    collectors are wired, which are live, plus the latest drift + cost rollups.
+    Honest signal — an enabled-but-uninstalled Langfuse is reported as such.
+    """
+    langfuse_installed = importlib.util.find_spec("langfuse") is not None
+    langfuse_configured = bool(
+        settings.LANGFUSE_PUBLIC_KEY and settings.LANGFUSE_SECRET_KEY
+    )
+
+    drift: dict[str, Any] = {}
+    try:
+        drift = await DriftService(session).drift_report()
+    except Exception as exc:
+        drift = {"error": f"Drift report unavailable: {exc}"}
+
+    cost = {"total_usd": 0.0, "period_count": 0}
+    try:
+        row = (
+            await session.exec(
+                select(func.sum(CostLog.total_cost), func.count(CostLog.id))
+            )
+        ).one()
+        cost = {"total_usd": float(row[0] or 0.0), "period_count": int(row[1] or 0)}
+    except Exception as exc:
+        logger.warning("cost_rollup_query_failed", error=str(exc))
+
+    return {
+        "stack": {
+            "langfuse": {
+                "enabled": bool(settings.LANGFUSE_ENABLED),
+                "configured": langfuse_configured,
+                "package_installed": langfuse_installed,
+                "status": (
+                    "live"
+                    if settings.LANGFUSE_ENABLED and langfuse_installed and langfuse_configured
+                    else "inactive"
+                ),
+                "activate": "pip install -e '.[observability]' && LANGFUSE_ENABLED=true "
+                            "LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=...",
+            },
+            "drift_monitoring": {"enabled": True, "endpoint": "/api/v1/admin/monitoring/drift"},
+            "audit_logs": True,
+            "pii_redaction": {"enabled": bool(settings.PII_REDACTION_ENABLED)},
+            "metrics_collector": True,
+        },
+        "drift": drift,
+        "cost": cost,
+    }

@@ -162,6 +162,30 @@ def get_usage_service(session: AsyncSession = Depends(get_db)) -> "UsageService"
     return UsageService(session)
 
 
+def get_account_service(session: AsyncSession = Depends(get_db)) -> "AccountService":
+    """Inject AccountService (GDPR export/erasure) with database session."""
+    from backend.app.services.account_service import AccountService
+    return AccountService(session)
+
+
+def get_org_service(session: AsyncSession = Depends(get_db)) -> "OrganizationService":
+    """Inject OrganizationService with database session."""
+    from backend.app.services.org_service import OrganizationService
+    return OrganizationService(session)
+
+
+def get_webhook_service(session: AsyncSession = Depends(get_db)) -> "WebhookService":
+    """Inject WebhookService with database session."""
+    from backend.app.services.webhook_service import WebhookService
+    return WebhookService(session)
+
+
+def get_share_service(session: AsyncSession = Depends(get_db)) -> "ShareService":
+    """Inject ShareService with database session."""
+    from backend.app.services.share_service import ShareService
+    return ShareService(session)
+
+
 def get_rag_service() -> "RAGService":
     """Inject RAGService with concrete RAG components (DIP)."""
     from backend.app.services.rag.citation import citation_service

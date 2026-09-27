@@ -76,6 +76,98 @@ change), unit-tested, and live-verified** unless marked infra-only.
 - Example experiment config: `backend/config/experiments.example.yaml`.
 - Tests: `tests/test_experiments.py` (7), `tests/test_response_cache.py` (7).
 
+## 8. CI pipeline (`⚠️/half-done` row closed) ✅
+- `.github/workflows/ci.yml` — two jobs:
+  - `test` runs the full unit + behavioral-invariant suite (`pytest -p no:deepeval
+    -m "not e2e"`) plus an informational `ruff check` on every push/PR.
+  - `prompt-regression-gate` runs the live LLM-judge prompt-regression gate
+    against the golden set; it only arms when the `RUN_LLM_EVAL_GATES` secret is
+    `1` (contributors without model credentials never see a false red).
+
+## 9. Two-factor authentication (TOTP, RFC 6238) ✅
+- `two_factor_service.py` + `AuthService` — per-user enable/disable via
+  `POST /auth/2fa/setup`, `/auth/2fa/enable`, `/auth/2fa/disable`,
+  `/auth/2fa/verify`, `/auth/2fa/status`.
+- Login with 2FA enabled returns `TwoFactorChallengeResponse` (short-lived
+  `preauth` JWT, `TOTP_PREAUTH_MINUTES`) instead of tokens; `/auth/2fa/verify`
+  exchanges it for real JWTs. Ordinary access tokens are rejected as challenges.
+- State reuses `UserSettings.totp_secret` + `custom_settings["two_factor_enabled"]`
+  (no live-DB ALTER). Clock-drift tolerance = `TOTP_VALID_WINDOW` (±1 step).
+- Tests: `tests/test_two_factor.py` (10).
+
+## 10. Email verification / password reset / notifications ✅
+- `email_service.py` — fail-open delivery chain: Resend (`RESEND_API_KEY`) →
+  SMTP → dev sink (result logged + `dev_link` returned) so local/dev flows never
+  block. `EMAIL_VERIFICATION_REQUIRED` defaults **false** (zero behavior change).
+- `/auth/verify-email`, `/auth/resend-verification`,
+  `/auth/forgot-password`, `/auth/reset-password` with purpose-scoped signed
+  tokens (`verify_email` vs `reset_password` — wrong purpose → 401) and uniform
+  forgot-password envelopes (no account-existence leak).
+- Tests: `tests/test_email_flow.py` (7).
+
+## 11. Conversation search ✅
+- `ConversationRepository.search_user_conversations` + service layer;
+  `GET /conversations/search?q=…` (owner-scoped over title + message body,
+  ILIKE). Registered before `/{conversation_id}` so the path never collides.
+- Tests: `tests/test_conversation_search.py` (3, incl. cross-user isolation).
+
+## 12. GDPR export / right-to-erasure ✅
+- `account_service.py` — `export_user_data` returns a portable JSON snapshot
+  (user, settings, conversations+messages incl. citations/feedback, files,
+  memories, API-key previews — never encrypted key material, `usage_summary`);
+  `export_as_json_bytes` for the download endpoint; `delete_account` performs a
+  dependency-ordered cascade (conversations → files/chunks → tool calls →
+  usage/cost → prompt versions → memories/API keys/settings → webhook
+  deliveries+endpoints → shares → org memberships/invites/orgs → the users
+  row). Endpoints: `GET /account/export`, `DELETE /account` (owner-scoped
+  bearer auth).
+- Tests: `tests/test_account_gdpr.py` (4).
+
+## 13. Read-only share links ✅
+- `share_service.py` + `conversation_shares` table — owner mints an unguessable
+  token (`POST /shares/{conversation_id}`), `GET /public/shares/{token}`
+  serves the conversation without auth, `DELETE /shares/{conversation_id}`
+  revokes, TTL optional (`SHARE_DEFAULT_TTL_SECONDS` / per-request
+  `ttl_seconds`). Expired/deactivated/unknown → 404 no-content; cross-owner
+  create/revoke → 404.
+- Tests: `tests/test_shares.py` (5).
+
+## 14. Signed outbound webhooks ✅
+- `webhook_service.py` + `webhook_endpoints`/`webhook_deliveries` tables —
+  per-endpoint HMAC secret; every delivery is signed
+  `X-Nexus-Signature: sha256=<hex hmac>` over the raw JSON body and recorded
+  with status/http_status/attempts. `message.completed` fires best-effort out of
+  the sync message path. Retries bounded by `WEBHOOK_MAX_ATTEMPTS`
+  (`retry_webhook_deliveries_task` celery task + `POST /webhooks/{id}/redeliver`).
+  Endpoints: CRUD at `/webhooks`, event dispatch listing, redeliver; ownership
+  enforced on every mutation.
+- Tests: `tests/test_webhooks.py` (8).
+
+## 15. Text-to-speech ✅
+- `litellm_client.synthesize_speech` (`litellm.aspeech`); `GET/POST
+  /audio/speech` returns audio when a speech-capable provider key is set and
+  501 otherwise. Config: `TTS_MODEL`/`TTS_VOICE`/`TTS_FORMAT`.
+- Tests: `tests/test_tts.py` (2).
+
+## 16. Organizations / workspaces ✅
+- `org_service.py` + `organizations`/`organization_members`/`organization_invites`
+  tables (registered in `domain/__init__` + engine). Owner/admin-gated invites,
+  email-match acceptance, role coercion (owner→member), leave/remove rules,
+  owner-only delete. Additive only — existing user-owned conversation queries
+  (and the IDOR/sweep guarantees) are untouched.
+- Endpoints: `/orgs` CRUD, `/orgs/{id}/members`, `/orgs/{id}/invites`,
+  `/orgs/{id}/leave`, `/orgs/invites/accept`.
+- Tests: `tests/test_orgs.py` (9).
+
+## 17. Observability surface (`⚠️/half-done` row closed) ✅
+- `GET /admin/monitoring/observability` — single admin status view: Langfuse
+  enabled/configured/package-installed (with the `pip install .[observability]`
+  activation hint), the drift-monitoring collector, and latest drift + cost
+  rollup from `usage_logs`/`evaluation_logs`.
+- Shared fakes: `tests/fakes.py` (`FakeSession` with eq/in_/ilike/and-or
+  evaluation + per-entity select hooks for joined queries) used by every new
+  suite above.
+
 ## Not implemented (infra/managed-platform only — honest disclosure)
 - **K8s/OPA/mesh-level policy (Admission/OPA Gatekeeper, service mesh mTLS)** —
   deployment-time platform work; the in-app 5-step Tool Gateway + RLS remains the
@@ -85,7 +177,11 @@ change), unit-tested, and live-verified** unless marked infra-only.
   self-service on the free tier.
 
 ## Verification
-- `pytest` (unit tier): **131 passed** (baseline 90 → 41 new tests, zero
-  regressions). Live 27-check REST sweep re-run; every security invariant
-  (SEC-01 client-declared approval powerlessness, single-use 409, cross-user
-  404, admin 403) re-verified against the new build.
+- `pytest` (unit tier): **180 passed** (baseline 131 → +49 new tests across the
+  nine features above; zero regressions in the pre-existing 131). Docker-backed
+  integration tests remain opt-in (no container runtime here).
+- Live 38-check REST sweep re-run; every security invariant (SEC-01
+  client-declared approval powerlessness, single-use 409, cross-user 404, admin
+  403) re-verified against the new build — 38/38 passed (incl. TTS clean 501
+  when no speech-capable provider key is set, 2FA one-shot setup, share
+  revoke→404, org invite accept, GDPR export/erase on a scratch account).

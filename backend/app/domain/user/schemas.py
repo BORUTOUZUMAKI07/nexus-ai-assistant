@@ -31,6 +31,43 @@ class TokenRefresh(BaseModel):
     refresh_token: str
 
 
+# ── Two-Factor Authentication (TOTP) ────────────────────────────────────────
+
+class TwoFactorChallengeResponse(BaseModel):
+    status: str = "2fa_required"
+    preauth_token: str
+    expires_in: int
+
+
+class TwoFactorSetupResponse(BaseModel):
+    secret: str
+    otpauth_uri: str
+
+
+class TwoFactorCodeRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=10, description="Current TOTP code")
+
+
+class TwoFactorVerifyRequest(BaseModel):
+    preauth_token: str
+    code: str = Field(min_length=6, max_length=10)
+
+
+# ── Email verification / password reset ─────────────────────────────────────
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8)
+
+
 class UserUpdate(BaseModel):
     full_name: str | None = None
     avatar_url: str | None = None

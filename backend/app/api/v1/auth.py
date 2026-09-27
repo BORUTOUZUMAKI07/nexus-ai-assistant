@@ -2,20 +2,28 @@
 Authentication API Router.
 Pure HTTP transport layer — delegates all auth use cases to AuthService (SRP + DIP).
 """
-from backend.app.api.deps import get_auth_service, get_current_user
+from backend.app.api.deps import get_auth_service, get_current_user, get_db
 from backend.app.core.exceptions import AuthenticationError, UserAlreadyExistsError
 from backend.app.core.security import decode_token
 from backend.app.domain.user.models import User
 from backend.app.domain.user.schemas import (
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
     TokenRefresh,
     TokenResponse,
+    TwoFactorCodeRequest,
+    TwoFactorSetupResponse,
+    TwoFactorVerifyRequest,
     UserCreate,
     UserResponse,
+    VerifyEmailRequest,
 )
 from backend.app.infrastructure.cache.redis_client import get_cache_service
 from backend.app.services.auth_service import AuthService
+from backend.app.services.two_factor_service import TwoFactorService
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordRequestForm
+from sqlmodel.ext.asyncio.session import AsyncSession
 import time
 
 bearer_optional = HTTPBearer(auto_error=False)
@@ -29,16 +37,27 @@ async def register_user(
     auth_svc: AuthService = Depends(get_auth_service),
 ):
     try:
-        return await auth_svc.register(user_in)
+        user = await auth_svc.register(user_in)
+        # Best-effort verification email ("notify" leg of email infra).
+        try:
+            await auth_svc.send_verification_email(user)
+        except Exception:
+            pass
+        return user
     except UserAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=exc.message)
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login")
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     auth_svc: AuthService = Depends(get_auth_service),
 ):
+    """
+    Returns a token pair. When the user has TOTP 2FA enabled, returns
+    ``{"status": "2fa_required", "preauth_token": ..., "expires_in": ...}``
+    instead; exchange it via POST /auth/2fa/verify.
+    """
     try:
         return await auth_svc.login(form_data.username, form_data.password)
     except AuthenticationError as exc:
@@ -91,3 +110,118 @@ async def logout(
     if token_in and token_in.refresh_token:
         await auth_svc.revoke_refresh_token(token_in.refresh_token)
     return {"message": "Logged out successfully"}
+
+
+# ─── Two-Factor Authentication (TOTP) ────────────────────────────────────────
+
+@router.post("/2fa/setup", response_model=TwoFactorSetupResponse)
+async def two_factor_setup(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """Provision TOTP: returns the secret + otpauth URI. Not enabled until /2fa/enable."""
+    svc = TwoFactorService(session)
+    try:
+        return await svc.setup(current_user.id, current_user.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/2fa/enable")
+async def two_factor_enable(
+    body: TwoFactorCodeRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """Confirm the TOTP code from setup and enable 2FA for this account."""
+    svc = TwoFactorService(session)
+    try:
+        ok = await svc.enable(current_user.id, body.code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not ok:
+        raise HTTPException(status_code=400, detail="Invalid two-factor authentication code.")
+    return {"status": "enabled"}
+
+
+@router.post("/2fa/disable")
+async def two_factor_disable(
+    body: TwoFactorCodeRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """Disable 2FA after validating the current TOTP code."""
+    svc = TwoFactorService(session)
+    try:
+        ok = await svc.disable(current_user.id, body.code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not ok:
+        raise HTTPException(status_code=400, detail="Invalid two-factor authentication code.")
+    return {"status": "disabled"}
+
+
+@router.post("/2fa/verify", response_model=TokenResponse)
+async def two_factor_verify(
+    body: TwoFactorVerifyRequest,
+    auth_svc: AuthService = Depends(get_auth_service),
+):
+    """Exchange a preauth challenge + valid TOTP code for the real token pair."""
+    try:
+        return await auth_svc.verify_2fa(body.preauth_token, body.code)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.message)
+
+
+@router.get("/2fa/status")
+async def two_factor_status(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    svc = TwoFactorService(session)
+    return {"enabled": await svc.is_enabled(current_user.id)}
+
+
+# ─── Email verification & password reset ─────────────────────────────────────
+
+@router.post("/verify-email", response_model=UserResponse)
+async def verify_email(
+    body: VerifyEmailRequest,
+    auth_svc: AuthService = Depends(get_auth_service),
+):
+    try:
+        return await auth_svc.verify_email(body.token)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message)
+
+
+@router.post("/resend-verification")
+async def resend_verification(
+    current_user: User = Depends(get_current_user),
+    auth_svc: AuthService = Depends(get_auth_service),
+):
+    result = await auth_svc.send_verification_email(current_user)
+    return result
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    body: ForgotPasswordRequest,
+    auth_svc: AuthService = Depends(get_auth_service),
+):
+    """Issues + emails a reset token. Returns the same envelope for known/unknown emails."""
+    result = await auth_svc.initiate_password_reset(body.email)
+    return result
+
+
+@router.post("/reset-password", response_model=UserResponse)
+async def reset_password(
+    body: ResetPasswordRequest,
+    auth_svc: AuthService = Depends(get_auth_service),
+):
+    try:
+        return await auth_svc.reset_password(body.token, body.new_password)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message)

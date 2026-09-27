@@ -63,6 +63,33 @@ class ConversationRepository(BaseRepository[Conversation]):
         result = await self.session.exec(statement)
         return list(result.all())
 
+    async def search_user_conversations(
+        self, user_id: UUID, query: str, limit: int = 20
+    ) -> list[Conversation]:
+        """
+        Full-text-ish search over the user's own conversations: matches the
+        title OR any message body (ILIKE). Owner-scoped, so cross-user data is
+        never exposed (search is a read of the same owner-filtered set).
+        """
+        pattern = f"%{query.strip()}%"
+        statement = (
+            select(Conversation)
+            .where(
+                Conversation.user_id == user_id,
+                Conversation.is_archived == False,  # noqa: E712
+            )
+            .where(
+                Conversation.title.ilike(pattern)
+                | Conversation.id.in_(
+                    select(Message.conversation_id).where(Message.content.ilike(pattern))
+                )
+            )
+            .order_by(Conversation.updated_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.exec(statement)
+        return list(result.all())
+
     async def create(self, user_id: UUID, title: str = "New Chat", model: str = "llama-3.3-70b-versatile", system_prompt: str | None = None) -> Conversation:
         conversation = Conversation(
             user_id=user_id,

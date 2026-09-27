@@ -9,11 +9,14 @@ from sqlmodel import SQLModel
 try:
     import backend.app.domain.conversation.models  # noqa: F401
     import backend.app.domain.file.models  # noqa: F401
+    import backend.app.domain.org.models  # noqa: F401
     import backend.app.domain.prompt.models  # noqa: F401
+    import backend.app.domain.share.models  # noqa: F401
     import backend.app.domain.system.models  # noqa: F401
     import backend.app.domain.tool.models  # noqa: F401
     import backend.app.domain.usage.models  # noqa: F401
     import backend.app.domain.user.models  # noqa: F401
+    import backend.app.domain.webhook.models  # noqa: F401
 except Exception as exc:
     logger.warning("domain_models_import_warning", error=str(exc))
 
