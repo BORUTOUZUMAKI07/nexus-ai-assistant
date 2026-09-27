@@ -5,6 +5,7 @@ from typing import Any
 import litellm
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
+from backend.app.infrastructure.resilience.guards import CircuitBreaker, InFlightLimiter
 from backend.app.services.observability.helicone import helicone_service
 from litellm import Router, completion_cost
 
@@ -253,10 +254,25 @@ router = Router(
     timeout=25,
 )
 
+# Resilience guards (HLD: circuit breaker + bulkhead in-flight cap), keyed per
+# model group. A dead provider trips its group's breaker so later requests skip
+# that group immediately instead of grinding through every fallback; the
+# in-flight cap keeps free-tier provider quotas from being exhausted by a burst
+# of concurrent agent work. Both are process-local and reset on deploy.
+_llm_breaker = CircuitBreaker(failure_threshold=5, open_timeout_seconds=60.0)
+_llm_in_flight = InFlightLimiter(max_in_flight=8)
+
 
 class LiteLLMService:
-    def __init__(self, llm_router: Router = router):
+    def __init__(
+        self,
+        llm_router: Router = router,
+        circuit_breaker: CircuitBreaker | None = None,
+        in_flight_limiter: InFlightLimiter | None = None,
+    ):
         self.router = llm_router
+        self._breaker = circuit_breaker if circuit_breaker is not None else _llm_breaker
+        self._in_flight = in_flight_limiter if in_flight_limiter is not None else _llm_in_flight
 
     async def complete(
         self,
@@ -296,7 +312,6 @@ class LiteLLMService:
         # rejects any single request whose expected output exceeds it. Keep
         # every completion on the Groq-hosted groups under a safe ceiling so a
         # long internal call can never hard-fail the whole agentic stream.
-        effective_max_tokens = min(max(max_tokens, 1), 1000) if group in ("fast_chat", "complex_reasoning") else max_tokens
 
         # Fallback chain: if primary group returns empty content (no text + no tool calls),
         # retry once with the next available group before raising. This guards against
@@ -309,16 +324,28 @@ class LiteLLMService:
         last_exc: Exception | None = None
         for _attempt_group in _attempt_groups:
             _eff_tokens = min(max(max_tokens, 1), 1000) if _attempt_group in ("fast_chat", "complex_reasoning") else max_tokens
-            try:
-                response = await self.router.acompletion(
-                    model=_attempt_group,
-                    messages=_normalize_messages(messages),
-                    temperature=temperature,
-                    max_tokens=_eff_tokens,
-                    extra_headers=extra_headers if extra_headers else None,
-                    **(response_format if response_format else {}),
+
+            # Circuit breaker: skip the group entirely while it is OPEN.
+            if not await self._breaker.allow(_attempt_group):
+                logger.warning("llm_circuit_open_skip", model=_attempt_group)
+                last_exc = last_exc or RuntimeError(
+                    f"Provider circuit open for model group '{_attempt_group}'"
                 )
+                continue
+
+            try:
+                # Bulkhead: cap concurrent in-flight calls per provider group.
+                async with self._in_flight.acquire(_attempt_group):
+                    response = await self.router.acompletion(
+                        model=_attempt_group,
+                        messages=_normalize_messages(messages),
+                        temperature=temperature,
+                        max_tokens=_eff_tokens,
+                        extra_headers=extra_headers if extra_headers else None,
+                        **(response_format if response_format else {}),
+                    )
             except Exception as exc:
+                await self._breaker.record_failure(_attempt_group)
                 last_exc = exc
                 logger.warning(
                     "llm_completion_failed",
@@ -337,6 +364,7 @@ class LiteLLMService:
             _tool_calls = getattr(_msg, "tool_calls", None) if _msg else None
             if _content or _tool_calls:
                 # Valid response — stop retrying.
+                await self._breaker.record_success(_attempt_group)
                 break
 
             logger.warning(
@@ -398,44 +426,53 @@ class LiteLLMService:
 
         _start = _time.perf_counter()
         effective_max_tokens = min(max(max_tokens, 1), 1000) if group in ("fast_chat", "complex_reasoning") else max_tokens
-        try:
-            response = await self.router.acompletion(
-                model=group,
-                messages=_normalize_messages(messages),
-                temperature=temperature,
-                max_tokens=effective_max_tokens,
-                stream=True,
-            )
-        except Exception as exc:
-            logger.warning(
-                "llm_stream_start_failed",
-                model=group,
-                error=str(exc),
-                duration_ms=int((_time.perf_counter() - _start) * 1000),
-            )
-            raise
-        logger.info(
-            "llm_stream_started",
-            model=group,
-            resolved=getattr(response, "model", ""),
-            first_chunk_latency_ms=int((_time.perf_counter() - _start) * 1000),
-        )
-        try:
-            async for chunk in response:
-                # Guard: streaming chunks can have delta.content = None between
-                # thinking tokens — skip silently rather than yielding "None" strings.
-                delta = (chunk.choices[0].delta.content if chunk.choices else None) or ""
-                if delta:
-                    yield delta
-        finally:
-            # Always release the upstream SSE connection, including when the
-            # consumer generator is closed early (client disconnect) or a
-            # provider error interrupts the loop. Leaking it stalls the provider
-            # HTTP pool and can wedge later runs.
+
+        # Circuit breaker: refuse to start a stream against an OPEN group.
+        if not await self._breaker.allow(group):
+            logger.warning("llm_stream_circuit_open", model=group)
+            raise RuntimeError(f"Provider circuit open for model group '{group}'")
+
+        async with self._in_flight.acquire(group):
             try:
-                await response.aclose()
+                response = await self.router.acompletion(
+                    model=group,
+                    messages=_normalize_messages(messages),
+                    temperature=temperature,
+                    max_tokens=effective_max_tokens,
+                    stream=True,
+                )
             except Exception as exc:
-                logger.warning("llm_stream_aclose_failed", model=group, error=str(exc))
+                await self._breaker.record_failure(group)
+                logger.warning(
+                    "llm_stream_start_failed",
+                    model=group,
+                    error=str(exc),
+                    duration_ms=int((_time.perf_counter() - _start) * 1000),
+                )
+                raise
+            await self._breaker.record_success(group)
+            logger.info(
+                "llm_stream_started",
+                model=group,
+                resolved=getattr(response, "model", ""),
+                first_chunk_latency_ms=int((_time.perf_counter() - _start) * 1000),
+            )
+            try:
+                async for chunk in response:
+                    # Guard: streaming chunks can have delta.content = None between
+                    # thinking tokens — skip silently rather than yielding "None" strings.
+                    delta = (chunk.choices[0].delta.content if chunk.choices else None) or ""
+                    if delta:
+                        yield delta
+            finally:
+                # Always release the upstream SSE connection, including when the
+                # consumer generator is closed early (client disconnect) or a
+                # provider error interrupts the loop. Leaking it stalls the provider
+                # HTTP pool and can wedge later runs.
+                try:
+                    await response.aclose()
+                except Exception as exc:
+                    logger.warning("llm_stream_aclose_failed", model=group, error=str(exc))
 
     async def completion(
         self,

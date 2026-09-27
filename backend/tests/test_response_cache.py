@@ -49,6 +49,27 @@ async def test_cache_key_is_stable_and_scoped():
 
 
 @pytest.mark.asyncio
+async def test_cache_key_scoped_by_prompt_variant():
+    k_default = cache_key("u1", "m", "what is 2+2")
+    k_variant = cache_key("u1", "m", "what is 2+2", prompt_variant="concise")
+    assert k_default != k_variant
+    # Same variant + same query → the same key (idempotent).
+    assert cache_key("u1", "m", "what is 2+2", prompt_variant="concise") == k_variant
+
+
+@pytest.mark.asyncio
+async def test_variant_flip_never_reuses_previous_variant_answer(cache):
+    await cache.set(
+        "u1", "model-a", "What is 2+2", "4 (default).",
+        tokens_input=1, tokens_output=1, cost_usd=0.0, prompt_variant="default",
+    )
+    # Different variant → cache miss even though user+model+query match.
+    assert await cache.get("u1", "model-a", "What is 2+2", prompt_variant="concise") is None
+    hit = await cache.get("u1", "model-a", "What is 2+2", prompt_variant="default")
+    assert hit is not None and hit["content"] == "4 (default)."
+
+
+@pytest.mark.asyncio
 async def test_get_returns_none_when_disabled(monkeypatch):
     fake = FakeCache()
     orig = settings.RESPONSE_CACHE_ENABLED

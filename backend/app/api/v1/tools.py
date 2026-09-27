@@ -5,7 +5,13 @@ Pure HTTP transport layer — delegates tool execution and HITL approval to Tool
 from typing import Any
 from uuid import UUID
 
-from backend.app.api.deps import get_conversation_service, get_current_user, get_db, get_tool_service
+from backend.app.api.deps import (
+    get_conversation_service,
+    get_current_user,
+    get_db,
+    get_tool_service,
+    require_idempotency_key,
+)
 from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.domain.tool.repository import ToolRepository
 from backend.app.domain.tool.schemas import ToolApprovalRequest
@@ -45,6 +51,7 @@ async def execute_tool_endpoint(
     current_user: User = Depends(get_current_user),
     tool_svc: ToolService = Depends(get_tool_service),
     conv_svc: ConversationService = Depends(get_conversation_service),
+    _idem_key: None = require_idempotency_key("tool.execute"),
 ):
     """Directly execute a vetted tool through the 5-step safety gateway."""
     # IDOR guard: the tool call is logged against this conversation — verify the
@@ -66,6 +73,7 @@ async def approve_tool_call(
     approval: ToolApprovalRequest,
     current_user: User = Depends(get_current_user),
     tool_svc: ToolService = Depends(get_tool_service),
+    _idem_key: None = require_idempotency_key("tool.approval"),
 ):
     """Resolves a pending Human-In-The-Loop approval request."""
     try:

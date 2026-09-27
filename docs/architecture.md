@@ -54,3 +54,12 @@ graph TD
    - Dual-vector generation (dense BAAI/bge-small-en-v1.5 + sparse BM25).
    - Multi-stage retrieval with Reciprocal Rank Fusion (Fusion.RRF) and FlashRank cross-encoder reranking.
    - Grounded claim verification and citation attribution.
+
+## Reliability & Resilience
+
+- **Resilience guards** (`backend/app/infrastructure/resilience/`): per-model-group
+  circuit breaker, bulkhead in-flight cap, Redis singleton-task lock, and
+  `Idempotency-Key` replay guard (see [HLD pattern coverage](hld-patterns-coverage.md)
+  for the full 20-pattern audit matrix).
+- All external calls (LLM providers, storage, vector DB, webhooks) fail open —
+  an outage degrades latency/coverage, never bricks the request path.

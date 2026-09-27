@@ -14,6 +14,7 @@ from uuid import UUID
 import structlog
 from backend.app.domain.file.repository import FileRepository
 from backend.app.infrastructure.database.session import async_session_factory
+from backend.app.infrastructure.resilience.guards import singleton_lock
 from backend.app.infrastructure.storage.supabase_storage import storage_client
 from backend.app.services.evaluation.deepeval_service import deepeval_service
 from backend.app.services.rag.ingest import ingestion_service
@@ -33,7 +34,30 @@ def run_async(coro):
     return loop.run_until_complete(coro)
 
 
-@celery_app.task(name="tasks.process_file_indexing", bind=True, max_retries=3, default_retry_delay=30)
+def _run_locked(task_name: str, ttl_seconds: int, coro_factory):
+    """Run ``coro_factory()`` only when this worker holds the singleton lock.
+
+    HLD leader-election-lite: periodic jobs must not double-run when several
+    beat workers are alive. Returns None when another worker owns the lock.
+    """
+    async def _guard():
+        async with singleton_lock(task_name, ttl_seconds=ttl_seconds) as acquired:
+            if not acquired:
+                logger.info("periodic_task_skipped_another_worker", task=task_name)
+                return None
+            return await coro_factory()
+
+    return run_async(_guard())
+
+
+@celery_app.task(
+    name="tasks.process_file_indexing",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=30,
+    rate_limit="10/m",
+    acks_late=True,
+)
 def process_file_indexing_task(self, file_id_str: str) -> dict:
     """
     Background worker task to chunk a document and store vectors in Qdrant.
@@ -113,6 +137,7 @@ def periodic_evaluation_task() -> dict:
 def cache_cleanup_task() -> dict:
     """
     Periodic pruning of temporary cache entries or expired locks.
+    Singleton-guarded: only one worker runs the sweep per interval.
     """
     logger.info("cache_cleanup_task_running")
 
@@ -120,7 +145,9 @@ def cache_cleanup_task() -> dict:
         # Clean expired keys or transient locks if any exist
         return True
 
-    run_async(_cleanup())
+    cleaned = _run_locked("cache_cleanup", 300, _cleanup)
+    if cleaned is None:
+        return {"status": "skipped", "reason": "another_worker_running"}
     return {"status": "cleaned"}
 
 
@@ -130,7 +157,7 @@ def periodic_drift_check_task(recent_hours: int = 24) -> dict:
     Sliding-window drift check over usage/evaluation telemetry (MD §7.6/§8.8).
     Logs whether any LLM-era signal moved >2σ from its baseline window; the
     admin endpoint exposes the full report. No persistence — pure computation
-    over the telemetry tables.
+    over the telemetry tables. Singleton-guarded to avoid duplicate scans.
     """
     from backend.app.services.monitoring.drift_service import DriftService
 
@@ -140,7 +167,9 @@ def periodic_drift_check_task(recent_hours: int = 24) -> dict:
             report = await service.drift_report()
             return report
 
-    report = run_async(_run())
+    report = _run_locked("periodic_drift_check", 300, _run)
+    if report is None:
+        return {"status": "skipped", "reason": "another_worker_running"}
     logger.info(
         "periodic_drift_check_completed",
         detected=report.get("detected"),
@@ -154,7 +183,7 @@ def prompt_regression_review_task(system_prompt: str, threshold: float = 0.8) ->
     """
     Background run of the guardrail golden-set regression gate against a
     candidate system prompt. Gate result is logged; a failing gate is the
-    prompt change's "CI stopped" equivalent.
+    prompt change's "CI stopped" equivalent. Singleton-guarded per interval.
     """
     from backend.app.services.evaluation.regression_service import prompt_regression_gate
 
@@ -162,7 +191,9 @@ def prompt_regression_review_task(system_prompt: str, threshold: float = 0.8) ->
         report = await prompt_regression_gate.evaluate_prompt(system_prompt=system_prompt, threshold=threshold)
         return report
 
-    report = run_async(_run())
+    report = _run_locked("prompt_regression_review", 300, _run)
+    if report is None:
+        return {"status": "skipped", "reason": "another_worker_running"}
     logger.info(
         "prompt_regression_review_completed",
         gate=report.get("gate"),
@@ -177,7 +208,7 @@ def retry_webhook_deliveries_task() -> dict:
     """
     Periodic retry of failed webhook deliveries (bounded by WEBHOOK_MAX_ATTEMPTS).
     Complements the synchronous best-effort send in the message path and the
-    manual /webhooks/{id}/redeliver endpoint.
+    manual /webhooks/{id}/redeliver endpoint. Singleton-guarded per interval.
     """
     from backend.app.services.webhook_service import retry_failed_deliveries
 
@@ -185,7 +216,9 @@ def retry_webhook_deliveries_task() -> dict:
         async with async_session_factory() as session:
             return await retry_failed_deliveries(session)
 
-    retried = run_async(_run())
+    retried = _run_locked("retry_webhook_deliveries", 300, _run)
+    if retried is None:
+        return {"status": "skipped", "reason": "another_worker_running"}
     logger.info("webhook_retry_pass_completed", retried=retried)
     return {"status": "completed", "retried": retried}
 

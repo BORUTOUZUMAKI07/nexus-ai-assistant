@@ -23,6 +23,8 @@ from backend.app.domain.tool.models import ToolCall, ToolPermission
 from backend.app.domain.usage.models import CostLog, UsageLog
 from backend.app.domain.user.models import APIKey, User, UserMemory, UserSettings
 from backend.app.domain.webhook.models import WebhookDelivery, WebhookEndpoint
+from backend.app.infrastructure.storage.supabase_storage import storage_client
+from backend.app.infrastructure.vector.qdrant_client import vector_db
 from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -30,8 +32,17 @@ logger = structlog.get_logger(__name__)
 
 
 class AccountService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        vector_store=None,
+        storage=None,
+    ) -> None:
         self.session = session
+        # Cross-store deletes (HLD: saga/reconciliation) are injected so tests
+        # can substitute fakes — default to the live Qdrant/Supabase clients.
+        self._vector_store = vector_store if vector_store is not None else vector_db
+        self._storage = storage if storage is not None else storage_client
 
     async def export_user_data(self, user_id: UUID) -> dict:
         """Fully portable GDPR export of the user's data (machines + humans)."""
@@ -155,6 +166,16 @@ class AccountService:
         if not user:
             raise ValueError("User not found")
 
+        # Crossing the service boundary (HLD: saga/reconciliation): snapshot
+        # every blob the user owns BEFORE the DB cascade deletes their rows.
+        # The DB is the source of truth for the erasure; vector/storage cleanup
+        # below is best-effort fail-open so an infrastructure outage can never
+        # block right-to-erasure, and the reconciliation sweep retries stragglers.
+        user_files = (await self.session.exec(
+            select(File).where(File.user_id == user_id)
+        )).all()
+        storage_paths = [f.storage_path for f in user_files if f.storage_path]
+
         # 1. Conversations (handles branches, attachments, tool calls, messages,
         #    conversation-scoped files + chunks + usage in one cascade).
         conversations = (await self.session.exec(
@@ -229,6 +250,21 @@ class AccountService:
         # 10. The user row itself.
         await self.session.delete(user)
         await self.session.commit()
+
+        # 11. Cross-store erasure (fail-open saga step): purge the user's
+        #     Qdrant vectors and object-storage blobs. Failures are logged, never
+        #     raised — GDPR erasure already succeeded in the DB; the periodic
+        #     reconciliation sweep re-attempts anything left behind.
+        try:
+            await self._vector_store.delete_by_filter({"user_id": str(user_id)})
+        except Exception as exc:
+            logger.warning("gdpr_vector_purge_failed", user_id=str(user_id), error=str(exc))
+        for path in storage_paths:
+            try:
+                await self._storage.delete(path)
+            except Exception as exc:
+                logger.warning("gdpr_storage_delete_failed", user_id=str(user_id), path=path, error=str(exc))
+
         logger.info("account_deleted", user_id=str(user_id))
 
     async def export_as_json_bytes(self, user_id: UUID) -> bytes:

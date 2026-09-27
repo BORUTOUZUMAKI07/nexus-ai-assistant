@@ -11,6 +11,7 @@ from backend.app.api.deps import (
     get_db,
     get_file_service,
     get_rag_service,
+    require_idempotency_key,
 )
 from backend.app.core.config import settings
 from backend.app.core.exceptions import ResourceNotFoundError
@@ -38,6 +39,7 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
     file_svc: FileService = Depends(get_file_service),
+    _idem_key: None = require_idempotency_key("file.upload"),
 ):
     """Upload a file to cloud storage, then chunk and index it for RAG.
 

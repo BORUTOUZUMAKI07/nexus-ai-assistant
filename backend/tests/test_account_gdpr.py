@@ -11,8 +11,8 @@ from backend.app.domain.conversation.models import Conversation, Message
 from backend.app.domain.file.models import File
 from backend.app.domain.usage.models import UsageLog
 from backend.app.domain.user.models import APIKey, User, UserMemory, UserSettings
-from backend.app.services.account_service import AccountService
 from backend.app.services import account_service as account_module
+from backend.app.services.account_service import AccountService
 from fakes import FakeSession
 
 
@@ -127,6 +127,26 @@ class FakeConvRepo:
         self.deleted_ids.append(conv.id)
 
 
+class FakeVectorStore:
+    def __init__(self):
+        self.purged = []
+
+    async def delete_by_filter(self, filter_conditions):
+        self.purged.append(filter_conditions)
+
+
+class FakeStorage:
+    def __init__(self, fail: bool = False):
+        self.deleted_paths = []
+        self.fail = fail
+
+    async def delete(self, storage_path):
+        if self.fail:
+            raise RuntimeError("storage down")
+        self.deleted_paths.append(storage_path)
+        return True
+
+
 def test_delete_account_cascades(monkeypatch):
     fake = FakeSession()
     user, conv = _seed_user_data(fake)
@@ -136,7 +156,9 @@ def test_delete_account_cascades(monkeypatch):
     fake_conv_repo = FakeConvRepo()
     monkeypatch.setattr(account_module, "ConversationRepository", lambda session: fake_conv_repo)
 
-    _await(AccountService(fake).delete_account(user.id))
+    vector_store = FakeVectorStore()
+    storage = FakeStorage()
+    _await(AccountService(fake, vector_store=vector_store, storage=storage).delete_account(user.id))
 
     assert sorted(map(str, fake_conv_repo.deleted_ids)) == sorted(map(str, [conv.id, conv2.id]))
     assert user in fake.deleted  # the users row itself is erased
@@ -148,6 +170,29 @@ def test_delete_account_cascades(monkeypatch):
     assert fake.rows.get(UserMemory) == []
     assert fake.rows.get(APIKey) == []
     assert fake.rows.get(UserSettings) == []
+    # Cross-store saga: Qdrant purged by user filter; object blob deleted.
+    assert vector_store.purged == [{"user_id": str(user.id)}]
+    assert "private/user/doc.pdf" in storage.deleted_paths
+
+
+def test_delete_account_fail_open_on_infra_outage(monkeypatch):
+    fake = FakeSession()
+    user, _ = _seed_user_data(fake)
+    fake_conv_repo = FakeConvRepo()
+    monkeypatch.setattr(account_module, "ConversationRepository", lambda session: fake_conv_repo)
+
+    class _ExplodingVector:
+        async def delete_by_filter(self, filter_conditions):
+            raise RuntimeError("qdrant down")
+
+    storage = FakeStorage(fail=True)
+    _await(
+        AccountService(fake, vector_store=_ExplodingVector(), storage=storage).delete_account(user.id)
+    )
+
+    # GDPR DB erasure succeeds even though Qdrant + storage are unavailable.
+    assert user in fake.deleted
+    assert fake.commits >= 1
 
 
 def test_delete_unknown_user_raises():
