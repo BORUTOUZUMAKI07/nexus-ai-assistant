@@ -40,30 +40,38 @@ def normalize_query(text: str) -> str:
     return " ".join(tokens)
 
 
-def cache_key(user_id: str, model: str, query: str) -> str:
+def cache_key(user_id: str, model: str, query: str, prompt_variant: str = "default") -> str:
     # Normalize defensively (idempotent) so raw and pre-normalized queries hash identically.
     digest = hashlib.sha256(normalize_query(query).encode("utf-8")).hexdigest()
-    return f"{_PREFIX}{user_id}:{model}:{digest}"
+    # prompt_variant scopes the key so a bandit/canary variant flip can never
+    # serve an answer generated under a different system prompt.
+    return f"{_PREFIX}{user_id}:{model}:{prompt_variant}:{digest}"
 
 
 class ResponseCache:
     def __init__(self, cache=None):
         self._cache = cache if cache is not None else redis_service
 
-    async def get(self, user_id: str, model: str, query: str) -> dict[str, Any] | None:
+    async def get(
+        self,
+        user_id: str,
+        model: str,
+        query: str,
+        prompt_variant: str = "default",
+    ) -> dict[str, Any] | None:
         if not settings.RESPONSE_CACHE_ENABLED:
             return None
         normalized = normalize_query(query)
         if len(normalized) < settings.RESPONSE_CACHE_MIN_LENGTH:
             return None
         try:
-            raw = await self._cache.get(cache_key(user_id, model, normalized))
+            raw = await self._cache.get(cache_key(user_id, model, normalized, prompt_variant))
             if not raw:
                 return None
             payload = json.loads(raw)
             if not isinstance(payload, dict) or "content" not in payload:
                 return None
-            logger.debug("response_cache_hit", user_id=user_id, model=model)
+            logger.debug("response_cache_hit", user_id=user_id, model=model, prompt_variant=prompt_variant)
             return payload
         except Exception as exc:
             logger.warning("response_cache_read_failed_fail_open", error=str(exc))
@@ -78,6 +86,7 @@ class ResponseCache:
         tokens_input: int,
         tokens_output: int,
         cost_usd: float,
+        prompt_variant: str = "default",
     ) -> None:
         if not settings.RESPONSE_CACHE_ENABLED:
             return
@@ -96,7 +105,7 @@ class ResponseCache:
                 }
             )
             await self._cache.set(
-                cache_key(user_id, model, normalized),
+                cache_key(user_id, model, normalized, prompt_variant),
                 payload,
                 ttl_seconds=settings.RESPONSE_CACHE_TTL_SECONDS,
             )

@@ -119,8 +119,12 @@ async def send_message_sync(
     )
 
     # 4b. Response cache (MD §8.5): repeated identical questions skip the LLM
-    # round-trip. Fail-open and only active when RESPONSE_CACHE_ENABLED.
-    cache_hit_payload = await response_cache.get(str(current_user.id), target_model, sanitized_content)
+    # round-trip. Fail-open and only active when RESPONSE_CACHE_ENABLED. Keyed
+    # per prompt_variant so a bandit/canary variant flip never reuses an answer
+    # generated under a different system prompt.
+    cache_hit_payload = await response_cache.get(
+        str(current_user.id), target_model, sanitized_content, prompt_variant=experiment_variant
+    )
 
     # 5. Generate Completion
     if cache_hit_payload is not None:
@@ -148,6 +152,7 @@ async def send_message_sync(
             tokens_input=prompt_tok,
             tokens_output=comp_tok,
             cost_usd=cost_tracking_service.calculate_cost(target_model, prompt_tok, comp_tok),
+            prompt_variant=experiment_variant,
         )
 
     # 6. Save Assistant Message

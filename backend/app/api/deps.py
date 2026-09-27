@@ -13,6 +13,7 @@ from backend.app.domain.user.repository import UserRepository
 from backend.app.infrastructure.cache.base import ICacheService
 from backend.app.infrastructure.cache.redis_client import get_cache_service
 from backend.app.infrastructure.database.session import get_db_session
+from backend.app.infrastructure.resilience.guards import IdempotencyGuard
 from backend.app.infrastructure.storage.base import IStorageService
 
 # --------------------------------------------------------------------------- #
@@ -21,7 +22,7 @@ from backend.app.infrastructure.storage.base import IStorageService
 from backend.app.infrastructure.storage.supabase_storage import get_storage_service
 from backend.app.infrastructure.vector.base import IVectorStore
 from backend.app.infrastructure.vector.qdrant_client import get_vector_store
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -89,6 +90,35 @@ async def get_current_admin(
             detail="The user doesn't have enough privileges",
         )
     return current_user
+
+
+def require_idempotency_key(scope: str):
+    """FastAPI dependency enforcing client ``Idempotency-Key`` replay protection.
+
+    HLD idempotency pattern: when the caller supplies an ``Idempotency-Key``
+    header, the first request with that key is accepted and the key is marked
+    for 24h; any replay of the same key answers 409 so a network retry can
+    never fire a side-effecting endpoint (tool execute/approval, uploads) twice.
+    No header → no-op (backward compatible). Fail-open: an unavailable cache
+    lets the request through rather than blocking legitimate traffic.
+    """
+
+    async def dependency(
+        request: Request,
+        current_user: User = Depends(get_current_user),
+        cache: ICacheService = Depends(get_cache),
+    ) -> None:
+        client_key = request.headers.get("Idempotency-Key")
+        if not client_key:
+            return
+        allowed = await IdempotencyGuard(cache).check_and_mark(scope, str(current_user.id), client_key)
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate request: this Idempotency-Key was already consumed.",
+            )
+
+    return Depends(dependency)
 
 
 # --------------------------------------------------------------------------- #

@@ -22,4 +22,7 @@ celery_app.conf.update(
     task_time_limit=300,
     worker_concurrency=4,
     worker_prefetch_multiplier=1,
+    # Worker-hygiene (HLD: queue load leveling): recycle a child after 50 tasks
+    # so long-running indexing/eval jobs can't leak memory or open connections.
+    worker_max_tasks_per_child=50,
 )

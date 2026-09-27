@@ -14,6 +14,9 @@ from backend.app.domain.conversation.schemas import (
     ConversationCreate,
     ConversationDetailResponse,
 )
+from backend.app.domain.file.models import File
+from backend.app.infrastructure.vector.qdrant_client import vector_db
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
@@ -24,9 +27,11 @@ class ConversationService:
     Application service for conversation management use cases.
     """
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, vector_store=None) -> None:
         self._repo = ConversationRepository(session)
         self._session = session
+        # Vector purge on conversation delete is injected for fake-based tests.
+        self._vector_store = vector_store if vector_store is not None else vector_db
 
     async def list_conversations(
         self,
@@ -83,7 +88,30 @@ class ConversationService:
         conv = await self._repo.get_by_id(conversation_id, user_id=user_id)
         if not conv:
             raise ResourceNotFoundError("Conversation", str(conversation_id))
+
+        # Cross-store cleanup (HLD: saga/reconciliation): snapshot the
+        # conversation's files before the cascade so their RAG vectors can be
+        # purged after the rows are gone — otherwise deleting a conversation
+        # leaks its indexed content into future retrievals.
+        file_ids = [
+            f.id
+            for f in (await self._session.exec(
+                select(File).where(File.conversation_id == conversation_id)
+            )).all()
+        ]
+
         await self._repo.delete(conv)
+
+        for fid in file_ids:
+            try:
+                await self._vector_store.delete_by_filter({"file_id": str(fid)})
+            except Exception as exc:
+                logger.warning(
+                    "conversation_vector_purge_failed",
+                    conversation_id=str(conversation_id),
+                    file_id=str(fid),
+                    error=str(exc),
+                )
         logger.info("conversation_deleted", conversation_id=str(conversation_id))
 
     async def fork_conversation(
