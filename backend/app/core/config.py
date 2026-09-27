@@ -256,9 +256,10 @@ class Settings(BaseSettings):
     SHARE_DEFAULT_TTL_SECONDS: int | None = Field(default=None, description="Optional global expiry for new share links (None = no expiry)")
 
     # ── Text-to-speech (TTS) ──────────────────────────────────────────────────
-    # Free-tier by default (Minimax free tier, MINIMAX_API_KEY); /audio/speech
-    # returns 501 when no speech-capable provider key is configured.
-    TTS_MODEL: str = Field(default="minimax/speech-01-hd-turbo")
+    # Speech-02 models run on MiniMax's international endpoint (api.minimax.io
+    # /v1/t2a_v2); MINIMAX_API_KEY must carry a balance free or paid credits.
+    # /audio/speech returns 501 when no speech-capable provider key is set.
+    TTS_MODEL: str = Field(default="minimax/speech-02-hd")
     TTS_VOICE: str = Field(default="alloy")
     TTS_FORMAT: str = Field(default="mp3")
 
