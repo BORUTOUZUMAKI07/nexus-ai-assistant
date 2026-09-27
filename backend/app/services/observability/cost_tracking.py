@@ -51,10 +51,13 @@ class CostTrackingService:
         provider: str,
         prompt_tokens: int,
         completion_tokens: int,
+        org_id: UUID | None = None,
     ) -> CostLog:
         """
         Persists the monthly aggregate CostLog row only (does NOT create a UsageLog).
         Call alongside existing usage logging so the billing-period rollup stays in sync.
+        ``org_id`` attributes the row to the caller's organization for per-org
+        cost rollups (multi-tenant observability).
         """
         price_model = cls._price_model(model)
         pricing = MODEL_PRICING.get(price_model, MODEL_PRICING["default"])
@@ -65,6 +68,7 @@ class CostTrackingService:
         current_period = datetime.now(UTC).replace(tzinfo=None).strftime("%Y-%m")
         cost_entry = CostLog(
             user_id=user_id,
+            org_id=org_id,
             provider=provider,
             model=model,
             input_cost=input_cost,
@@ -92,12 +96,14 @@ class CostTrackingService:
         status: str = "success",
         error_message: str | None = None,
         metadata_json: dict[str, Any] | None = None,
+        org_id: UUID | None = None,
     ) -> UsageLog:
         cost = cls.calculate_cost(model, prompt_tokens, completion_tokens)
         usage_repo = UsageRepository(session)
 
         log = UsageLog(
             user_id=user_id,
+            org_id=org_id,
             conversation_id=conversation_id,
             message_id=message_id,
             model=model,
@@ -120,6 +126,7 @@ class CostTrackingService:
         pricing = MODEL_PRICING.get(price_model, MODEL_PRICING["default"])
         cost_entry = CostLog(
             user_id=user_id,
+            org_id=org_id,
             provider=provider,
             model=model,
             input_cost=(prompt_tokens / 1_000_000) * pricing["input"],

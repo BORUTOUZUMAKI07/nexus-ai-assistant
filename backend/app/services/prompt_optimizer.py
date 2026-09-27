@@ -116,7 +116,8 @@ async def default_judge(prompt: str, cases: list[Case]) -> float:
                 temperature=0.0,
                 max_tokens=200,
             )
-        except Exception:
+        except Exception:  # nosec B112
+            # per-case LLM failure tolerated when profiling prompt variants
             continue
         scores.append(_case_score(out, case))
     return mean(scores) if scores else 0.0

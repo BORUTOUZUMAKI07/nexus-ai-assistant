@@ -14,6 +14,7 @@ class UsageLog(SQLModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True, index=True)
     user_id: UUID = Field(index=True, foreign_key="users.id")
+    org_id: UUID | None = Field(default=None, index=True, foreign_key="organizations.id")
     conversation_id: UUID | None = Field(default=None, index=True, foreign_key="conversations.id")
     message_id: UUID | None = Field(default=None, index=True)
     model: str = Field(index=True)
@@ -35,6 +36,7 @@ class CostLog(SQLModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True, index=True)
     user_id: UUID = Field(index=True, foreign_key="users.id")
+    org_id: UUID | None = Field(default=None, index=True, foreign_key="organizations.id")
     provider: str = Field(index=True)
     model: str = Field(index=True)
     input_cost: float = Field(default=0.0)

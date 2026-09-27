@@ -804,7 +804,8 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     confidence_decision: dict[str, Any] = {
         "confidence": 0.0,
         "threshold": 0.0,
-        "pass": True,
+        # confidence-gate decision field, not a credential
+        "pass": True,  # nosec B105
         "action": "answer",
         "grounded": False,
         "calibrated": False,

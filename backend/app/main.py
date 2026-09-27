@@ -19,14 +19,18 @@ if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"
 
 from backend.app.agents.orchestrator.graph import lifespan_graph
 from backend.app.api.v1.api import api_router
+from backend.app.api.v1.metrics import router as metrics_router
 from backend.app.core.config import settings
 from backend.app.core.exceptions import NexusException
 from backend.app.core.logging import get_logger, setup_logging
 from backend.app.infrastructure.cache.redis_client import redis_client
 from backend.app.infrastructure.database.engine import close_db, init_db
+from backend.app.infrastructure.resilience.rate_limit import (
+    RateLimitError,
+)
 from backend.app.infrastructure.vector.qdrant_client import vector_db
 from backend.app.mcp.server import mcp
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -119,6 +123,47 @@ app.add_middleware(
 
 
 # 2. Global Exception Handlers (RFC-7807 Problem Details)
+@app.exception_handler(RateLimitError)
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitError):
+    """429 with Retry-After (RFC 6585) for the rate-limit dependency.
+
+    Kept separate from NexusException so the standard rate-limit headers are
+    always applied regardless of the error's origin. The exception carries the
+    full ``X-RateLimit-*`` payload (headers set on the injected response are
+    discarded when an exception handler returns a fresh response).
+    """
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={
+            "type": "https://nexus-assistant.ai/errors/rate-limit-exceeded",
+            "title": "RATE_LIMIT_EXCEEDED",
+            "status": status.HTTP_429_TOO_MANY_REQUESTS,
+            "detail": str(exc),
+        },
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """HTTPException responses that originate on a rate-limited route keep the
+    standard ``X-RateLimit-*`` headers.
+
+    The rate-limit dependency writes its headers onto both the injected
+    ``Response`` and ``request.state.rate_limit_headers``; when an endpoint
+    raises (e.g. login's 401), the injected response is discarded, so this
+    handler re-emits the stashed payload while preserving ``exc.headers``
+    (e.g. ``WWW-Authenticate``) and Starlette's ``{"detail": ...}`` shape.
+    """
+    headers = dict(getattr(exc, "headers", None) or {})
+    headers.update(getattr(request.state, "rate_limit_headers", {}) or {})
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=headers or None,
+    )
+
+
 @app.exception_handler(NexusException)
 async def nexus_exception_handler(request: Request, exc: NexusException):
     """Handles all domain-specific Nexus exceptions with structured logging."""
@@ -178,6 +223,7 @@ async def root():
 
 # 4. Mount API v1 Routes
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+app.include_router(metrics_router)
 
 def _mcp_token_is_valid(token: str) -> bool:
     """Rejects anything but a structurally-valid, unexpired access token."""

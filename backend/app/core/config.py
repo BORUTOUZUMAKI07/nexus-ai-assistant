@@ -5,6 +5,7 @@ All optional keys default to None (free-tier compatible).
 import logging
 import secrets
 from pathlib import Path
+from typing import cast
 
 from dotenv import load_dotenv
 from pydantic import Field, field_validator, model_validator
@@ -49,6 +50,25 @@ class Settings(BaseSettings):
 
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=30)
+
+    # ── OAuth / OIDC SSO (Authorization Code + PKCE) ─────────────────────────
+    # Generic OpenID Connect client (Google, GitHub, Azure AD, Keycloak…).
+    # Leave OAUTH_CLIENT_ID empty to disable SSO: /auth/oauth/* then return
+    # 404 and the frontend hides the "Continue with SSO" button.
+    OAUTH_CLIENT_ID: str | None = Field(default=None, description="OIDC client id")
+    OAUTH_CLIENT_SECRET: str | None = Field(default=None, description="OIDC client secret")
+    OAUTH_AUTHORIZE_URL: str | None = Field(default=None, description="OIDC /authorize endpoint")
+    OAUTH_TOKEN_URL: str | None = Field(default=None, description="OIDC /token endpoint")
+    OAUTH_USERINFO_URL: str | None = Field(default=None, description="OIDC userinfo endpoint")
+    OAUTH_SCOPE: str = Field(default="openid profile email", description="OIDC scopes")
+    # Public origin of THIS backend: authlib builds the registered
+    # redirect_uri = {OAUTH_BACKEND_URL}/api/v1/auth/oauth/callback from it.
+    OAUTH_BACKEND_URL: str = Field(
+        default="http://localhost:8000",
+        description="Backend public origin used to build the OAuth redirect_uri",
+    )
+    # Lifetime of the stored PKCE state codes (one-time use).
+    OAUTH_STATE_TTL_SECONDS: int = Field(default=600, description="PKCE state/verifier lifetime")
 
     # ── CORS ───────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: list[str] = Field(
@@ -258,13 +278,19 @@ class Settings(BaseSettings):
     # Set to False only for unauthenticated local tooling; do NOT disable in prod.
     MCP_AUTH_ENABLED: bool = Field(default=True)
 
+    # ── Observability / metrics ─────────────────────────────────────────────────
+    # Bearer token guarding the Prometheus /metrics scrape endpoint. When set,
+    # scrapers must send `Authorization: Bearer <METRICS_TOKEN>`. When unset the
+    # endpoint is open (local/dev scraping) — always set it in production.
+    METRICS_TOKEN: str | None = Field(default=None)
+
     @field_validator("CORS_ORIGINS", "ALLOWED_ORIGINS", mode="before")
     @classmethod
-    def parse_cors(cls, v):
+    def parse_cors(cls, v: str | list[str]) -> list[str]:
         if isinstance(v, str):
             import json
             try:
-                return json.loads(v)
+                return cast("list[str]", json.loads(v))
             except Exception:
                 return [origin.strip() for origin in v.split(",")]
         return v

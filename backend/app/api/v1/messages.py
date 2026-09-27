@@ -11,6 +11,7 @@ from uuid import UUID
 import structlog
 from backend.app.api.deps import (
     get_conversation_service,
+    get_current_org_id,
     get_current_user,
     get_usage_service,
 )
@@ -48,6 +49,7 @@ async def send_message_sync(
     conversation_id: UUID,
     message_in: MessageCreate,
     current_user: User = Depends(get_current_user),
+    org_id: UUID | None = Depends(get_current_org_id),
     conv_svc: ConversationService = Depends(get_conversation_service),
     usage_svc: UsageService = Depends(get_usage_service),
 ):
@@ -175,6 +177,7 @@ async def send_message_sync(
     await usage_svc._repo.log_usage(
         UsageLogCreate(
             user_id=current_user.id,
+            org_id=org_id,
             conversation_id=conversation_id,
             message_id=assistant_msg.id,
             model=target_model,
@@ -192,6 +195,7 @@ async def send_message_sync(
     await cost_tracking_service.record_cost_log(
         session=usage_svc._repo.session,
         user_id=current_user.id,
+        org_id=org_id,
         model=target_model,
         provider="groq",
         prompt_tokens=prompt_tok,
@@ -226,6 +230,7 @@ async def send_message_stream(
     conversation_id: UUID,
     message_in: MessageCreate,
     current_user: User = Depends(get_current_user),
+    org_id: UUID | None = Depends(get_current_org_id),
     conv_svc: ConversationService = Depends(get_conversation_service),
     usage_svc: UsageService = Depends(get_usage_service),
 ):
@@ -297,6 +302,7 @@ async def send_message_stream(
             await usage_svc._repo.log_usage(
                 UsageLogCreate(
                     user_id=current_user.id,
+                    org_id=org_id,
                     conversation_id=conversation_id,
                     message_id=assistant_msg.id,
                     model=target_model,
@@ -310,6 +316,7 @@ async def send_message_stream(
             await cost_tracking_service.record_cost_log(
                 session=usage_svc._repo.session,
                 user_id=current_user.id,
+                org_id=org_id,
                 model=target_model,
                 provider="groq",
                 prompt_tokens=prompt_tok,

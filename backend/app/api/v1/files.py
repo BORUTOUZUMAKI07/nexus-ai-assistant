@@ -7,6 +7,7 @@ from uuid import UUID
 
 import structlog
 from backend.app.api.deps import (
+    get_current_org_id,
     get_current_user,
     get_db,
     get_file_service,
@@ -17,14 +18,16 @@ from backend.app.core.config import settings
 from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.domain.file.schemas import (
     FileChunkResponse,
+    FileIndexStatusResponse,
     FileResponse,
     RAGQueryRequest,
     RAGQueryResult,
 )
 from backend.app.domain.user.models import User
+from backend.app.infrastructure.resilience.rate_limit import rate_limit
 from backend.app.services.file_service import FileService
 from backend.app.services.rag_service import RAGService
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
 from fastapi import File as FastAPIFile
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -37,15 +40,19 @@ async def upload_file(
     file: UploadFile = FastAPIFile(...),
     conversation_id: UUID | None = None,
     current_user: User = Depends(get_current_user),
+    current_org_id: UUID | None = Depends(get_current_org_id),
     session: AsyncSession = Depends(get_db),
     file_svc: FileService = Depends(get_file_service),
+    response: Response = None,  # type: ignore[assignment]  # noqa: F821
     _idem_key: None = require_idempotency_key("file.upload"),
+    _rl: None = rate_limit("file.upload", limit=30, window_seconds=60, org_scope=True),
 ):
     """Upload a file to cloud storage, then chunk and index it for RAG.
 
     With ASYNC_INDEXING=true the row is handed to the Celery worker
-    (process_file_indexing_task) and returned with status='pending';
-    otherwise it is ingested synchronously in the request.
+    (process_file_indexing_task) and answered 202 Accepted with a ``Location``
+    header pointing at ``GET /files/{id}/index-status`` (async job pattern —
+    roadmap §6.3); otherwise it is ingested synchronously and answered 201.
     """
     filename = file.filename or "uploaded_document"
     # Enforce an upload size ceiling BEFORE buffering the whole body into
@@ -80,17 +87,34 @@ async def upload_file(
             conversation_id=conversation_id,
         )
 
-        # Async route: dispatch to the Celery worker (with sync fallback if the
-        # broker is unreachable). Sync route: ingest now.
+        # Async route: dispatch to the Celery worker through the EventPublisher
+        # seam (with sync fallback if the dispatch fails or the broker is
+        # unreachable). Sync route: ingest now.
         if settings.ASYNC_INDEXING:
-            try:
-                from backend.app.worker.tasks import process_file_indexing_task
+            from backend.app.infrastructure.events import get_event_publisher
+            from backend.app.infrastructure.events.base import DomainEvent
 
-                process_file_indexing_task.delay(str(db_file.id))
+            dispatched = await get_event_publisher().publish(
+                DomainEvent(
+                    event_type="file.index_requested",
+                    aggregate_id=str(db_file.id),
+                    user_id=current_user.id,
+                    org_id=str(current_org_id) if current_org_id else None,
+                    payload={
+                        "file_id": str(db_file.id),
+                        "filename": filename,
+                        "conversation_id": str(conversation_id) if conversation_id else None,
+                    },
+                )
+            )
+            if dispatched:
                 logger.info("file_indexing_dispatched_to_worker", file_id=str(db_file.id))
+                # 202 Accepted + Location: the job is queued, poll the index-status
+                # endpoint (roadmap §6.3 async job pattern).
+                response.status_code = status.HTTP_202_ACCEPTED
+                response.headers["Location"] = f"{settings.API_V1_STR}/files/{db_file.id}/index-status"
                 return db_file
-            except Exception as exc:
-                logger.warning("async_indexing_dispatch_failed_falling_back_to_sync", file_id=str(db_file.id), error=str(exc))
+            logger.warning("async_indexing_dispatch_failed_falling_back_to_sync", file_id=str(db_file.id))
 
         return await file_svc.ingest_bytes(
             db_file_id=db_file.id,
@@ -151,6 +175,24 @@ async def delete_file(
     """Delete a file and remove its vector index points."""
     try:
         await file_svc.delete_file(
+            file_id=file_id,
+            user_id=current_user.id,
+            session=session,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message)
+
+
+@router.get("/{file_id}/index-status", response_model=FileIndexStatusResponse)
+async def get_index_status(
+    file_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+    file_svc: FileService = Depends(get_file_service),
+):
+    """Poll the async indexing job (§6.3). 404 if the file is not owned."""
+    try:
+        return await file_svc.get_file_index_status(
             file_id=file_id,
             user_id=current_user.id,
             session=session,

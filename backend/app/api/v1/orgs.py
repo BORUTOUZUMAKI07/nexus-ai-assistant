@@ -6,10 +6,12 @@ members can view their orgs; owners/admins manage invites and memberships.
 from uuid import UUID
 
 import structlog
-from backend.app.api.deps import get_current_user, get_org_service
+from backend.app.api.deps import get_current_user, get_org_service, get_usage_service
 from backend.app.core.config import settings
+from backend.app.domain.usage.schemas import OrgUsageSummaryResponse
 from backend.app.domain.user.models import User
 from backend.app.services.org_service import OrganizationService
+from backend.app.services.usage_service import UsageService
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
@@ -131,6 +133,22 @@ async def accept_invite(
     if not org:
         raise HTTPException(status_code=400, detail="Invite is invalid, expired, or already used")
     return {"status": "joined", "organization_id": str(org.id), "name": org.name}
+
+
+@router.get("/{org_id}/usage-summary", response_model=OrgUsageSummaryResponse)
+async def org_usage_summary(
+    org_id: UUID,
+    billing_period: str | None = None,
+    current_user: User = Depends(get_current_user),
+    org_svc: OrganizationService = Depends(get_org_service),
+    usage_svc: UsageService = Depends(get_usage_service),
+):
+    """Per-org usage + cost rollup — any member can view (T-07 multi-tenant
+    observability). ``billing_period`` (YYYY-MM) filters the cost leg; usage is
+    all-time. 404 for non-members keeps org existence private."""
+    if await org_svc.get_for_member(org_id, current_user.id) is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return await usage_svc.get_org_summary(org_id, billing_period=billing_period)
 
 
 @router.delete("/{org_id}/members/{user_id}")

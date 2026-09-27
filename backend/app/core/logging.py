@@ -81,12 +81,14 @@ def setup_logging() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
+        except Exception:  # nosec B110
+            # encoding hint is best-effort; startup must not fail on it
             pass
     if hasattr(sys.stderr, "reconfigure"):
         try:
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
+        except Exception:  # nosec B110
+            # encoding hint is best-effort; startup must not fail on it
             pass
 
     # Third-party libraries emit chatty DEBUG/INFO records (httpcore's per-socket

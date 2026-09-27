@@ -6,13 +6,12 @@ Users create orgs, invite colleagues by email, and roles gate management
 additive: orgs do not alter existing user-owned conversation queries, so the
 established IDOR guarantees and the live sweep hold unchanged.
 """
-import secrets
 import re
+import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import structlog
-from backend.app.core.config import settings
 from backend.app.domain.org.models import Organization, OrganizationInvite, OrganizationMember
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -66,6 +65,22 @@ class OrganizationService:
             }
             for org, role in rows
         ]
+
+    async def resolve_org_id(self, user_id: UUID) -> UUID | None:
+        """First org the user belongs to, or ``None`` for users without an org.
+
+        Multi-tenant scoping: rate-limit keys fold this in for per-org
+        ceilings and usage/cost telemetry is attributed to the org for
+        per-org rollups. Semantics mirror HookService.resolve_org_id (hooks
+        and usage both scope against a single org per user).
+        """
+        res = await self.session.exec(
+            select(OrganizationMember)
+            .where(OrganizationMember.user_id == user_id)
+            .limit(1)
+        )
+        member = res.first()
+        return member.organization_id if member else None
 
     async def _org(self, org_id: UUID) -> Organization | None:
         return await self.session.get(Organization, org_id)

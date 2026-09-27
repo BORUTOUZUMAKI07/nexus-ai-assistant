@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 class UsageLogCreate(BaseModel):
     user_id: UUID
+    org_id: UUID | None = None
     conversation_id: UUID | None = None
     message_id: UUID | None = None
     model: str
@@ -32,6 +33,28 @@ class UsageSummaryResponse(BaseModel):
     total_cost_usd: float
     total_requests: int
     average_latency_ms: float
+
+
+class OrgUsageSummaryResponse(BaseModel):
+    """Per-org usage + cost rollup (multi-tenant observability, T-07).
+
+    Usage side aggregates UsageLog rows attributed to the org; the cost side
+    comes from the monthly CostLog rollup (optionally filtered by
+    ``billing_period`` YYYY-MM).
+    """
+
+    organization_id: UUID
+    billing_period: str | None = None
+    total_requests: int
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    cached_tokens: int
+    usage_cost_usd: float
+    cost_entries: int
+    cost_input_usd: float
+    cost_output_usd: float
+    cost_total_usd: float
 
 
 class EvaluationLogCreate(BaseModel):

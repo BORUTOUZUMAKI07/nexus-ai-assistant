@@ -12,9 +12,7 @@ from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.domain.hook.models import HookPolicy
 from backend.app.domain.hook.repository import HookRepository
 from backend.app.domain.hook.schemas import HookPolicyCreate, HookPolicyUpdate
-from backend.app.domain.org.models import OrganizationMember
 from backend.app.services.tools.hook_registry import hook_registry
-from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
@@ -40,17 +38,12 @@ class HookService:
         """First org membership of the user (hooks scope against a single org).
 
         Returns None for users without an org — only global (org_id=NULL)
-        policies apply to them.
+        policies apply to them. Delegates to OrganizationService so multi-tenant
+        scoping (hooks, rate limits, usage rollups) shares one resolver.
         """
-        result = await self._session.exec(
-            select(OrganizationMember)
-            .where(OrganizationMember.user_id == user_id)
-            .limit(1)
-        )
-        row = result.first()
-        if row is None:
-            return None
-        return getattr(row, "organization_id", None) or None
+        from backend.app.services.org_service import OrganizationService
+
+        return await OrganizationService(self._session).resolve_org_id(user_id)
 
     # ── writes (each mutation reloads the gateway snapshot) ───────────────────
 

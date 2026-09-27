@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, Lock, Mail, User, ArrowRight, Sparkles } from "lucide-react";
-import { registerUser, loginUser } from "@/lib/api";
+import { registerUser, loginUser, ssoLogin } from "@/lib/api";
 import { checkAuth } from "@/lib/auth";
 
 export default function SignInPage() {
@@ -16,6 +16,7 @@ export default function SignInPage() {
   const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ssoLoading, setSsoLoading] = useState(false);
 
   useEffect(() => {
     // The access cookie is httpOnly, so session presence is verified against
@@ -48,6 +49,22 @@ export default function SignInPage() {
       setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSso = async () => {
+    setError(null);
+    setSsoLoading(true);
+    try {
+      const { authorization_url } = await ssoLogin();
+      // Send the whole tab to the IdP; the provider redirects back to
+      // /api/auth/oauth/callback where the httpOnly session is written.
+      window.location.assign(authorization_url);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Single sign-on is unavailable.",
+      );
+      setSsoLoading(false);
     }
   };
 
@@ -158,6 +175,26 @@ export default function SignInPage() {
             )}
           </button>
         </form>
+
+        <div className="mt-4 flex items-center gap-3 text-xs text-[var(--text-faint)]">
+          <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+          or continue with
+          <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+        </div>
+
+        <button
+          type="button"
+          onClick={handleSso}
+          disabled={ssoLoading}
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+        >
+          {ssoLoading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Sparkles className="h-4 w-4" />
+          )}
+          {ssoLoading ? "Redirecting…" : "Continue with SSO"}
+        </button>
 
         <div className="mt-5 text-center text-sm text-[var(--text-muted)]">
           {mode === "login" ? (

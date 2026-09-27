@@ -50,4 +50,63 @@ class MetricsCollector:
         return stats
 
 
+def _escape_label_value(value: str) -> str:
+    """Escape a Prometheus label value per the text exposition format (v0.0.4):
+    backslash, double-quote and newline are the only characters that need
+    escaping inside a quoted label value."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def render_prometheus_text(collector: "MetricsCollector | None" = None) -> str:
+    """Render the collector as Prometheus text exposition format (v0.0.4).
+
+    Zero runtime dependencies: emits ``# HELP`` / ``# TYPE`` metadata plus the
+    per-series samples so a standard scrape (or ``promtool check metrics``) can
+    ingest it. Latency percentiles are exported in *seconds* under a proper
+    ``summary`` family (``_sum`` + ``_count`` suffixes) so Prometheus SLO alerts
+    can ``rate()`` / ``histogram_quantile()`` over them.
+
+    Families:
+      * ``nexus_requests_total{operation}`` — counters (tool calls, experiments)
+      * ``nexus_errors_total{error}``       — error spans by origin
+      * ``nexus_latency_seconds{operation,quantile}`` summary (+ _sum/_count)
+      * ``nexus_latency_avg_seconds{operation}`` gauge for quick scalar checks
+    """
+    collector = collector or metrics_collector
+    lines: list[str] = []
+
+    lines.append("# HELP nexus_requests_total Requests recorded by the metrics collector.")
+    lines.append("# TYPE nexus_requests_total counter")
+    for name, value in sorted(collector._counts.items()):
+        lines.append(
+            f'nexus_requests_total{{operation="{_escape_label_value(name)}"}} {value}'
+        )
+
+    lines.append("# HELP nexus_errors_total Errors recorded by exception spans / gateways.")
+    lines.append("# TYPE nexus_errors_total counter")
+    for name, value in sorted(collector._errors.items()):
+        lines.append(
+            f'nexus_errors_total{{error="{_escape_label_value(name)}"}} {value}'
+        )
+
+    for op, stats in sorted(collector.get_summary()["latency_stats"].items()):
+        label = f'operation="{_escape_label_value(op)}"'
+        count = int(stats["count"])
+        avg_s = float(stats["avg_ms"]) / 1000.0
+        lines.append("# HELP nexus_latency_seconds Latency distribution per operation (seconds).")
+        lines.append("# TYPE nexus_latency_seconds summary")
+        for quantile, key in (("0.5", "p50_ms"), ("0.95", "p95_ms"), ("0.99", "p99_ms")):
+            lines.append(
+                f'nexus_latency_seconds{{{label},quantile="{quantile}"}} '
+                f'{float(stats[key]) / 1000.0}'
+            )
+        lines.append(f"nexus_latency_seconds_sum{{{label}}} {avg_s * count}")
+        lines.append(f"nexus_latency_seconds_count{{{label}}} {count}")
+        lines.append("# HELP nexus_latency_avg_seconds Average latency per operation (seconds).")
+        lines.append("# TYPE nexus_latency_avg_seconds gauge")
+        lines.append(f"nexus_latency_avg_seconds{{{label}}} {avg_s}")
+
+    return "\n".join(lines) + "\n"
+
+
 metrics_collector = MetricsCollector()

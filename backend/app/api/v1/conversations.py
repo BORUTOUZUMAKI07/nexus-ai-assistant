@@ -34,6 +34,7 @@ from backend.app.services.evaluation.guardrail_service import guardrail_service
 from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.tracing import trace_span
+from backend.app.services.org_service import OrganizationService
 from backend.app.services.usage_service import UsageService
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -199,6 +200,15 @@ async def stream_conversation(
     """
     thread_id = str(conversation_id)
     user_messages = body.messages
+
+    # Multi-tenant attribution: resolve the caller's org once so the persisted
+    # UsageLog/CostLog rows roll up per org (fail-open: an org-lookup hiccup
+    # must never break the stream).
+    try:
+        org_id = await OrganizationService(usage_svc._repo.session).resolve_org_id(current_user.id)
+    except Exception as exc:
+        org_id = None
+        logger.warning("org_resolution_failed_fail_open", thread_id=thread_id, error=str(exc))
 
     # Resolve the thread: invalid/"new" ids get a real conversation created on
     # the fly so fresh chats persist their messages with real data.
@@ -433,6 +443,7 @@ async def stream_conversation(
                         await persist_usage_svc._repo.log_usage(
                             UsageLogCreate(
                                 user_id=current_user.id,
+                                org_id=org_id,
                                 conversation_id=convo_uuid,
                                 message_id=assistant_msg.id,
                                 model=settings.DEFAULT_MODEL,
@@ -446,6 +457,7 @@ async def stream_conversation(
                         await cost_tracking_service.record_cost_log(
                             session=session,
                             user_id=current_user.id,
+                            org_id=org_id,
                             model=settings.DEFAULT_MODEL,
                             provider="groq",
                             prompt_tokens=prompt_tok,
