@@ -2,13 +2,11 @@
 Admin Management Endpoints.
 Provides user management, system health overview, audit logs, and global configuration.
 """
-import importlib.util
 from typing import Any
 from uuid import UUID
 
 import structlog
 from backend.app.api.deps import get_current_admin, get_db
-from backend.app.core.config import settings
 from backend.app.domain.system.service import SystemService
 from backend.app.domain.usage.models import CostLog
 from backend.app.domain.user.models import User
@@ -16,7 +14,13 @@ from backend.app.infrastructure.cache.redis_client import redis_client
 from backend.app.infrastructure.database.engine import check_database_health
 from backend.app.services.monitoring.drift_service import DriftService
 from backend.app.services.observability.metrics import metrics_collector
+from backend.app.services.observability.viewer import (
+    gather_viewer_data,
+    observability_stack_status,
+    render_viewer_html,
+)
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from sqlalchemy import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -145,11 +149,6 @@ async def get_observability_status(
     collectors are wired, which are live, plus the latest drift + cost rollups.
     Honest signal — an enabled-but-uninstalled Langfuse is reported as such.
     """
-    langfuse_installed = importlib.util.find_spec("langfuse") is not None
-    langfuse_configured = bool(
-        settings.LANGFUSE_PUBLIC_KEY and settings.LANGFUSE_SECRET_KEY
-    )
-
     drift: dict[str, Any] = {}
     try:
         drift = await DriftService(session).drift_report()
@@ -168,24 +167,30 @@ async def get_observability_status(
         logger.warning("cost_rollup_query_failed", error=str(exc))
 
     return {
-        "stack": {
-            "langfuse": {
-                "enabled": bool(settings.LANGFUSE_ENABLED),
-                "configured": langfuse_configured,
-                "package_installed": langfuse_installed,
-                "status": (
-                    "live"
-                    if settings.LANGFUSE_ENABLED and langfuse_installed and langfuse_configured
-                    else "inactive"
-                ),
-                "activate": "pip install -e '.[observability]' && LANGFUSE_ENABLED=true "
-                            "LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=...",
-            },
-            "drift_monitoring": {"enabled": True, "endpoint": "/api/v1/admin/monitoring/drift"},
-            "audit_logs": True,
-            "pii_redaction": {"enabled": bool(settings.PII_REDACTION_ENABLED)},
-            "metrics_collector": True,
-        },
+        "stack": observability_stack_status(),
         "drift": drift,
         "cost": cost,
     }
+
+
+@router.get("/monitoring/viewer-data")
+async def get_observability_viewer_data(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """JSON payload behind the admin observability dashboard (cost/usage/drift/evals)."""
+    return await gather_viewer_data(session)
+
+
+@router.get("/monitoring/viewer", response_class=HTMLResponse)
+async def get_observability_viewer(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> HTMLResponse:
+    """
+    Self-contained admin HTML dashboard: renders the observability stack status,
+    cost rollups, usage telemetry, drift report and evaluation scorecard with
+    zero external dependencies (inline CSS only — no CDN, no JS framework).
+    """
+    data = await gather_viewer_data(session)
+    return HTMLResponse(content=render_viewer_html(data))
