@@ -3,13 +3,13 @@ Audio Transcription API Router.
 Provides fast, free speech-to-text using Groq Whisper.
 """
 import io
-import structlog
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import Response
 
+import structlog
 from backend.app.api.deps import get_current_user
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.ai.litellm_client import ai_client
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import Response
 
 logger = structlog.get_logger(__name__)
 
@@ -80,9 +80,9 @@ async def synthesize_speech_endpoint(
     current_user: User = Depends(get_current_user),
 ) -> Response:
     """
-    Text-to-speech: synthesizes speech audio (mp3) for the given text via the
-    configured speech provider. Returns 501 when no speech-capable provider key
-    is configured, so clients can degrade gracefully.
+    Text-to-speech: synthesizes speech audio (mp3) for the given text via
+    Microsoft Edge neural voices (edge-tts) — free and key-less, so this
+    endpoint never requires a provider key.
     """
     if not text.strip():
         raise HTTPException(status_code=400, detail="text must not be empty")

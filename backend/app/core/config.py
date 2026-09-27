@@ -109,7 +109,6 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None
     TOGETHER_API_KEY: str | None = None
-    MINIMAX_API_KEY: str | None = None
 
     # Default model aliases used across the app
     DEFAULT_MODEL: str = Field(default="groq/llama-3.3-70b-versatile")
@@ -256,11 +255,11 @@ class Settings(BaseSettings):
     SHARE_DEFAULT_TTL_SECONDS: int | None = Field(default=None, description="Optional global expiry for new share links (None = no expiry)")
 
     # ── Text-to-speech (TTS) ──────────────────────────────────────────────────
-    # Speech-02 models run on MiniMax's international endpoint (api.minimax.io
-    # /v1/t2a_v2); MINIMAX_API_KEY must carry a balance free or paid credits.
-    # /audio/speech returns 501 when no speech-capable provider key is set.
-    TTS_MODEL: str = Field(default="minimax/speech-02-hd")
-    TTS_VOICE: str = Field(default="alloy")
+    # Key-less Microsoft Edge neural voices (edge-tts) — free, no API key,
+    # no billing. TTS_VOICE is an edge-tts voice id (e.g. en-US-AriaNeural).
+    # /audio/speech always works; no provider key is ever required.
+    TTS_MODEL: str = Field(default="edge-tts")
+    TTS_VOICE: str = Field(default="en-US-AriaNeural")
     TTS_FORMAT: str = Field(default="mp3")
 
     # ── Email (Free Gmail SMTP or Resend) ──────────────────────────────────────

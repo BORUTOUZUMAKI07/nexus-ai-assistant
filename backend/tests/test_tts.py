@@ -1,72 +1,68 @@
 """
-Unit tests for text-to-speech synthesis: provider-key guard (501-equivalent at
-service level) and successful byte output with a stubbed speech API. TTS runs
-on the free Minimax tier by default (MINIMAX_API_KEY).
+Unit tests for text-to-speech synthesis via Microsoft Edge neural voices
+(edge-tts): free and key-less — no provider key is ever required — with a
+stubbed edge_tts.Communicate for the audio-stream path.
 """
+import edge_tts
 import pytest
 from backend.app.core.config import settings
 from backend.app.infrastructure.ai import litellm_client
 
 
-def test_synthesize_speech_raises_without_provider_key(monkeypatch):
-    monkeypatch.setattr(settings, "MINIMAX_API_KEY", None)
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
-    monkeypatch.setattr(settings, "TOGETHER_API_KEY", None)
-    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)
+@pytest.mark.asyncio
+async def test_synthesize_speech_works_without_any_provider_key(monkeypatch):
+    """TTS must not require any API key — edge-tts needs none."""
 
-    import asyncio
+    class FakeCommunicate:
+        instances = []
 
-    with pytest.raises(RuntimeError, match="speech-capable provider"):
-        asyncio.get_event_loop().run_until_complete(
-            litellm_client.ai_client.synthesize_speech("hello world")
-        )
+        def __init__(self, text, voice):
+            self.text = text
+            self.voice = voice
+            FakeCommunicate.instances.append(self)
 
+        async def stream(self):
+            yield {"type": "audio", "data": b"\x00audio-frame1"}
+            yield {"type": "WordBoundary", "data": b""}
+            yield {"type": "audio", "data": b"\x00audio-frame2"}
 
-def test_synthesize_speech_returns_audio_bytes(monkeypatch):
-    monkeypatch.setattr(settings, "MINIMAX_API_KEY", "mm-test")
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
-    monkeypatch.setattr(settings, "TOGETHER_API_KEY", None)
-    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)
+    monkeypatch.setattr(edge_tts, "Communicate", FakeCommunicate)
 
-    async def fake_aspeech(**kwargs):
-        assert kwargs["input"] == "hello world"
-        assert kwargs["voice"] == settings.TTS_VOICE
-        return b"\x00audio-data"
+    audio = await litellm_client.ai_client.synthesize_speech("hello world")
 
-    monkeypatch.setattr(litellm_client.litellm, "aspeech", fake_aspeech)
-
-    import asyncio
-
-    audio = asyncio.get_event_loop().run_until_complete(
-        litellm_client.ai_client.synthesize_speech("hello world")
-    )
-    assert audio == b"\x00audio-data"
+    assert audio == b"\x00audio-frame1\x00audio-frame2"
+    assert FakeCommunicate.instances[0].text == "hello world"
+    assert FakeCommunicate.instances[0].voice == settings.TTS_VOICE
 
 
-def test_synthesize_speech_uses_provider_matching_key(monkeypatch):
-    """Only an OpenRouter key + minimax-routed default → clean RuntimeError
-    (501), while an explicit openrouter/… model uses the OpenRouter key."""
-    import asyncio
+@pytest.mark.asyncio
+async def test_synthesize_speech_uses_voice_override(monkeypatch):
+    class FakeCommunicate:
+        instances = []
 
-    monkeypatch.setattr(settings, "MINIMAX_API_KEY", None)
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
-    monkeypatch.setattr(settings, "TOGETHER_API_KEY", None)
-    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "sk-or-test")
+        def __init__(self, text, voice):
+            self.voice = voice
+            FakeCommunicate.instances.append(self)
 
-    captured = {}
+        async def stream(self):
+            yield {"type": "audio", "data": b"\x00audio"}
 
-    async def fake_aspeech(**kwargs):
-        captured.update(kwargs)
-        return b"\x00audio"
+    monkeypatch.setattr(edge_tts, "Communicate", FakeCommunicate)
 
-    monkeypatch.setattr(litellm_client.litellm, "aspeech", fake_aspeech)
-    loop = asyncio.get_event_loop()
+    await litellm_client.ai_client.synthesize_speech("x", voice="en-IE-EmilyNeural")
+    assert FakeCommunicate.instances[0].voice == "en-IE-EmilyNeural"
 
-    with pytest.raises(RuntimeError, match="MINIMAX_API_KEY"):
-        loop.run_until_complete(litellm_client.ai_client.synthesize_speech("x"))
 
-    audio = loop.run_until_complete(
-        litellm_client.ai_client.synthesize_speech("x", model="openrouter/tts-audio")
-    )
-    assert audio == b"\x00audio"
-    assert captured["api_key"] == "sk-or-test"
+@pytest.mark.asyncio
+async def test_synthesize_speech_raises_when_no_audio_returned(monkeypatch):
+    class FakeCommunicate:
+        def __init__(self, text, voice):
+            pass
+
+        async def stream(self):
+            yield {"type": "WordBoundary", "data": b""}
+
+    monkeypatch.setattr(edge_tts, "Communicate", FakeCommunicate)
+
+    with pytest.raises(RuntimeError, match="no audio"):
+        await litellm_client.ai_client.synthesize_speech("hello")

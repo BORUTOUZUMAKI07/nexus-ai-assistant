@@ -122,7 +122,6 @@ _MODEL_GROUP_ALIASES = {
     "groq/compound-mini": "fast_chat",
     "llama-3.1-8b-instant": "fast_chat",
     "meta-llama/llama-3.1-8b-instruct:free": "fast_chat",
-    "minimax-m3": "fast_chat",
     "qwen/qwen-2.5-7b-instruct:free": "fast_chat",
     "google/gemini-flash-1.5:free": "fast_chat",
     "openrouter_llama_8b": "fast_chat",
@@ -532,51 +531,28 @@ class LiteLLMService:
         model: str | None = None,
     ) -> bytes:
         """
-        Text-to-speech via LiteLLM's speech API. The API key must match the
-        provider that serves the configured TTS model (default
-        minimax/speech-02-hd runs on MiniMax's international endpoint with
-        MINIMAX_API_KEY). When the key for that provider is absent we raise
-        RuntimeError so the API layer returns a clean 501 instead of misrouting
-        e.g. an OpenRouter key to a different endpoint.
+        Text-to-speech via Microsoft Edge neural voices (edge-tts) — free and
+        key-less: no provider key or billing is ever required. `voice` is an
+        edge-tts voice id (default settings.TTS_VOICE). The `model` argument
+        is accepted for API compatibility and ignored; the response is still
+        a raw MP3 byte string so the /audio/speech endpoint contract holds.
         """
-        model = model or settings.TTS_MODEL
-        provider = model.split("/", 1)[0].lower().strip(" ").strip("/")
-        key_name = self._TTS_PROVIDER_KEYS.get(provider)
-        api_key = getattr(settings, key_name, None) if key_name else None
-        if not api_key:
-            logger.warning(
-                "tts_not_configured_no_provider_key",
-                provider=provider,
-                model=model,
-                expected_env=key_name,
-            )
-            raise RuntimeError(
-                f"No speech-capable provider key configured for TTS model "
-                f"'{model}' (set {key_name or '<provider>_API_KEY'} to enable speech)."
-            )
+        import edge_tts
+
+        voice_id = voice or settings.TTS_VOICE
         try:
-            resp = await litellm.aspeech(
-                model=model,
-                input=text,
-                voice=voice or settings.TTS_VOICE,
-                api_key=api_key,
-            )
-            return resp
+            communicate = edge_tts.Communicate(text, voice=voice_id)
+            chunks: list[bytes] = []
+            async for chunk in communicate.stream():
+                if chunk.get("type") == "audio":
+                    chunks.append(chunk["data"])
+            audio = b"".join(chunks)
+            if not audio:
+                raise RuntimeError("Edge TTS returned no audio data")
+            return audio
         except Exception as exc:
             logger.error("tts_synthesis_failed", error=str(exc))
             raise
-
-    # TTS model provider → env var that must hold the speech-capable key.
-    # Default is the free Minimax tier (MINIMAX_API_KEY); keep others opt-in.
-    _TTS_PROVIDER_KEYS = {
-        "minimax": "MINIMAX_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "together": "TOGETHER_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY",
-        "groq": "GROQ_API_KEY",
-        "gemini": "GEMINI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-    }
 
     def count_tokens(self, text: str, model: str = "complex_reasoning") -> int:
         """Estimates token count using litellm encoder."""

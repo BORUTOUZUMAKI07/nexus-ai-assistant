@@ -77,6 +77,9 @@ dependencies = [
     # Re-add any of these only if a patched version lands AND the library is
     # actually used.
     "guardrails-ai>=0.5.0",
+    # edge-tts: free, key-less TTS via Microsoft Edge neural voices (2026-09).
+    # Dropped Minimax (needs paid credits). No provider key or billing needed.
+    "edge-tts>=6.1.0",
     "structlog>=24.0.0",
     "sentry-sdk>=2.7.0",
     

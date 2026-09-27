@@ -118,8 +118,8 @@ Legend:         [YES] implemented and tested
            (fast, free Groq Whisper path); Mic button in ChatInput.
 
 19. Voice output (text to speech)
-     [YES] backend/app/api/v1/audio.py  GET /audio/speech  (returns
-           501 honestly when no speech-capable provider key set).
+     [YES] backend/app/api/v1/audio.py  GET /audio/speech  (free, key-less
+           Microsoft Edge neural voices via edge-tts — no provider key needed).
 
 20. Computer use / browser automation agent
      [NO]  Not present. (Playwright exists only in frontend/e2e for
