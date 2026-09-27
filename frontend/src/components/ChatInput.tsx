@@ -15,6 +15,7 @@ import {
   Mic,
   MicOff,
   Image as ImageIcon,
+  ListChecks,
 } from "lucide-react";
 
 export interface SendMessageOptions {
@@ -23,6 +24,8 @@ export interface SendMessageOptions {
   attachments: File[];
   agentMode?: "fast" | "deep";
   imageDataUrl?: string; // base64 data URL for inline image
+  /** Plan mode: draft an actionable plan first, run only after approval */
+  planMode?: boolean;
 }
 
 interface ChatInputProps {
@@ -76,6 +79,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [enableWeb, setEnableWeb] = useState(false);
   const [enableCode, setEnableCode] = useState(false);
   const [agentMode, setAgentMode] = useState<"fast" | "deep">("deep");
+  const [planMode, setPlanMode] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
 
@@ -161,6 +165,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       attachments,
       agentMode,
       imageDataUrl: imageDataUrl ?? undefined,
+      planMode,
     };
     onSendMessage(content, options);
     setContent("");
@@ -566,6 +571,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             >
               <Code className="w-3.5 h-3.5" />
               <span>Code</span>
+            </button>
+
+            {/* Plan Mode Toggle */}
+            <button
+              onClick={() => setPlanMode(!planMode)}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                planMode
+                  ? "bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]"
+                  : "text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-surface)] border border-transparent"
+              }`}
+              title={
+                planMode
+                  ? "Plan mode ON: draft a plan first, execute only after approval"
+                  : "Plan mode OFF: respond directly"
+              }
+            >
+              <ListChecks className="w-3.5 h-3.5" />
+              <span>Plan</span>
             </button>
 
             {/* Prompt Library Templates */}

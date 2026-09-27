@@ -597,3 +597,228 @@ export async function loginUser(payload: {
   if (!res.ok) throw await parseError(res, "Invalid email or password");
   return (await res.json()) as { ok: boolean };
 }
+
+// ─── Plans (plan-then-approve) ───────────────────────────────────────────────
+
+export interface PlanItem {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  title: string;
+  summary: string | null;
+  steps: string[];
+  status: "pending" | "approved" | "rejected";
+  decision_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  decided_at: string | null;
+}
+
+/** Draft a plan for a task against a conversation (no tools run while drafting). */
+export async function createPlan(
+  conversationId: string,
+  task: string
+): Promise<PlanItem> {
+  const res = await nexusFetch(`${API_BASE}/conversations/${conversationId}/plan`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ task }),
+  });
+  if (!res.ok) throw await parseError(res, "Plan creation failed");
+  return res.json();
+}
+
+export async function fetchPlans(conversationId: string): Promise<PlanItem[]> {
+  const res = await nexusFetch(`${API_BASE}/conversations/${conversationId}/plans`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Fetch plans failed: ${res.status}`);
+  return res.json();
+}
+
+export async function approvePlan(planId: string): Promise<PlanItem> {
+  const res = await nexusFetch(`${API_BASE}/plans/${planId}/approve`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw await parseError(res, "Plan approval failed");
+  return res.json();
+}
+
+export async function rejectPlan(
+  planId: string,
+  reason?: string
+): Promise<PlanItem> {
+  const res = await nexusFetch(`${API_BASE}/plans/${planId}/reject`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ reason: reason ?? null }),
+  });
+  if (!res.ok) throw await parseError(res, "Plan rejection failed");
+  return res.json();
+}
+
+// ─── Artifacts (persisted + versioned) ───────────────────────────────────────
+
+export interface ArtifactItem {
+  id: string;
+  user_id: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  title: string;
+  language: string;
+  mime_type: string;
+  content: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ArtifactVersionItem {
+  id: string;
+  artifact_id: string;
+  version: number;
+  title: string;
+  language: string;
+  mime_type: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ArtifactDetail extends ArtifactItem {
+  versions: ArtifactVersionItem[];
+}
+
+export interface ArtifactCreateInput {
+  title: string;
+  content: string;
+  language?: string;
+  mime_type?: string;
+  conversation_id?: string | null;
+  message_id?: string | null;
+}
+
+export async function createArtifact(
+  input: ArtifactCreateInput
+): Promise<ArtifactItem> {
+  const res = await nexusFetch(`${API_BASE}/artifacts`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw await parseError(res, "Artifact save failed");
+  return res.json();
+}
+
+export async function fetchArtifacts(
+  conversationId?: string | null
+): Promise<ArtifactItem[]> {
+  const query = conversationId
+    ? `?conversation_id=${encodeURIComponent(conversationId)}`
+    : "";
+  const res = await nexusFetch(`${API_BASE}/artifacts${query}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Fetch artifacts failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchArtifact(id: string): Promise<ArtifactDetail> {
+  const res = await nexusFetch(`${API_BASE}/artifacts/${id}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Fetch artifact failed: ${res.status}`);
+  return res.json();
+}
+
+export async function addArtifactVersion(
+  id: string,
+  content: string,
+  patch?: { title?: string; language?: string }
+): Promise<ArtifactItem> {
+  const res = await nexusFetch(`${API_BASE}/artifacts/${id}/versions`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ content, ...(patch ?? {}) }),
+  });
+  if (!res.ok) throw await parseError(res, "Version save failed");
+  return res.json();
+}
+
+export async function deleteArtifact(id: string): Promise<void> {
+  const res = await nexusFetch(`${API_BASE}/artifacts/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Delete artifact failed: ${res.status}`);
+  }
+}
+
+// ─── Admin: lifecycle hooks ──────────────────────────────────────────────────
+
+export interface HookPolicyItem {
+  id: string;
+  name: string;
+  tool_name: string;
+  event: "pre_tool" | "post_tool";
+  org_id: string | null;
+  action: "block" | "redact" | "log";
+  field: string | null;
+  message: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HookPolicyInput {
+  name: string;
+  tool_name: string;
+  event?: "pre_tool" | "post_tool";
+  org_id?: string | null;
+  action: "block" | "redact" | "log";
+  field?: string | null;
+  message?: string | null;
+  enabled?: boolean;
+}
+
+export async function fetchHookPolicies(): Promise<HookPolicyItem[]> {
+  const res = await nexusFetch(`${API_BASE}/admin/hooks`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`Fetch hooks failed: ${res.status}`);
+  return res.json();
+}
+
+export async function createHookPolicy(
+  input: HookPolicyInput
+): Promise<HookPolicyItem> {
+  const res = await nexusFetch(`${API_BASE}/admin/hooks`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw await parseError(res, "Hook create failed");
+  return res.json();
+}
+
+export async function updateHookPolicy(
+  id: string,
+  patch: Partial<HookPolicyInput>
+): Promise<HookPolicyItem> {
+  const res = await nexusFetch(`${API_BASE}/admin/hooks/${id}`, {
+    method: "PUT",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw await parseError(res, "Hook update failed");
+  return res.json();
+}
+
+export async function deleteHookPolicy(id: string): Promise<void> {
+  const res = await nexusFetch(`${API_BASE}/admin/hooks/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Hook delete failed: ${res.status}`);
+  }
+}

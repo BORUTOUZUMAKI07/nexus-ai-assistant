@@ -274,6 +274,45 @@ async def request_user_input(conversation_id: str, message: str, schema_json: st
     )
 
 
+@mcp.tool()
+async def create_artifact(
+    user_id: str, title: str, content: str, language: str = "markdown",
+    conversation_id: str | None = None, message_id: str | None = None,
+) -> str:
+    """
+    Persist an AI-generated artifact (document/spec/code) for a user.
+    Creates a versioned artifact row — later revisions keep prior content.
+    """
+    from uuid import UUID
+
+    from backend.app.domain.artifact.schemas import ArtifactCreate
+    from backend.app.infrastructure.database.session import async_session_factory
+    from backend.app.services.artifact_service import ArtifactService
+
+    try:
+        user_uuid = UUID(user_id)
+    except Exception as exc:
+        return f"Error: user_id must be a UUID — {exc}"
+    if not content.strip():
+        return "Error: content must not be empty"
+    if len(content) > 200_000:
+        return "Error: content exceeds the 200_000 character limit"
+
+    conversation_uuid = UUID(conversation_id) if conversation_id else None
+    message_uuid = UUID(message_id) if message_id else None
+
+    payload = ArtifactCreate(
+        title=title, language=language, content=content,
+        conversation_id=conversation_uuid, message_id=message_uuid,
+    )
+    async with async_session_factory() as session:
+        artifact = await ArtifactService(session).create(user_uuid, payload)
+    return (
+        f"Artifact persisted (id: {artifact.id}, title: {artifact.title!r}, "
+        f"version: {artifact.version}, language: {artifact.language})."
+    )
+
+
 # ==========================================
 # 3. FastMCP Prompts
 # ==========================================

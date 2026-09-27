@@ -4,6 +4,7 @@ Repository for Conversation Domain operations.
 from datetime import UTC, datetime
 from uuid import UUID
 
+from backend.app.domain.artifact.models import Artifact, ArtifactVersion
 from backend.app.domain.base_repository import BaseRepository
 from backend.app.domain.conversation.models import (
     Conversation,
@@ -12,6 +13,7 @@ from backend.app.domain.conversation.models import (
     MessageAttachment,
 )
 from backend.app.domain.file.models import File, FileChunk, FileMetadata
+from backend.app.domain.plan.models import Plan
 from backend.app.domain.tool.models import ToolCall
 from backend.app.domain.usage.models import UsageLog
 from sqlmodel import delete, select
@@ -144,6 +146,18 @@ class ConversationRepository(BaseRepository[Conversation]):
         await self.session.exec(
             delete(ToolCall).where(ToolCall.conversation_id == conv_id)
         )
+
+        # Artifacts reference messages.id / conversations.id — versions first
+        # (FK → artifacts.id), then the artifacts themselves, then plans.
+        artifact_sub = select(Artifact.id).where(
+            (Artifact.conversation_id == conv_id)
+            | (Artifact.message_id.in_(message_sub))
+        )
+        await self.session.exec(
+            delete(ArtifactVersion).where(ArtifactVersion.artifact_id.in_(artifact_sub))
+        )
+        await self.session.exec(delete(Artifact).where(Artifact.id.in_(artifact_sub)))
+        await self.session.exec(delete(Plan).where(Plan.conversation_id == conv_id))
 
         # Messages of the conversation (self-referential bulk delete).
         await self.session.exec(

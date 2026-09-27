@@ -11,6 +11,7 @@ import {
   Maximize2,
   Minimize2,
   FileCode,
+  Trash2,
 } from "lucide-react";
 
 export interface ArtifactItem {
@@ -18,6 +19,10 @@ export interface ArtifactItem {
   title: string;
   language: string;
   content: string;
+  /** Server-assigned version when persisted; omitted for transient canvas items */
+  version?: number;
+  /** True when the artifact is the active, persisted version (mirrors ArtifactDetail) */
+  isActiveVersion?: boolean;
 }
 
 export interface ArtifactCanvasProps {
@@ -26,6 +31,8 @@ export interface ArtifactCanvasProps {
   artifacts?: ArtifactItem[];
   onClose: () => void;
   onSelectArtifact?: (artifact: ArtifactItem) => void;
+  /** When provided, shows a Delete button (persisted artifacts only) */
+  onDeleteArtifact?: (artifact: ArtifactItem) => void;
 }
 
 export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
@@ -33,12 +40,14 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   artifacts,
   onClose,
   onSelectArtifact,
+  onDeleteArtifact,
 }) => {
   const [viewTab, setViewTab] = useState<"code" | "preview">("code");
   const [copied, setCopied] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const searchRef = React.useRef<HTMLInputElement>(null);
 
   // Keyboard shortcut Ctrl+F / Cmd+F for find in file
@@ -144,8 +153,25 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
             <h3 className="text-xs font-semibold text-white truncate">
               {activeArtifact.title}
             </h3>
-            <span className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)]">
+            <span className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
               {activeArtifact.language} • {lines.length} lines
+              {activeArtifact.version !== undefined && (
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${
+                    activeArtifact.isActiveVersion
+                      ? "bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent)]/40"
+                      : "bg-[var(--bg-main)] text-[var(--text-muted)] border-[var(--border-subtle)]"
+                  }`}
+                  title={
+                    activeArtifact.isActiveVersion
+                      ? `Persisted version ${activeArtifact.version}`
+                      : `Snapshot of version ${activeArtifact.version}`
+                  }
+                >
+                  v{activeArtifact.version}
+                  {activeArtifact.isActiveVersion ? " • saved" : ""}
+                </span>
+              )}
             </span>
           </div>
         </div>
@@ -208,6 +234,20 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
               <Maximize2 className="w-3.5 h-3.5" />
             )}
           </button>
+
+          {onDeleteArtifact && activeArtifact.version !== undefined && (
+            <button
+              onClick={() => {
+                setDeleting(true);
+                onDeleteArtifact(activeArtifact);
+              }}
+              disabled={deleting}
+              className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-muted)] hover:text-[var(--status-danger)] hover:border-[var(--status-danger)]/50 transition-colors disabled:opacity-50"
+              title="Delete artifact and all versions"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
 
           <button
             onClick={onClose}

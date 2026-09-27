@@ -30,6 +30,9 @@ from backend.app.domain.tool.models import Tool, ToolCall, ToolPermission
 from backend.app.domain.prompt.models import PromptTemplate, PromptVersion, Skill
 from backend.app.domain.usage.models import UsageLog, CostLog, EvaluationLog
 from backend.app.domain.system.models import SystemConfig, AuditLog
+from backend.app.domain.plan.models import Plan
+from backend.app.domain.hook.models import HookPolicy
+from backend.app.domain.artifact.models import Artifact, ArtifactVersion
 
 # this is the Alembic Config object
 config = context.config

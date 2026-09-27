@@ -198,3 +198,21 @@ def get_rag_service() -> "RAGService":
         citation_service=citation_service,
     )
 
+
+def get_plan_service(session: AsyncSession = Depends(get_db)) -> "PlanService":
+    """Inject PlanService (plan-then-approve) with database session."""
+    from backend.app.services.plan_service import PlanService
+    return PlanService(session)
+
+
+def get_artifact_service(session: AsyncSession = Depends(get_db)) -> "ArtifactService":
+    """Inject ArtifactService (persisted, versioned artifacts) with database session."""
+    from backend.app.services.artifact_service import ArtifactService
+    return ArtifactService(session)
+
+
+def get_hook_service(session: AsyncSession = Depends(get_db)) -> "HookService":
+    """Inject HookService (lifecycle hook policy CRUD) with database session."""
+    from backend.app.services.hook_service import HookService
+    return HookService(session)
+

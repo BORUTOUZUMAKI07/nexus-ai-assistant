@@ -91,6 +91,12 @@ export interface SendMessageOptions {
   conversationId?: string;
   /** base64 data URL for an image the user has attached */
   imageDataUrl?: string;
+  /**
+   * Approved-plan preamble: when an approved plan is executed, the backend
+   * prepends this text to the agent system prompt so the run follows the
+   * plan's approved steps (Plan mode execution reuses the agent stream).
+   */
+  planPreamble?: string;
 }
 
 export function useNexusChat(options: UseNexusChatOptions = {}) {
@@ -162,6 +168,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         sendOptions?.conversationId ?? optionsRef.current.conversationId ?? "";
       const mode = sendOptions?.mode ?? optionsRef.current.mode ?? "normal";
       const model = optionsRef.current.model;
+      const planPreamble = sendOptions?.planPreamble;
 
       const userMsgId = `msg-${Date.now()}`;
       const assistantMsgId = `msg-${Date.now() + 1}`;
@@ -228,6 +235,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
             messages: backendMessages,
             conversationId,
             mode,
+            ...(planPreamble ? { planPreamble } : {}),
           }),
         });
 

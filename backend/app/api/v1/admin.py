@@ -7,11 +7,13 @@ from uuid import UUID
 
 import structlog
 from backend.app.api.deps import get_current_admin, get_db
+from backend.app.domain.hook.schemas import HookPolicyCreate, HookPolicyUpdate
 from backend.app.domain.system.service import SystemService
 from backend.app.domain.usage.models import CostLog
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.cache.redis_client import redis_client
 from backend.app.infrastructure.database.engine import check_database_health
+from backend.app.services.hook_service import HookService
 from backend.app.services.monitoring.drift_service import DriftService
 from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.viewer import (
@@ -194,3 +196,84 @@ async def get_observability_viewer(
     """
     data = await gather_viewer_data(session)
     return HTMLResponse(content=render_viewer_html(data))
+
+
+# --------------------------------------------------------------------------- #
+# Lifecycle hook policies (block / redact / log at the tool gateway choke point)
+# --------------------------------------------------------------------------- #
+
+def _serialize_hook(policy) -> dict[str, Any]:
+    return {
+        "id": str(policy.id),
+        "name": policy.name,
+        "tool_name": policy.tool_name,
+        "event": policy.event,
+        "org_id": str(policy.org_id) if policy.org_id else None,
+        "action": policy.action,
+        "field": policy.field,
+        "message": policy.message,
+        "enabled": policy.enabled,
+        "created_at": policy.created_at.isoformat() if policy.created_at else None,
+        "updated_at": policy.updated_at.isoformat() if policy.updated_at else None,
+    }
+
+
+@router.get("/hooks")
+async def list_hook_policies(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> list[dict[str, Any]]:
+    """List lifecycle hook policies (global + org-scoped)."""
+    policies = await HookService(session).list_policies()
+    return [_serialize_hook(p) for p in policies]
+
+
+@router.post("/hooks", status_code=201)
+async def create_hook_policy(
+    body: HookPolicyCreate,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """Create a hook policy and hot-reload the gateway registry."""
+    policy = await HookService(session).create_policy(body)
+    return _serialize_hook(policy)
+
+
+@router.put("/hooks/{policy_id}")
+async def update_hook_policy(
+    policy_id: UUID,
+    body: HookPolicyUpdate,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """Update a hook policy and hot-reload the gateway registry."""
+    from backend.app.core.exceptions import ResourceNotFoundError
+    try:
+        policy = await HookService(session).update_policy(policy_id, body)
+    except ResourceNotFoundError:
+        raise HTTPException(status_code=404, detail="Hook policy not found")
+    return _serialize_hook(policy)
+
+
+@router.delete("/hooks/{policy_id}", status_code=204)
+async def delete_hook_policy(
+    policy_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> None:
+    """Delete a hook policy and hot-reload the gateway registry."""
+    from backend.app.core.exceptions import ResourceNotFoundError
+    try:
+        await HookService(session).delete_policy(policy_id)
+    except ResourceNotFoundError:
+        raise HTTPException(status_code=404, detail="Hook policy not found")
+
+
+@router.post("/hooks/reload")
+async def reload_hook_policies(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """Re-snapshot the in-memory hook registry from the database (fail-open)."""
+    count = await HookService(session).reload_registry()
+    return {"reloaded": True, "policy_count": count}

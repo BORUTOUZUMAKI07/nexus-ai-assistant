@@ -32,10 +32,12 @@ export async function POST(req: NextRequest) {
     messages,
     conversationId,
     mode = "normal",
+    planPreamble,
   } = body as {
     messages?: unknown;
     conversationId?: unknown;
     mode?: unknown;
+    planPreamble?: unknown;
   };
 
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -81,6 +83,9 @@ export async function POST(req: NextRequest) {
               messages,
               mode: streamMode,
               stream: true,
+              ...(typeof planPreamble === "string" && planPreamble
+                ? { planPreamble }
+                : {}),
             }),
             // Forward the client abort so pressing Stop cancels the upstream
             // LLM stream instead of draining it to completion (token billing).

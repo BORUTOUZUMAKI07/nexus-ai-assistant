@@ -80,4 +80,84 @@ describe("ChatArea", () => {
     render(<ChatArea messages={[]} isLoading={true} />)
     expect(screen.getByText("Nexus is working…")).toBeInTheDocument()
   })
+
+  it("renders the pending plan review card with approve/reject/dismiss", () => {
+    const plan = {
+      id: "plan-1",
+      title: "Refactor auth service",
+      summary: "Split the session manager out of the auth service.",
+      steps: ["Extract SessionManager", "Add unit tests"],
+      status: "pending" as const,
+    }
+    render(
+      <ChatArea
+        messages={[]}
+        isLoading={false}
+        pendingPlan={plan}
+        onApprovePlan={vi.fn()}
+        onRejectPlan={vi.fn()}
+        onDismissPlan={vi.fn()}
+      />
+    )
+    expect(screen.getByText("Proposed Plan")).toBeInTheDocument()
+    expect(screen.getByText("Refactor auth service")).toBeInTheDocument()
+    expect(screen.getByText("Split the session manager out of the auth service.")).toBeInTheDocument()
+    expect(screen.getByText("Approve & Execute")).toBeInTheDocument()
+    expect(screen.getByText("Reject")).toBeInTheDocument()
+    expect(screen.getByText("Dismiss")).toBeInTheDocument()
+  })
+
+  it("fires onApprovePlan / onRejectPlan / onDismissPlan from the plan card", () => {
+    const onApprovePlan = vi.fn()
+    const onRejectPlan = vi.fn()
+    const onDismissPlan = vi.fn()
+    const plan = {
+      id: "plan-1",
+      title: "Refactor auth service",
+      summary: null,
+      steps: ["Extract SessionManager"],
+      status: "pending" as const,
+    }
+    render(
+      <ChatArea
+        messages={[]}
+        isLoading={false}
+        pendingPlan={plan}
+        onApprovePlan={onApprovePlan}
+        onRejectPlan={onRejectPlan}
+        onDismissPlan={onDismissPlan}
+      />
+    )
+    fireEvent.click(screen.getByText("Approve & Execute"))
+    expect(onApprovePlan).toHaveBeenCalledWith(plan)
+    fireEvent.click(screen.getByText("Reject"))
+    expect(onRejectPlan).toHaveBeenCalledWith(plan)
+    fireEvent.click(screen.getByText("Dismiss"))
+    expect(onDismissPlan).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows a Save button on detected code artifacts and wires onSaveArtifact", () => {
+    const onSaveArtifact = vi.fn()
+    const onOpenArtifact = vi.fn()
+    const codeMessage = {
+      id: "m1",
+      role: "assistant" as const,
+      content:
+        "Here is the fix:\n\n```python\ndef hello(name: str) -> str:\n    greeting = \"Hello\"\n    return f\"{greeting}, {name}\"\n```",
+      model: "llama-3.3-70b-versatile",
+    }
+    render(
+      <ChatArea
+        messages={[codeMessage]}
+        isLoading={false}
+        onOpenArtifact={onOpenArtifact}
+        onSaveArtifact={onSaveArtifact}
+      />
+    )
+    const artifactTitle = screen.getByText("PYTHON Snippet")
+    expect(artifactTitle).toBeInTheDocument()
+    fireEvent.click(screen.getByText("Save"))
+    expect(onSaveArtifact).toHaveBeenCalledTimes(1)
+    expect(onSaveArtifact.mock.calls[0][0]).toMatchObject({ language: "python" })
+  })
 })

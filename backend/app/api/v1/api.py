@@ -5,6 +5,7 @@ Aggregates all domain routes into a single router.
 from backend.app.api.v1 import (
     account,
     admin,
+    artifacts,
     audio,
     auth,
     conversations,
@@ -12,6 +13,7 @@ from backend.app.api.v1 import (
     files,
     messages,
     orgs,
+    plans,
     prompts,
     settings,
     shares,
@@ -39,3 +41,5 @@ api_router.include_router(webhooks.router)
 api_router.include_router(admin.router)
 api_router.include_router(evaluation.router)
 api_router.include_router(shares.public_router)
+api_router.include_router(plans.router)
+api_router.include_router(artifacts.router)
