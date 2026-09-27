@@ -8,20 +8,24 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PromptTemplateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str = Field(min_length=2, max_length=150)
-    category: str = "general"
-    system_prompt: str = Field(min_length=5)
-    user_prompt_template: str | None = None
-    input_variables: list[str] = Field(default_factory=list)
+    category: str = Field(default="general", min_length=1, max_length=64)
+    system_prompt: str = Field(min_length=5, max_length=20000)
+    user_prompt_template: str | None = Field(default=None, max_length=20000)
+    input_variables: list[str] = Field(default_factory=list, max_length=100)
     is_public: bool = False
 
 
 class PromptTemplateUpdate(BaseModel):
-    title: str | None = None
-    category: str | None = None
-    system_prompt: str | None = None
-    user_prompt_template: str | None = None
-    input_variables: list[str] | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=2, max_length=150)
+    category: str | None = Field(default=None, min_length=1, max_length=64)
+    system_prompt: str | None = Field(default=None, min_length=5, max_length=20000)
+    user_prompt_template: str | None = Field(default=None, max_length=20000)
+    input_variables: list[str] | None = Field(default=None, max_length=100)
     is_public: bool | None = None
 
 
@@ -42,11 +46,13 @@ class PromptTemplateResponse(BaseModel):
 
 
 class SkillCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=2, max_length=100)
-    description: str
-    category: str = "general"
-    instructions: str = Field(min_length=10)
-    tools_required: list[str] = Field(default_factory=list)
+    description: str = Field(min_length=1, max_length=2000)
+    category: str = Field(default="general", min_length=1, max_length=64)
+    instructions: str = Field(min_length=10, max_length=30000)
+    tools_required: list[str] = Field(default_factory=list, max_length=50)
     is_system: bool = False
 
 

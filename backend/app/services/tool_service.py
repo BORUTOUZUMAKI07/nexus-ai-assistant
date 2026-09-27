@@ -63,12 +63,27 @@ class ToolService:
             status="running",
         )
 
-        result = await tool_gateway.execute_tool(
-            tool_name=tool_name,
-            arguments=arguments,
-            user_id=user_id,
-            org_id=await self._resolve_org_id(user_id),
-        )
+        try:
+            result = await tool_gateway.execute_tool(
+                tool_name=tool_name,
+                arguments=arguments,
+                user_id=user_id,
+                org_id=await self._resolve_org_id(user_id),
+            )
+        except Exception as exc:
+            # Keep persisted execution history truthful if validation, rate limiting,
+            # or an unexpected gateway failure raises before returning a result.
+            await self._repo.update_tool_call(
+                tool_call_id=call_log.id,
+                status="failed",
+                error_message=f"Tool execution failed ({type(exc).__name__}).",
+            )
+            logger.error(
+                "tool_execution_failed",
+                tool_name=tool_name,
+                error_type=type(exc).__name__,
+            )
+            raise
 
         if result.get("status") == "blocked":
             await self._repo.update_tool_call(
@@ -87,6 +102,7 @@ class ToolService:
             error_message=result.get("error"),
             execution_time_ms=result.get("duration_ms", 0.0),
         )
+
         if result.get("status") == "requires_approval":
             # Hand the caller the id of the exact pending call so it can be
             # approved (SEC-03/SEC-06: approval binds to this specific call).
@@ -98,10 +114,10 @@ class ToolService:
         """Resolve a pending HITL approval request (scoped to the caller's conversations).
 
         Server-side approval consumption (SEC-02/SEC-05/SEC-06): the client only
-        supplies the id of the exact pending call plus a yes/no. On approval the
-        server executes the *logged* tool with the *logged* arguments — never a
-        client-supplied approval flag or altered arguments. The row is claimed
-        atomically (single-use) and stale requests are rejected.
+        supplies the id of the exact pending call plus a yes/no. The row is
+        resolved atomically (single-use) to approved/rejected; the orchestrator
+        executes approved calls with a server-set flag — never a client-supplied
+        approval flag or altered arguments. Stale requests are rejected.
         """
         # Owner-scoped existence + expiry check (before the atomic claim).
         pending = await self._repo.get_tool_call(approval.tool_call_id, user_id=user_id)
@@ -116,6 +132,13 @@ class ToolService:
                 message="Elicitations are resolved via POST /tools/elicitations/{id}/respond, not /tools/approval."
             )
 
+        if pending.status != "requires_approval":
+            return {
+                "status": "conflict",
+                "tool_call_id": approval.tool_call_id,
+                "message": "This tool call is not awaiting approval or has already been resolved.",
+            }
+
         if approval.approved:
             created_at = pending.created_at
             if created_at.tzinfo is None:
@@ -126,51 +149,25 @@ class ToolService:
                     message=f"Approval for tool call {approval.tool_call_id} has expired."
                 )
 
-        # Atomic single-use claim: only the first resolver gets the row.
-        call = await self._repo.claim_tool_call_for_approval(
-            approval.tool_call_id, user_id, approved=approval.approved
+        # Atomic single-use resolution: only the first resolver transitions the
+        # row (status -> approved/rejected). The orchestrator executes approved
+        # calls server-side with a server-set approval flag — the approving
+        # client never triggers execution or alters the logged arguments.
+        resolved = await self._repo.resolve_pending_approval(
+            tool_call_id=approval.tool_call_id,
+            user_id=user_id,
+            approved=approval.approved,
         )
-        if call is None:
-            raise ApprovalConsumedError(
-                message=f"Approval for tool call {approval.tool_call_id} was already resolved."
-            )
-
-        if not approval.approved:
+        if not resolved:
             return {
-                "status": "success",
-                "tool_call_id": str(approval.tool_call_id),
-                "approved": False,
-                "reason": approval.reason,
+                "status": "conflict",
+                "tool_call_id": approval.tool_call_id,
+                "message": "This approval was already resolved or is no longer pending.",
             }
 
-        # Server-side execution of the exact logged call (is_user_approved is set
-        # by server code here — post-approval — never by the requester).
-        result = await tool_gateway.execute_tool(
-            tool_name=call.tool_name,
-            arguments=call.input_args,
-            user_id=user_id,
-            is_user_approved=True,
-            org_id=await self._resolve_org_id(user_id),
-        )
-        if result.get("status") == "blocked":
-            await self._repo.update_tool_call(
-                tool_call_id=approval.tool_call_id,
-                status="blocked",
-                error_message=result.get("message"),
-            )
-            raise ToolPermissionError(
-                message=result.get("message") or "Tool execution blocked by policy."
-            )
-        await self._repo.update_tool_call(
-            tool_call_id=approval.tool_call_id,
-            status=result.get("status", "completed"),
-            output_result=result.get("result"),
-            error_message=result.get("error"),
-            execution_time_ms=result.get("duration_ms", 0.0),
-        )
         return {
             "status": "success",
             "tool_call_id": str(approval.tool_call_id),
-            "approved": True,
-            "execution": result,
+            "approved": approval.approved,
+            "reason": approval.reason,
         }

@@ -155,3 +155,9 @@ async def test_org_usage_summary_hidden_from_non_members(client, user_auth_heade
         f"/api/v1/orgs/{uuid.uuid4()}/usage-summary", headers=user_auth_headers
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("query", ["?limit=0", "?limit=201"])
+async def test_evaluations_limit_is_validated(client, user_auth_headers, query):
+    response = await client.get(f"/api/v1/usage/evaluations{query}", headers=user_auth_headers)
+    assert response.status_code == 422

@@ -22,13 +22,17 @@ from backend.app.services.conversation_service import ConversationService
 from backend.app.services.tool_service import ToolService
 from backend.app.services.tools.elicitations import ElicitationService
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
 
 class ToolExecuteRequest(BaseModel):
-    tool_name: str
+    # Reject client-supplied control flags (for example is_user_approved) rather
+    # than silently ignoring them and creating ambiguous security semantics.
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: str = Field(min_length=1, max_length=128, pattern=r"^\S(?:.*\S)?$")
     arguments: dict[str, Any]
     conversation_id: UUID
     # NOTE: there is intentionally NO is_user_approved field here. Approval is a
@@ -55,7 +59,7 @@ async def execute_tool_endpoint(
     _idem_key: None = require_idempotency_key("tool.execute"),
     _rl: None = rate_limit("tool.execute", limit=20, window_seconds=60, org_scope=True),
 ):
-    """Directly execute a vetted tool through the 5-step safety gateway."""
+    """Execute a vetted tool through the gateway; approval cannot be asserted by clients."""
     # IDOR guard: the tool call is logged against this conversation — verify the
     # caller actually owns it before executing/logging.
     try:
@@ -79,9 +83,15 @@ async def approve_tool_call(
 ):
     """Resolves a pending Human-In-The-Loop approval request."""
     try:
-        return await tool_svc.approve_tool_call(approval, user_id=current_user.id)
+        result = await tool_svc.approve_tool_call(approval, user_id=current_user.id)
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)
+
+    # Translate the service's domain outcome into the appropriate HTTP status.
+    # A replayed or concurrently resolved approval must not look like success.
+    if result.get("status") == "conflict":
+        raise HTTPException(status_code=409, detail=result.get("message", "Approval conflict"))
+    return result
 
 
 class ElicitationRequest(BaseModel):

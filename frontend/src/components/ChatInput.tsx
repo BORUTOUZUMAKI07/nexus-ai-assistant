@@ -244,7 +244,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   // ── Voice recording ──────────────────────────────────────────────────────
 
-  const transcribeBlob = async (blob: Blob) => {
+const transcribeBlob = useCallback(async (blob: Blob) => {
     setIsTranscribing(true);
     try {
       const formData = new FormData();
@@ -276,7 +276,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     } finally {
       setIsTranscribing(false);
     }
-  };
+  }, []);
 
   const startRecording = useCallback(async () => {
     try {

@@ -114,6 +114,31 @@ class ToolRepository(BaseRepository[Tool]):
             await self.session.refresh(call)
         return call
 
+    async def resolve_pending_approval(
+        self,
+        tool_call_id: UUID,
+        user_id: UUID,
+        approved: bool,
+    ) -> bool:
+        """Atomically resolve an approval only while it is still pending and owned."""
+        statement = (
+            update(ToolCall)
+            .where(
+                ToolCall.id == tool_call_id,
+                ToolCall.status == "requires_approval",
+                ToolCall.conversation_id.in_(
+                    select(Conversation.id).where(Conversation.user_id == user_id)
+                ),
+            )
+            .values(
+                status="approved" if approved else "rejected",
+                is_approved=approved,
+            )
+        )
+        result = await self.session.exec(statement)
+        await self.session.commit()
+        return result.rowcount == 1
+
     async def get_tool_call(self, tool_call_id: UUID, user_id: UUID | None = None) -> ToolCall | None:
         statement = select(ToolCall).where(ToolCall.id == tool_call_id)
         if user_id:

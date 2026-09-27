@@ -26,11 +26,13 @@ class MessageAttachmentResponse(BaseModel):
 
 
 class MessageCreate(BaseModel):
-    content: str = Field(min_length=1)
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=100000)
     role: str = "user"
     parent_message_id: UUID | None = None
     model: str | None = None
-    system_prompt_override: str | None = None
+    system_prompt_override: str | None = Field(default=None, max_length=20000)
     attachments: list[MessageAttachmentCreate] | None = None
     tool_calls: list[dict[str, Any]] | None = None
 
@@ -62,18 +64,22 @@ class MessageFeedback(BaseModel):
 
 
 class ConversationCreate(BaseModel):
-    title: str | None = "New Chat"
-    model: str | None = "llama-3.3-70b-versatile"
-    system_prompt: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default="New Chat", max_length=200)
+    model: str | None = Field(default="llama-3.3-70b-versatile", max_length=128)
+    system_prompt: str | None = Field(default=None, max_length=20000)
     is_pinned: bool | None = False
 
 
 class ConversationUpdate(BaseModel):
-    title: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, max_length=200)
     is_pinned: bool | None = None
     is_archived: bool | None = None
-    system_prompt: str | None = None
-    model: str | None = None
+    system_prompt: str | None = Field(default=None, max_length=20000)
+    model: str | None = Field(default=None, max_length=128)
 
 
 class ConversationResponse(BaseModel):
@@ -96,8 +102,10 @@ class ConversationDetailResponse(ConversationResponse):
 
 
 class BranchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     fork_message_id: UUID
-    branch_name: str
+    branch_name: str = Field(min_length=1, max_length=120)
 
 
 class BranchResponse(BaseModel):

@@ -109,3 +109,65 @@ async def test_api_key_upsert_same_provider(client, user_auth_headers):
 @pytest.mark.asyncio
 async def test_settings_requires_auth(client):
     assert (await client.get("/api/v1/settings")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_memory_listing_pagination_and_bounds(client, user_auth_headers):
+    for content in ("memory one", "memory two"):
+        created = await client.post(
+            "/api/v1/settings/memories",
+            json={"content": content, "category": "preference"},
+            headers=user_auth_headers,
+        )
+        assert created.status_code == 201
+
+    first_page = await client.get(
+        "/api/v1/settings/memories?limit=1&offset=0", headers=user_auth_headers
+    )
+    second_page = await client.get(
+        "/api/v1/settings/memories?limit=1&offset=1", headers=user_auth_headers
+    )
+    assert first_page.status_code == second_page.status_code == 200
+    assert len(first_page.json()) == len(second_page.json()) == 1
+    assert first_page.json()[0]["id"] != second_page.json()[0]["id"]
+
+    assert (await client.get(
+        "/api/v1/settings/memories?limit=0", headers=user_auth_headers
+    )).status_code == 422
+    assert (await client.get(
+        "/api/v1/settings/memories?limit=101", headers=user_auth_headers
+    )).status_code == 422
+    assert (await client.get(
+        "/api/v1/settings/memories?offset=-1", headers=user_auth_headers
+    )).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_api_key_listing_pagination_and_bounds(client, user_auth_headers):
+    for provider, secret in (("openai", "sk-first-secret"), ("groq", "gsk-second-secret")):
+        created = await client.post(
+            "/api/v1/settings/keys",
+            json={"provider": provider, "key_value": secret},
+            headers=user_auth_headers,
+        )
+        assert created.status_code == 201
+
+    first_page = await client.get(
+        "/api/v1/settings/keys?limit=1&offset=0", headers=user_auth_headers
+    )
+    second_page = await client.get(
+        "/api/v1/settings/keys?limit=1&offset=1", headers=user_auth_headers
+    )
+    assert first_page.status_code == second_page.status_code == 200
+    assert len(first_page.json()) == len(second_page.json()) == 1
+    assert first_page.json()[0]["provider"] != second_page.json()[0]["provider"]
+
+    assert (await client.get(
+        "/api/v1/settings/keys?limit=0", headers=user_auth_headers
+    )).status_code == 422
+    assert (await client.get(
+        "/api/v1/settings/keys?limit=101", headers=user_auth_headers
+    )).status_code == 422
+    assert (await client.get(
+        "/api/v1/settings/keys?offset=-1", headers=user_auth_headers
+    )).status_code == 422

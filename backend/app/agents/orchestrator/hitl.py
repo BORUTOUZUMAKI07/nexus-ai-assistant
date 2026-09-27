@@ -62,12 +62,16 @@ def request_human_approval(
     When the user submits their decision via the API, the graph resumes
     with the decision payload provided in Command(resume=decision).
     """
-    logger.info("requesting_hitl_approval", tool_name=tool_name, arguments=arguments)
+    # Tool arguments may contain credentials, personal data, or other secrets.
+    # Keep logs to non-sensitive metadata; the approval payload is sent only
+    # through the authenticated graph interrupt channel.
+    logger.info("requesting_hitl_approval", tool_name=tool_name, argument_count=len(arguments))
 
     approval_payload = build_approval_payload(tool_name, arguments, reason)
 
     # interrupt pauses graph execution and yields the payload to the caller/client
     user_decision: dict[str, Any] = interrupt(approval_payload)
 
-    logger.info("hitl_approval_resumed", user_decision=user_decision)
+    decision_action = user_decision.get("action") if isinstance(user_decision, dict) else None
+    logger.info("hitl_approval_resumed", action=decision_action)
     return user_decision
