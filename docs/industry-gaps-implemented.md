@@ -156,10 +156,10 @@ change), unit-tested, and live-verified** unless marked infra-only.
 - Tests: `tests/test_webhooks.py` (8).
 
 ## 15. Text-to-speech ✅
-- `litellm_client.synthesize_speech` (`litellm.aspeech`); `GET/POST
-  /audio/speech` returns audio when a speech-capable provider key is set and
-  501 otherwise. Config: `TTS_MODEL`/`TTS_VOICE`/`TTS_FORMAT`.
-- Tests: `tests/test_tts.py` (2).
+- `litellm_client.synthesize_speech` (key-less Microsoft Edge neural voices via
+  edge-tts — no provider key or billing ever); `GET /audio/speech` always
+  returns MP3 audio. Config: `TTS_MODEL`/`TTS_VOICE`/`TTS_FORMAT`.
+- Tests: `tests/test_tts.py` (3).
 
 ## 16. Organizations / workspaces ✅
 - `org_service.py` + `organizations`/`organization_members`/`organization_invites`
