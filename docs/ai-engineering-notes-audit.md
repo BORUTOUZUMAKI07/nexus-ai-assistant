@@ -45,7 +45,7 @@ Audit date: 2026-09-27. Evidence is real file paths; nothing below is invented.
 |---|---|---|
 | 2.1 What is prompt engineering | **[N/A]** | System prompt lives in `prompt_compiler.py` / `context_compiler.py`. |
 | 2.2 Reasoning techniques + **ARQ** | **[IMPLEMENTED]** | ARQ-style structured reasoning query in `nodes.py::_run_arq` (forced auditable checks). |
-| 2.3 Verbalized Sampling | **[CANDIDATE]** | Not implemented; could improve reasoning output extraction. |
+| 2.3 Verbalized Sampling | **[CANDIDATE — low product fit]** | Diversity unlock (mode-collapse mitigation, arXiv:2510.01171) — valuable for creative/synthetic generation, not the assistant core. Plan-reliability instead needs schema-enforced structured output (§2.4) + CISC-weighted self-consistency. See `docs/candidates-industry-comparison.md` A1. |
 | 2.4 JSON prompting | **[IMPLEMENTED]** | Strict-JSON plan parsing in `services/plan_service.py`; `services/structured_output.py`. |
 
 # PART 3 — Fine-Tuning
@@ -65,7 +65,7 @@ Audit date: 2026-09-27. Evidence is real file paths; nothing below is invented.
 | 4.8 RAG vs agentic RAG | **[IMPLEMENTED]** | Researcher subagent + tool loop acting on retrieval results. |
 | 4.9 HyDE | **[IMPLEMENTED]** | Conditional HyDE in `services/rag/query_rewriter.py` + `base.py`. |
 | 4.10 Fine-tune vs LoRA vs RAG | **[N/A]** | Reference comparison. |
-| 4.11 REFRAG | **[CANDIDATE]** | Not implemented. |
+| 4.11 REFRAG | **[OUT-OF-SCOPE]** | Meta-AI decoding-efficiency framework (arXiv:2509.01092): compresses chunks to embeddings and injects them into the **decoder** (RL-selected expansion) — impossible through managed provider APIs. The production-standard fix for "irrelevant retrieved context" is CRAG-style corrective retrieval (retriever grader + re-retrieve/refine/fallback). See `docs/candidates-industry-comparison.md` A2. |
 | 4.12 CAG (cache-augmented generation) | **[IMPLEMENTED]** | `infrastructure/cache/cag_service.py` + `prompt_compiler.py` CAG variant. |
 | 4.13 RAG → agentic RAG → memory | **[IMPLEMENTED]** | mem0 long-term memory (`services/memory.py`) injected into agent system prompt. |
 
@@ -145,13 +145,22 @@ Audit date: 2026-09-27. Evidence is real file paths; nothing below is invented.
 | Verdict | Count (by section) |
 |---|---|
 | **[IMPLEMENTED]** | ~28 |
-| **[CANDIDATE]** | 4 (1.10 local models, 2.3 verbalized sampling, 4.11 REFRAG, 6.15 prompt optimization) |
+| **[CANDIDATE]** | 4 (1.10 local-model routing, 2.3 verbalized sampling [low fit], CRAG-style corrective retrieval [replaces REFRAG §4.11 — reclassified out-of-scope], 6.15 prompt optimization) |
 | **[OUT-OF-SCOPE] / [N/A]** | remainder (theory, training, inference-serving, glossaries) |
 
-**Missing candidates genuinely useful for this product (not currently built):**
-1. **Verbalized Sampling** (2.3) — could improve plan/reason extraction in `plan_service`.
-2. **REFRAG** (4.11) — RAG-faithfulness reranking; could plug into `reranking.py`.
-3. **Automated prompt optimization loop** (6.15) — Langfuse is passive; an Opik-style optimizer isn't wired.
+**Missing candidates genuinely useful for this product (not currently built; industry
+research in `docs/candidates-industry-comparison.md`):**
+1. **CRAG-style corrective retrieval** (replaces §4.11) — retriever-quality evaluator
+   + re-retrieve/refine/fallback branch; the production-standard answer to
+   "irrelevant retrieved context" (Meta's REFRAG itself needs self-hosted decoders).
+2. **Schema-enforced structured output** (§2.4) — `plan_service` uses prompt-only
+   JSON; 2026 standard is provider strict-mode/constrained decoding (prompt-only
+   fails 5–15%).
+3. **Automated prompt optimization loop** (§6.15) — Opik optimizers / agent-opt over
+   the existing golden-set regression gate + canary promotion.
+4. **Local-model routing** (§1.10) — cost/offline tier for low-stakes calls.
+5. **Verbalized Sampling** (§2.3) — low product fit: diversity unlock for
+   creative/synthetic tasks, not the assistant core.
 
 Copyright caveat: two big Appendices (inference checklist rows) are vLLM-specific and out of product scope —
 harvesting "all useful things" must exclude the self-hosting parts by design.
