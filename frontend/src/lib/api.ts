@@ -822,3 +822,213 @@ export async function deleteHookPolicy(id: string): Promise<void> {
     throw new Error(`Hook delete failed: ${res.status}`);
   }
 }
+
+// ─── Admin: slice monitoring / fairness / bandits ───────────────────────────
+
+export interface SliceRow {
+  model: string;
+  provider: string;
+  volume: number;
+  rank: number;
+  popularity_bucket: string;
+  error_rate: number;
+  avg_latency_ms: number;
+  cost_usd: number;
+  helpful_rate: number | null;
+  flags: string[];
+}
+
+export interface SliceReport {
+  overall: {
+    requests: number;
+    error_rate: number;
+    helpful_rate: number | null;
+    avg_latency_ms: number;
+    combined_cost_usd: number;
+  };
+  slices: SliceRow[];
+  popularity_flags: {
+    slice: string;
+    helpful_rate: number | null;
+    flags: string[];
+  }[];
+  error?: string;
+}
+
+export interface FairnessReport {
+  evaluator_parity: {
+    group: string;
+    count: number;
+    pass_rate: number;
+  }[];
+  model_parity: {
+    model: string;
+    count: number;
+    pass_rate: number;
+  }[];
+  provider_error_parity: {
+    provider: string;
+    count: number;
+    error_rate: number;
+    flagged: boolean;
+  }[];
+  limitations: string;
+  error?: string;
+}
+
+export interface BanditStatRow {
+  experiment: string;
+  variant: string;
+  reward_count: number;
+  mean_reward: number;
+}
+
+export interface BanditStatus {
+  epsilon: number;
+  exploration: string;
+  stats: BanditStatRow[];
+}
+
+export interface OptimizationRunItem {
+  id: string;
+  prompt_key: string;
+  status: string;
+  candidate_count: number;
+  accepted_variant: string;
+  baseline_score: number;
+  best_score: number;
+  average_score: number;
+  promoted: boolean;
+  created_at: string | null;
+}
+
+export interface OptimizationRunRequest {
+  prompt_key: string;
+  baseline_prompt: string;
+  cases?: { input: string; ideal?: string }[];
+  candidate_count?: number;
+}
+
+export interface AuditReport {
+  controls: {
+    pii_redaction_enabled: boolean;
+    response_cache_enabled: boolean;
+    rate_limit_per_minute: number;
+    totp_available: boolean;
+  };
+  lifecycle_hooks: { policy_count: number; enabled: number; block_policies: number };
+  model_provenance: {
+    model: string;
+    requests: number;
+    providers: string[];
+    experiment_variants_seen: string[];
+  }[];
+  prompt_provenance: { version_count: number; latest_timestamp: string | null };
+  red_team: {
+    run_count: number;
+    last_run_at?: string | null;
+    total_probes?: number;
+    blocked_probes?: number;
+    defense_rate?: number;
+    note?: string;
+  };
+  gdpr: { gdpr_export: number; gdpr_erasure: number };
+  evaluations: { evaluator: string; count: number; pass_rate: number }[];
+  retention: string;
+  eu_ai_act: {
+    classification: string;
+    high_risk_articles: string;
+    transparency_obligations: Record<string, string>;
+    gpaI_models: Record<string, string>;
+    fines: string;
+    internal_evidence: Record<string, string>;
+  };
+}
+
+export interface RedTeamRunItem {
+  id: string;
+  created_at: string | null;
+  total_probes: number;
+  blocked_probes: number;
+  defense_rate: number;
+  probe_count: number;
+}
+
+export async function fetchSliceReport(retry: FetchRetryOptions = {}): Promise<SliceReport> {
+  const res = await fetchWithRetry(
+    `${API_BASE}/admin/monitoring/slices`,
+    { headers: authHeaders() },
+    retry
+  );
+  if (!res.ok) throw new Error(`Slice report failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchFairnessReport(retry: FetchRetryOptions = {}): Promise<FairnessReport> {
+  const res = await fetchWithRetry(
+    `${API_BASE}/admin/monitoring/fairness`,
+    { headers: authHeaders() },
+    retry
+  );
+  if (!res.ok) throw new Error(`Fairness report failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchBanditStatus(retry: FetchRetryOptions = {}): Promise<BanditStatus> {
+  const res = await fetchWithRetry(
+    `${API_BASE}/admin/monitoring/bandits`,
+    { headers: authHeaders() },
+    retry
+  );
+  if (!res.ok) throw new Error(`Bandit status failed: ${res.status}`);
+  return res.json();
+}
+
+// ─── Admin: prompt-optimization evidence trail ──────────────────────────────
+
+export async function fetchOptimizationRuns(
+  retry: FetchRetryOptions = {}
+): Promise<OptimizationRunItem[]> {
+  const res = await fetchWithRetry(
+    `${API_BASE}/admin/optimization/runs`,
+    { headers: authHeaders() },
+    retry
+  );
+  if (!res.ok) throw new Error(`Optimization runs failed: ${res.status}`);
+  return res.json();
+}
+
+export async function triggerOptimizationRun(
+  input: OptimizationRunRequest
+): Promise<OptimizationRunItem> {
+  const res = await nexusFetch(`${API_BASE}/admin/optimization/run`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw await parseError(res, "Optimization run failed");
+  return res.json();
+}
+
+// ─── Admin: responsible-ML / compliance audit surface ───────────────────────
+
+export async function fetchAuditReport(retry: FetchRetryOptions = {}): Promise<AuditReport> {
+  const res = await fetchWithRetry(
+    `${API_BASE}/admin/audit`,
+    { headers: authHeaders() },
+    retry
+  );
+  if (!res.ok) throw new Error(`Audit report failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchRedTeamRuns(retry: FetchRetryOptions = {}): Promise<RedTeamRunItem[]> {
+  const res = await fetchWithRetry(
+    `${API_BASE}/admin/audit/redteam`,
+    { headers: authHeaders() },
+    retry
+  );
+  if (!res.ok) throw new Error(`Red-team runs failed: ${res.status}`);
+  const data = (await res.json()) as { runs: RedTeamRunItem[] };
+  return data.runs;
+}

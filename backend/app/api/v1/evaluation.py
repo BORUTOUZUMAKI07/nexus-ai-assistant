@@ -137,9 +137,31 @@ async def run_quality_eval(
 @router.post("/redteam")
 async def run_redteam_probes(
     admin: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Runs the adversarial probe battery against the input guardrails."""
+    """
+    Runs the adversarial probe battery against the input guardrails and
+    persists the whole report (defense rate + per-probe verdicts) into
+    ``redteam_runs`` so the compliance/audit surface can show history.
+    """
     suite = await redteam_service.run_probe_suite()
+    try:
+        from backend.app.domain.base_repository import BaseRepository
+        from backend.app.domain.redteam.models import RedTeamRun
+
+        total = int(suite.get("total_probes", 0))
+        blocked = int(suite.get("blocked_probes", 0))
+        defense = (blocked / total) if total else 0.0
+        run = RedTeamRun(
+            total_probes=total,
+            blocked_probes=blocked,
+            defense_rate=defense,
+            report=suite,
+        )
+        await BaseRepository(session, RedTeamRun).create(run)
+        logger.info("redteam_run_persisted", run_id=str(run.id), defense_rate=defense)
+    except Exception as exc:
+        logger.warning("redteam_run_persist_failed", error=str(exc))
     return {"report": suite, "evaluator": "redteam"}
 
 

@@ -9,11 +9,14 @@ from sqlmodel import SQLModel
 try:
     import backend.app.domain.artifact.models  # noqa: F401
     import backend.app.domain.conversation.models  # noqa: F401
+    import backend.app.domain.experiment.models  # noqa: F401
     import backend.app.domain.file.models  # noqa: F401
     import backend.app.domain.hook.models  # noqa: F401
+    import backend.app.domain.optimization.models  # noqa: F401
     import backend.app.domain.org.models  # noqa: F401
     import backend.app.domain.plan.models  # noqa: F401
     import backend.app.domain.prompt.models  # noqa: F401
+    import backend.app.domain.redteam.models  # noqa: F401
     import backend.app.domain.share.models  # noqa: F401
     import backend.app.domain.system.models  # noqa: F401
     import backend.app.domain.tool.models  # noqa: F401

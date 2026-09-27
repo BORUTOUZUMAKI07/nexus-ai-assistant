@@ -7,6 +7,7 @@ from uuid import UUID
 
 import structlog
 from backend.app.api.deps import get_current_admin, get_db
+from backend.app.core.config import settings
 from backend.app.domain.hook.schemas import HookPolicyCreate, HookPolicyUpdate
 from backend.app.domain.system.service import SystemService
 from backend.app.domain.usage.models import CostLog
@@ -23,6 +24,7 @@ from backend.app.services.observability.viewer import (
 )
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -277,3 +279,170 @@ async def reload_hook_policies(
     """Re-snapshot the in-memory hook registry from the database (fail-open)."""
     count = await HookService(session).reload_registry()
     return {"reloaded": True, "policy_count": count}
+
+
+# --------------------------------------------------------------------------- #
+# Candidate feature sweep — admin surfaces
+# --------------------------------------------------------------------------- #
+
+@router.get("/monitoring/slices")
+async def get_slice_report(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    Popularity-bucketed slice monitoring (MD §7.5): per-model/provider slices
+    with volume, error rate, latency, cost, and helpful rate, ranked by
+    popularity, flagging high-volume slices whose helpful rate lags the overall.
+    """
+    from backend.app.services.monitoring.slices_service import SliceService
+
+    try:
+        return await SliceService(session).slice_report()
+    except Exception as exc:
+        logger.warning("slice_report_query_failed", error=str(exc))
+        return {"overall": {}, "slices": [], "popularity_flags": [], "error": str(exc)}
+
+
+@router.get("/monitoring/fairness")
+async def get_fairness_report(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    Slim fairness surface: eval pass-rate parity (evaluator/metric + model) and
+    provider error parity, with documented limitations (population-level only).
+    """
+    from backend.app.services.monitoring.slices_service import SliceService
+
+    try:
+        return await SliceService(session).fairness_report()
+    except Exception as exc:
+        logger.warning("fairness_report_query_failed", error=str(exc))
+        return {"evaluator_parity": [], "model_parity": [], "provider_error_parity": [], "limitations": "", "error": str(exc)}
+
+
+@router.get("/monitoring/bandits")
+async def get_bandit_stats(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    ε-greedy bandit status (MD §8.9): empirical win rates per experiment variant
+    from the persisted reward stream, plus the configured exploration rate.
+    """
+    from backend.app.services.bandit_service import bandit_service
+
+    try:
+        stats = await bandit_service.stats(session)
+    except Exception as exc:
+        logger.warning("bandit_stats_query_failed", error=str(exc))
+        stats = []
+    return {
+        "epsilon": settings.BANDIT_EPSILON,
+        "exploration": "ε-greedy",
+        "stats": stats,
+    }
+
+
+class OptimizationRunRequest(BaseModel):
+    prompt_key: str = Field(min_length=1, max_length=120)
+    baseline_prompt: str = Field(min_length=1)
+    cases: list[dict[str, Any]] = Field(default_factory=list)
+    candidate_count: int | None = Field(default=None, ge=1, le=6)
+
+
+@router.get("/optimization/runs")
+async def list_optimization_runs(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> list[dict[str, Any]]:
+    """Recent automated prompt-optimization loops (evidence trail)."""
+    from backend.app.domain.base_repository import BaseRepository
+    from backend.app.domain.optimization.models import PromptOptimizationRun
+
+    runs = await BaseRepository(session, PromptOptimizationRun).get_all(limit=50)
+    return [
+        {
+            "id": str(r.id),
+            "prompt_key": r.prompt_key,
+            "status": r.status,
+            "candidate_count": r.candidate_count,
+            "accepted_variant": r.accepted_variant,
+            "baseline_score": r.baseline_score,
+            "best_score": r.best_score,
+            "average_score": r.average_score,
+            "promoted": r.details.get("promoted", False),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in runs
+    ]
+
+
+@router.post("/optimization/run", status_code=201)
+async def run_optimization(
+    body: OptimizationRunRequest,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    Trigger one automated prompt-optimization loop (MD §6.15): propose K
+    candidate rewrites, score against the golden case set, promote the winner
+    if it beats the baseline, and persist the run.
+    """
+    from backend.app.services.prompt_optimizer import prompt_optimizer_service
+
+    run = await prompt_optimizer_service.run(
+        session,
+        prompt_key=body.prompt_key,
+        baseline_prompt=body.baseline_prompt,
+        cases=body.cases,
+        candidate_count=body.candidate_count,
+    )
+    return {
+        "id": str(run.id),
+        "prompt_key": run.prompt_key,
+        "status": run.status,
+        "accepted_variant": run.accepted_variant,
+        "baseline_score": run.baseline_score,
+        "best_score": run.best_score,
+        "promoted": run.details.get("promoted", False),
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+    }
+
+
+@router.get("/audit")
+async def get_audit_report(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    Responsible-ML / compliance snapshot: system controls, model + prompt
+    provenance, red-team battery, GDPR evidence, eval histogram, and the EU AI
+    Act classification statement.
+    """
+    from backend.app.services.audit_service import AuditService
+
+    return await AuditService(session).report()
+
+
+@router.get("/audit/redteam")
+async def list_redteam_runs(
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """Recent persisted red-team runs (defense-rate history for the audit trail)."""
+    from backend.app.services.audit_service import AuditService
+
+    runs = await AuditService(session).redteam_runs(limit=5)
+    return {"runs": runs}
+
+
+@router.get("/audit/eu-act")
+async def get_eu_act_classification(
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """Static EU AI Act classification statement for the audit/readiness view."""
+    from backend.app.services.audit_service import eu_ai_act_classification
+
+    return eu_ai_act_classification()

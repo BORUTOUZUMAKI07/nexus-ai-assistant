@@ -83,6 +83,26 @@ async def send_message_sync(
         metrics_collector.increment(f"experiment:chat_system_prompt:{experiment_variant}")
         logger.info("chat_experiment_variant_assigned", prompt_variant=experiment_variant, user_id=str(current_user.id))
 
+    # ε-greedy bandit override (MD §8.9): no-op unless the experiment config
+    # declares bandit: true. Cold start explores uniformly; then exploits the
+    # empirically-best variant from recorded rewards. Fail-open.
+    try:
+        from backend.app.services.bandit_service import bandit_service
+
+        bandit_choice = await bandit_service.select(
+            usage_svc._repo.session, "chat_system_prompt", str(current_user.id)
+        )
+        if bandit_choice:
+            experiment_variant = bandit_choice
+            metrics_collector.increment(f"experiment:chat_system_prompt:{experiment_variant}")
+            logger.info(
+                "bandit_experiment_variant_assigned",
+                prompt_variant=experiment_variant,
+                user_id=str(current_user.id),
+            )
+    except Exception as exc:
+        logger.warning("bandit_select_skipped", error=str(exc))
+
     system_prompt = await prompt_compiler.compile_system_prompt_cached(
         custom_instructions=message_in.system_prompt_override or conv.system_prompt,
     )
@@ -139,6 +159,7 @@ async def send_message_sync(
         model=target_model,
         prompt_tokens=prompt_tok,
         completion_tokens=comp_tok,
+        metadata_json={"prompt_variant": experiment_variant},
     )
 
     # 7. Log Usage Telemetry (tokens, cost, quality)

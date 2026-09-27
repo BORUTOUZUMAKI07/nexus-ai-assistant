@@ -268,8 +268,15 @@ class LiteLLMService:
         conversation_id: str | None = None,
         session_name: str | None = None,
         enable_caching: bool = True,
+        response_format: dict | None = None,
     ) -> dict[str, Any]:
-        """Executes non-streaming completion with automatic fallbacks and cost tracking."""
+        """Executes non-streaming completion with automatic fallbacks and cost tracking.
+
+        ``response_format`` passes provider-level structured-output requests
+        (e.g. ``{"type": "json_object"}``) through to the router. Standard
+        APIs drop it on providers that do not support it (``drop_params=True``),
+        so callers must keep retry-with-repair / heuristic fallbacks afterwards.
+        """
         extra_headers: dict[str, str] = {}
         if enable_caching:
             extra_headers["cache-control"] = "ephemeral"
@@ -309,6 +316,7 @@ class LiteLLMService:
                     temperature=temperature,
                     max_tokens=_eff_tokens,
                     extra_headers=extra_headers if extra_headers else None,
+                    **(response_format if response_format else {}),
                 )
             except Exception as exc:
                 last_exc = exc
@@ -435,6 +443,7 @@ class LiteLLMService:
         model: str = "complex_reasoning",
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        response_format: dict | None = None,
     ) -> str:
         """Convenience method returning text response string."""
         res = await self.complete(
@@ -442,6 +451,7 @@ class LiteLLMService:
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            response_format=response_format,
         )
         return res.get("content", "")
 

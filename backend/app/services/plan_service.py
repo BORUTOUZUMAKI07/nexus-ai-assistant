@@ -91,7 +91,13 @@ Planner = Callable[[str, list], Awaitable[tuple[str, str | None, list[str]]]]
 
 
 async def _default_planner(task: str, history: list) -> tuple[str, str | None, list[str]]:
-    """LLM planner with a guaranteed heuristic fallback (never raises)."""
+    """LLM planner with schema-enforced JSON output + retry-with-repair.
+
+    Industry standard (Opik/structured-output guides): request a provider-level
+    ``json_object`` schema first, and when the model still returns unparseable
+    text, send a single repair pass feeding the validation error back before
+    falling through to the offline heuristic. Never raises.
+    """
     messages: list[dict[str, str]] = [
         {"role": "system", "content": _PLANNER_SYSTEM_PROMPT}
     ]
@@ -106,11 +112,35 @@ async def _default_planner(task: str, history: list) -> tuple[str, str | None, l
             model="complex_reasoning",
             temperature=0.4,
             max_tokens=1024,
+            response_format={"type": "json_object"},
         )
         parsed = _parse_plan_json(raw)
         if parsed:
             return parsed
-        logger.info("plan_llm_output_unparseable", raw=raw[:300])
+        # ── Retry-with-repair (schema enforcement is not guaranteed) ───────────
+        logger.info("plan_llm_output_unparseable_repairing", raw=raw[:300])
+        repair_messages = list(messages) + [
+            {
+                "role": "user",
+                "content": (
+                    "Your previous response did not parse as the required JSON "
+                    "schema (title: string, summary: string|null, steps: array of "
+                    "strings). Return ONLY the corrected JSON object, no prose, no "
+                    "code fences."
+                ),
+            }
+        ]
+        raw = await ai_client.completion(
+            messages=repair_messages,
+            model="complex_reasoning",
+            temperature=0.2,
+            max_tokens=1024,
+            response_format={"type": "json_object"},
+        )
+        parsed = _parse_plan_json(raw)
+        if parsed:
+            return parsed
+        logger.info("plan_llm_output_unparseable_after_repair", raw=raw[:300])
     except Exception as exc:
         logger.warning("plan_llm_failed_using_heuristic", error=str(exc), task_len=len(task))
 

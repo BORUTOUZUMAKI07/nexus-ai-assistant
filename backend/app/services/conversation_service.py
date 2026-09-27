@@ -26,6 +26,7 @@ class ConversationService:
 
     def __init__(self, session: AsyncSession) -> None:
         self._repo = ConversationRepository(session)
+        self._session = session
 
     async def list_conversations(
         self,
@@ -117,4 +118,36 @@ class ConversationService:
         )
         if not msg:
             raise ResourceNotFoundError("Message", str(message_id))
+        # ── Bandit reward stream (fail-open): feedback on an experimental
+        # variant feeds the ε-greedy reward counts so serve-time selection
+        # learns from real outcomes.
+        await self._record_bandit_reward(msg, feedback=feedback, user_id=user_id)
         return msg
+
+    async def _record_bandit_reward(
+        self, msg: Message, feedback: str, user_id: UUID | None
+    ) -> None:
+        try:
+            metadata = msg.metadata_json or {}
+            variant = metadata.get("prompt_variant")
+            if not variant or variant == "default" or feedback not in ("thumbs_up", "thumbs_down"):
+                return
+            from backend.app.services.bandit_service import bandit_service
+
+            reward = 1.0 if feedback == "thumbs_up" else 0.0
+            await bandit_service.record_reward(
+                self._session,
+                experiment="chat_system_prompt",
+                variant=str(variant),
+                reward=reward,
+                user_id=user_id,
+            )
+            logger.info(
+                "bandit_reward_recorded",
+                experiment="chat_system_prompt",
+                variant=variant,
+                reward=reward,
+                message_id=str(msg.id),
+            )
+        except Exception as exc:
+            logger.warning("bandit_reward_recording_skipped", error=str(exc))
