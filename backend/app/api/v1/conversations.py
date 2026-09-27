@@ -84,6 +84,23 @@ async def list_conversations(
     )
 
 
+@router.get("/search", response_model=list[ConversationResponse])
+async def search_conversations(
+    q: str,
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+    conv_svc: ConversationService = Depends(get_conversation_service),
+):
+    """
+    Owner-scoped full-text-ish search: matches conversation titles and message
+    bodies (ILIKE). Registered before /{conversation_id} so 'search' is never
+    parsed as a conversation UUID.
+    """
+    if not q or not q.strip():
+        return []
+    return await conv_svc.search_conversations(current_user.id, q.strip(), limit=limit)
+
+
 @router.post("", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def create_conversation(
     conv_in: ConversationCreate,

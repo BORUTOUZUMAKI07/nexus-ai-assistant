@@ -3,6 +3,7 @@ Master API v1 Router.
 Aggregates all domain routes into a single router.
 """
 from backend.app.api.v1 import (
+    account,
     admin,
     audio,
     auth,
@@ -10,10 +11,13 @@ from backend.app.api.v1 import (
     evaluation,
     files,
     messages,
+    orgs,
     prompts,
     settings,
+    shares,
     tools,
     usage,
+    webhooks,
 )
 from fastapi import APIRouter
 
@@ -28,5 +32,10 @@ api_router.include_router(tools.router)
 api_router.include_router(prompts.router)
 api_router.include_router(settings.router)
 api_router.include_router(usage.router)
+api_router.include_router(account.router)
+api_router.include_router(orgs.router)
+api_router.include_router(shares.router)
+api_router.include_router(webhooks.router)
 api_router.include_router(admin.router)
 api_router.include_router(evaluation.router)
+api_router.include_router(shares.public_router)

@@ -172,6 +172,24 @@ def prompt_regression_review_task(system_prompt: str, threshold: float = 0.8) ->
     return {"status": "completed", "gate": report.get("gate"), "score": report.get("score")}
 
 
+@celery_app.task(name="tasks.retry_webhook_deliveries")
+def retry_webhook_deliveries_task() -> dict:
+    """
+    Periodic retry of failed webhook deliveries (bounded by WEBHOOK_MAX_ATTEMPTS).
+    Complements the synchronous best-effort send in the message path and the
+    manual /webhooks/{id}/redeliver endpoint.
+    """
+    from backend.app.services.webhook_service import retry_failed_deliveries
+
+    async def _run():
+        async with async_session_factory() as session:
+            return await retry_failed_deliveries(session)
+
+    retried = run_async(_run())
+    logger.info("webhook_retry_pass_completed", retried=retried)
+    return {"status": "completed", "retried": retried}
+
+
 def trigger_indexing_pipeline(file_ids: list[str]):
     """
     Celery Canvas: Dispatches parallel indexing jobs as a Group.

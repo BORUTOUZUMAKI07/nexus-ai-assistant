@@ -38,6 +38,10 @@ class ConversationService:
             user_id=user_id, limit=limit, offset=offset, archived=archived
         )
 
+    async def search_conversations(self, user_id: UUID, query: str, limit: int = 20) -> list[Conversation]:
+        """Owner-scoped search across the user's conversation titles + message bodies."""
+        return await self._repo.search_user_conversations(user_id=user_id, query=query, limit=limit)
+
     async def create_conversation(
         self, user_id: UUID, conv_in: ConversationCreate
     ) -> Conversation:

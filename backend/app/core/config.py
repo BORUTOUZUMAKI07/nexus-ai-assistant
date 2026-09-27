@@ -192,6 +192,28 @@ class Settings(BaseSettings):
     # ── HITL Approvals ────────────────────────────────────────────────────────
     HITL_APPROVAL_TIMEOUT_SECONDS: int = Field(default=900, description="How long a parked HITL approval stays valid before auto-expiring")
 
+    # ── Two-Factor Authentication (TOTP, RFC 6238) ────────────────────────────
+    TOTP_ISSUER: str = Field(default="Nexus AI Assistant")
+    TOTP_VALID_WINDOW: int = Field(default=1, description="±1 step tolerance for clock drift")
+    TOTP_PREAUTH_MINUTES: int = Field(default=5, description="Lifetime of the 2FA challenge (preauth) token")
+
+    # ── Email verification / password reset ───────────────────────────────────
+    EMAIL_VERIFICATION_REQUIRED: bool = Field(default=False, description="When True, new users cannot authenticate until email is verified (off preserves the current free-tier flow)")
+    EMAIL_VERIFY_TOKEN_MINUTES: int = Field(default=1440, description="24h default for verification links")
+    PASSWORD_RESET_TOKEN_MINUTES: int = Field(default=30)
+    APP_PUBLIC_URL: str = Field(default="http://localhost:3000", description="Public origin used to build magic links")
+
+    # ── Outbound webhooks ─────────────────────────────────────────────────────
+    WEBHOOK_MAX_ATTEMPTS: int = Field(default=3, description="Delivery attempts before a webhook delivery is terminal")
+
+    # ── Read-only conversation shares ─────────────────────────────────────────
+    SHARE_DEFAULT_TTL_SECONDS: int | None = Field(default=None, description="Optional global expiry for new share links (None = no expiry)")
+
+    # ── Text-to-speech (TTS) ──────────────────────────────────────────────────
+    TTS_MODEL: str = Field(default="openai/gpt-4o-mini-tts")
+    TTS_VOICE: str = Field(default="alloy")
+    TTS_FORMAT: str = Field(default="mp3")
+
     # ── Email (Free Gmail SMTP or Resend) ──────────────────────────────────────
     SMTP_HOST: str = Field(default="smtp.gmail.com")
     SMTP_PORT: int = Field(default=587)

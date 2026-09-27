@@ -172,6 +172,26 @@ async def send_message_sync(
         completion_tokens=comp_tok,
     )
 
+    # 8. Outbound webhook dispatch (best-effort, non-blocking): any active
+    #    message.completed endpoints the user registered receive a signed event.
+    try:
+        from backend.app.services.webhook_service import WebhookService
+
+        wh_svc = WebhookService(usage_svc._repo.session)
+        await wh_svc.dispatch_event(
+            event="message.completed",
+            payload={
+                "conversation_id": str(conversation_id),
+                "message_id": str(assistant_msg.id),
+                "role": "assistant",
+                "model": target_model,
+                "content": response_text[:2000],
+            },
+            user_id=current_user.id,
+        )
+    except Exception as exc:
+        logger.warning("webhook_dispatch_failed", conversation_id=str(conversation_id), error=str(exc))
+
     return assistant_msg
 
 
