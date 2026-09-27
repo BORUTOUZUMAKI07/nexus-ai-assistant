@@ -31,7 +31,7 @@ DEFAULT_TOOL_CATALOG: list[dict[str, Any]] = [
     },
     {
         "name": "eval_benchmark",
-        "description": "Runs DeepEval/Ragas evaluation benchmarks on a given response turn.",
+        "description": "Runs free-tier (heuristic) evaluation benchmarks on a given response turn.",
         "parameters": {"turn_id": {"type": "string", "description": "Turn identifier"}},
         "category": "evaluation",
     },

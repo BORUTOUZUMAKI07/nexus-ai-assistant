@@ -109,6 +109,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None
     TOGETHER_API_KEY: str | None = None
+    MINIMAX_API_KEY: str | None = None
 
     # Default model aliases used across the app
     DEFAULT_MODEL: str = Field(default="groq/llama-3.3-70b-versatile")
@@ -255,7 +256,9 @@ class Settings(BaseSettings):
     SHARE_DEFAULT_TTL_SECONDS: int | None = Field(default=None, description="Optional global expiry for new share links (None = no expiry)")
 
     # ── Text-to-speech (TTS) ──────────────────────────────────────────────────
-    TTS_MODEL: str = Field(default="openai/gpt-4o-mini-tts")
+    # Free-tier by default (Minimax free tier, MINIMAX_API_KEY); /audio/speech
+    # returns 501 when no speech-capable provider key is configured.
+    TTS_MODEL: str = Field(default="minimax/speech-01-hd-turbo")
     TTS_VOICE: str = Field(default="alloy")
     TTS_FORMAT: str = Field(default="mp3")
 

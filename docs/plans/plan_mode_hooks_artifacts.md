@@ -235,7 +235,7 @@ execution is happening yet; hooks re-run at execution time in the approve path, 
   `tests/test_plan_mode.py`, `tests/test_hooks.py`, `tests/test_artifacts.py`.
 - Verified suite after implementation:
   1. `cd backend && .venv\Scripts\python -m ruff check app tests` on changed files.
-  2. `pytest tests -p no:deepeval -m "not e2e" --ignore=tests/integration` → expect prior 193/4 plus new tests all passing.
+  2. `pytest tests -m "not e2e" --ignore=tests/integration` → expect prior 193/4 plus new tests all passing.
   3. `cd frontend && npm test` → all vitest suites (previous 89 + new).
   4. `npx tsc --noEmit` clean; `npx eslint src` — only the 2 pre-existing ChatArea/tsx errors (already present; do not introduce new ones; do NOT "fix" the pre-existing ones unless trivial).
 

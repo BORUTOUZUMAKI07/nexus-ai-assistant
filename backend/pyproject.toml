@@ -67,14 +67,15 @@ dependencies = [
     "ddgs>=9.16",
     
     # Observability & Evaluation
-    "deepeval>=1.0.0",
     # ragas + garak were removed in 2026-09 after the dependency audit:
     #   - ragas  PYSEC-2026-3046 (SSRF, no fixed release through 0.4.3)
     #   - garak  transitively pinned vulnerable nltk/datasets/accelerate
-    # Both were declared-but-unimported: RagasEvaluationService is a heuristic
-    # LLM-judge implementation, and redteam_service.py is "Garak-style" but
-    # self-contained. Re-add either only if a patched version lands AND the
-    # library is actually used.
+    # deepeval was removed in the same audit pass: its "genuine judge" metrics
+    # default to a paid OpenAI model, and everything it adds runs through the
+    # project's own deterministic heuristics (evaluation/deepeval_service.py) or
+    # the app's litellm client (prompt-regression gate) — both 100% free tier.
+    # Re-add any of these only if a patched version lands AND the library is
+    # actually used.
     "guardrails-ai>=0.5.0",
     "structlog>=24.0.0",
     "sentry-sdk>=2.7.0",
@@ -161,7 +162,7 @@ skips = []
   asyncio_mode = "auto"
   asyncio_default_test_loop_scope = "session"
   asyncio_default_fixture_loop_scope = "session"
-  addopts = "-v -p no:deepeval -m 'not e2e'"
+  addopts = "-v -m 'not e2e'"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests that exercise repositories/routes against a real (test) database",

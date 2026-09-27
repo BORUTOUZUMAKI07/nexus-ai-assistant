@@ -534,9 +534,10 @@ class LiteLLMService:
         """
         Text-to-speech via LiteLLM's speech API. The API key must match the
         provider that serves the configured TTS model (default
-        openai/gpt-4o-mini-tts needs OPENAI_API_KEY). When the key for that
-        provider is absent we raise RuntimeError so the API layer returns a
-        clean 501 instead of misrouting e.g. an OpenRouter key to api.openai.com.
+        minimax/speech-01-hd-turbo runs on the free Minimax tier with
+        MINIMAX_API_KEY). When the key for that provider is absent we raise
+        RuntimeError so the API layer returns a clean 501 instead of misrouting
+        e.g. an OpenRouter key to a different endpoint.
         """
         model = model or settings.TTS_MODEL
         provider = model.split("/", 1)[0].lower().strip(" ").strip("/")
@@ -566,7 +567,9 @@ class LiteLLMService:
             raise
 
     # TTS model provider → env var that must hold the speech-capable key.
+    # Default is the free Minimax tier (MINIMAX_API_KEY); keep others opt-in.
     _TTS_PROVIDER_KEYS = {
+        "minimax": "MINIMAX_API_KEY",
         "openai": "OPENAI_API_KEY",
         "together": "TOGETHER_API_KEY",
         "openrouter": "OPENROUTER_API_KEY",

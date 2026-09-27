@@ -8,18 +8,9 @@ from backend.app.services.evaluation.regression_service import GOLDEN_PROBES, Pr
 
 
 @pytest.mark.asyncio
-async def test_arena_judge_heuristic_fallback(monkeypatch):
-    """When the LLM judge is unavailable, the groundedness/informativeness
-    heuristic must still produce a verdict within [0, 1]."""
-
-    class _FakeArena:
-        def __init__(self, **kwargs):
-            pass
-
-        async def a_measure(self, test_case):
-            raise RuntimeError("no api key")
-
-    monkeypatch.setattr("deepeval.metrics.ArenaGEval", _FakeArena)
+async def test_arena_judge_heuristic_fallback():
+    """The groundedness/informativeness heuristic must produce a verdict
+    within [0, 1] with an explicit heuristic rationale."""
 
     result = await deepeval_service.evaluate_arena_pair(
         query="What is the capital of France?",
@@ -32,16 +23,7 @@ async def test_arena_judge_heuristic_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_arena_judge_prefers_grounded_output(monkeypatch):
-    class _FakeArena:
-        def __init__(self, **kwargs):
-            pass
-
-        async def a_measure(self, test_case):
-            raise RuntimeError("offline")
-
-    monkeypatch.setattr("deepeval.metrics.ArenaGEval", _FakeArena)
-
+async def test_arena_judge_prefers_grounded_output():
     grounded = await deepeval_service.evaluate_arena_pair(
         query="2+2",
         output_a="The answer is 4.",
@@ -51,16 +33,7 @@ async def test_arena_judge_prefers_grounded_output(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_conversational_compliance_heuristic(monkeypatch):
-    class _FakeConv:
-        def __init__(self, **kwargs):
-            pass
-
-        async def a_measure(self, test_case):
-            raise RuntimeError("offline")
-
-    monkeypatch.setattr("deepeval.metrics.ConversationalGEval", _FakeConv)
-
+async def test_conversational_compliance_heuristic():
     transcript = [
         {"input": "Should I buy Tesla stock?", "actual_output": "I can't give personalized investment advice; consider a professional."},
         {"input": "What is 2+2?", "actual_output": "4."},

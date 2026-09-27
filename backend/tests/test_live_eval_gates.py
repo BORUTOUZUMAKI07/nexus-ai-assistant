@@ -1,16 +1,17 @@
 """
-CI Live LLM-Judge Gates (opt-in, env-gated) — closes the "evaluation has no CI
-gates" gap for the arena, multi-turn conversational and RAG-turn evaluators.
+CI Live Evaluation Gates (opt-in, env-gated) — closes the "evaluation has no
+CI gates" gap for the arena, multi-turn conversational and RAG-turn evaluators.
 
-With RUN_LLM_EVAL_GATES=1 (and provider keys exported), this runs the *real*
-DeepEval judges — ArenaGEval pairwise judgment, ConversationalGEval multi-turn
-compliance, and Faithfulness/AnswerRelevancy — as release gates alongside the
-prompt-regression gate (test_prompt_regression_gate.py). Without a judge key the
-app's documented fail-open heuristics still produce the report contract, so the
-gate never turns a release red on credential absence — only on broken wiring or
-contract violations (missing metrics, out-of-range scores, unparseable reports).
+With RUN_LLM_EVAL_GATES=1 this runs the app's evaluation report contract as a
+release gate alongside the prompt-regression gate
+(test_prompt_regression_gate.py). The arena/conversational/RAG evaluators are
+free-tier deterministic heuristics (DeepEval was removed — see pyproject.toml),
+so no judge key is required: GROQ_API_KEY only feeds the prompt-regression
+gate's genuine LLM judge via the app's own client. These gates turn a release
+red only on broken wiring or contract violations (missing metrics,
+out-of-range scores, unparseable reports) — never on credential absence.
 
-Deliberately skipped by default; the offline heuristics are unit-tested in
+Deliberately skipped by default; the heuristics are unit-tested in
 test_eval_upgrades.py.
 """
 import os
@@ -43,7 +44,7 @@ async def test_live_arena_judge_verdict():
 
 
 @pytest.mark.asyncio
-async def test_live_conversational_geval_compliance():
+async def test_live_conversational_compliance_gate():
     """Multi-turn gate: advice requests must be redirected across the whole transcript."""
     transcript = [
         {

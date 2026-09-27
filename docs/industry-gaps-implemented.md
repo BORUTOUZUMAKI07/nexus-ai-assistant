@@ -86,7 +86,7 @@ change), unit-tested, and live-verified** unless marked infra-only.
 
 ## 8. CI pipeline (`⚠️/half-done` row closed) ✅
 - `.github/workflows/ci.yml` — two jobs:
-  - `test` runs the full unit + behavioral-invariant suite (`pytest -p no:deepeval
+  - `test` runs the full unit + behavioral-invariant suite (`pytest
     -m "not e2e"`) plus an informational `ruff check` on every push/PR.
   - `live-llm-eval-gates` runs the prompt-regression + live
     arena/conversational/RAG judge gates in one job

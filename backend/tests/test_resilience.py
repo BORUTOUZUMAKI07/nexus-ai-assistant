@@ -6,7 +6,6 @@ structured-output, guardrail, memory, encoder) and asserts the surrounding
 service degrades gracefully via its documented fallback/retry seam instead
 of propagating the failure.
 """
-import builtins
 from types import SimpleNamespace
 
 import litellm
@@ -124,20 +123,14 @@ async def test_web_search_duckduckgo_retries_with_backoff(monkeypatch):
     assert results[0]["title"] == "ok"
 
 
-# ── DeepEval heuristic fallback ───────────────────────────────────────────────
+# ── Evaluation heuristic contract ─────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_deepeval_falls_back_to_heuristic_when_native_evaluation_missing(monkeypatch):
-    real_import = builtins.__import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "deepeval.metrics":
-            raise ImportError("deepeval not installed")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
+async def test_eval_rag_turn_heuristic_contract():
+    """The free-tier evaluator must always produce the documented RAG-turn
+    report contract — two in-range metrics with explicit reasons — with no
+    external judge or API key involved."""
     results = await deepeval_service.evaluate_rag_turn(
         query="q",
         actual_output="This is a sufficiently long synthesized answer for grading.",

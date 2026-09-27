@@ -2,7 +2,7 @@
 Celery Background Tasks.
 Handles asynchronous heavy-duty operations:
 - File vector ingestion & indexing (RAG pipeline)
-- DeepEval background benchmark evaluations
+- Free-tier (heuristic) background evaluation benchmarks
 - Redis cache garbage collection and cleanup
 - Canvas pipelines (Chains, Groups, Chords)
 """
@@ -131,7 +131,7 @@ def evaluate_turn_task(query: str, response: str, contexts: list[str]) -> dict:
 @celery_app.task(name="tasks.periodic_evaluation")
 def periodic_evaluation_task() -> dict:
     """
-    Periodic evaluation of recent conversations using DeepEval.
+    Periodic evaluation of recent conversations via the free-tier heuristics.
     """
     logger.info("periodic_evaluation_task_running")
     return {"status": "completed", "evaluated_turns": 0}

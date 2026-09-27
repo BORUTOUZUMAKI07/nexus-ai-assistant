@@ -1,7 +1,9 @@
 """
 Evaluation & Red-Teaming API Router (admin-only).
-Exposes the evaluation service suite — RAGAS, DeepEval, Quality, and the
-RedTeam probe battery — as on-demand endpoints persisted into evaluation_logs.
+Exposes the evaluation service suite — heuristic quality metrics, arena/
+conversational/RAG evaluators, and the RedTeam probe battery — as on-demand
+endpoints persisted into evaluation_logs. All evaluators are free-tier
+deterministic heuristics; no external judge LLM or paid API key is required.
 """
 import json
 from typing import Any
@@ -105,7 +107,8 @@ async def run_deepeval(
     session: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
-    """DeepEval faithfulness + relevancy for a turn, persisted as evaluation logs."""
+    """Free-tier faithfulness + relevancy heuristic evaluation for a turn,
+    persisted as evaluation logs. (Route name kept for API compatibility.)"""
     results = await deepeval_service.evaluate_rag_turn(
         query=body.query,
         actual_output=body.actual_output,

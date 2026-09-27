@@ -49,7 +49,7 @@ jobs:
         # -m "not e2e" matches the project's pytest defaults.
         env:
           ENVIRONMENT: development
-        run: uv run pytest -p no:deepeval -m "not e2e"
+        run: uv run pytest -m "not e2e"
 
       - name: Lint (informational)
         # The repo carries pre-existing ruff debt, so lint never hard-fails a
@@ -154,11 +154,10 @@ jobs:
     name: Live LLM-judge gates (prompt-regression + arena + conversational + RAG)
     runs-on: ubuntu-latest
     # Deliberately env-guarded: these jobs need live model credentials. Set the
-    # RUN_LLM_EVAL_GATES repository secret to "1" plus provider keys to arm
-    # them on releases. GROQ_API_KEY drives the prompt-regression gate (via the
-    # app's own LLM client); OPENAI_API_KEY (DeepEval judges) upgrades the
-    # arena/conversational/RAG gates from the offline heuristics to genuine
-    # LLM-judge verdicts — both modes enforce the report contract.
+    # RUN_LLM_EVAL_GATES repository secret to "1" to arm them on releases.
+    # GROQ_API_KEY drives the prompt-regression gate (via the app's own LLM
+    # client); the arena/conversational/RAG gates are free-tier deterministic
+    # heuristics and need no key at all — both modes enforce the report contract.
     if: env.RUN_LLM_EVAL_GATES == '1'
     defaults:
       run:
@@ -174,5 +173,4 @@ jobs:
         env:
           RUN_LLM_EVAL_GATES: "1"
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: uv run pytest tests/test_prompt_regression_gate.py tests/test_live_eval_gates.py -p no:deepeval
+        run: uv run pytest tests/test_prompt_regression_gate.py tests/test_live_eval_gates.py

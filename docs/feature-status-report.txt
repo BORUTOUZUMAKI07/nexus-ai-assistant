@@ -13,7 +13,7 @@ Answer: IS EVERYTHING COMPLETE? IS FRONTEND + BACKEND ALL GOOD?
      errors at setup if Docker Desktop is not running — that is an
      environment issue only, NOT a code failure. Run it with:
        docker start   (start Docker Desktop)
-       pytest tests/integration -p no:deepeval -m integration
+       pytest tests/integration -m integration
    - Ruff clean on changed files.
    - Live-server checks passed 4/4 (dev server on :8000):
        /admin/monitoring/viewer          -> 403 (non-admin, correct)
