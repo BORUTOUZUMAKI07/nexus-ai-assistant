@@ -81,6 +81,20 @@ async def get_current_user(
     return user
 
 
+async def get_current_org_id(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> UUID | None:
+    """Resolve the caller's organization id (None for users without an org).
+
+    Multi-tenant scoping: rate-limit keys fold this in for per-org ceilings
+    and usage/cost telemetry is attributed to the org for per-org rollups.
+    """
+    from backend.app.services.org_service import OrganizationService
+
+    return await OrganizationService(session).resolve_org_id(current_user.id)
+
+
 async def get_current_admin(
     current_user: User = Depends(get_current_user),
 ) -> User:
@@ -160,6 +174,16 @@ def get_auth_service(session: AsyncSession = Depends(get_db)) -> "AuthService":
     """Inject AuthService with database session."""
     from backend.app.services.auth_service import AuthService
     return AuthService(session)
+
+
+def get_oauth_service() -> "OAuthService":
+    """Inject the OIDC SSO adapter (stateless; configured from settings).
+
+    SSO is disabled (the /auth/oauth/* routes 404) until OAUTH_CLIENT_ID and
+    the provider endpoints are configured via environment.
+    """
+    from backend.app.services.oauth_service import OAuthService
+    return OAuthService.from_settings()
 
 
 def get_conversation_service(session: AsyncSession = Depends(get_db)) -> "ConversationService":

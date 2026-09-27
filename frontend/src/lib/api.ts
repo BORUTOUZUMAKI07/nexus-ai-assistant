@@ -598,6 +598,25 @@ export async function loginUser(payload: {
   return (await res.json()) as { ok: boolean };
 }
 
+export interface SsoAuthorizationUrl {
+  authorization_url: string;
+  state: string;
+  provider: string;
+}
+
+/**
+ * Asks the server-side proxy for the OIDC authorize URL. The page then sends
+ * the whole browser to `authorization_url`; the provider bounces back to
+ * /api/auth/oauth/callback where the httpOnly session cookies are written.
+ */
+export async function ssoLogin(): Promise<SsoAuthorizationUrl> {
+  const res = await nexusFetch(`${API_BASE}/auth/oauth`, { method: "GET" });
+  if (!res.ok) {
+    throw await parseError(res, "Single sign-on is not configured.");
+  }
+  return (await res.json()) as SsoAuthorizationUrl;
+}
+
 // ─── Plans (plan-then-approve) ───────────────────────────────────────────────
 
 export interface PlanItem {

@@ -39,6 +39,18 @@ class FileChunkResponse(BaseModel):
     qdrant_point_id: str | None
 
 
+class FileIndexStatusResponse(BaseModel):
+    """Job-status response for the 202-async indexing pattern (§6.3)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    status: str  # pending | processing | indexed | failed
+    chunk_count: int
+    error_message: str | None
+    updated_at: datetime
+
+
 class RAGQueryRequest(BaseModel):
     query: str = Field(min_length=1)
     file_ids: list[UUID] | None = None

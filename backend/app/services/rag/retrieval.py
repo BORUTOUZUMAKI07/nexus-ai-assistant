@@ -260,7 +260,7 @@ class RetrievalService(IRetriever):
         # Qdrant 422s on duplicate sparse indices.
         merged: dict[int, float] = {}
         for w, c in counts.items():
-            idx = int(hashlib.md5(w.encode("utf-8")).hexdigest()[:8], 16) % 100000
+            idx = int(hashlib.md5(w.encode("utf-8"), usedforsecurity=False).hexdigest()[:8], 16) % 100000
             merged[idx] = merged.get(idx, 0.0) + float(c)
         return {
             "indices": list(merged.keys()),

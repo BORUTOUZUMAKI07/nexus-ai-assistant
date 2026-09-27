@@ -212,7 +212,8 @@ class IngestionService:
             logger.exception("ingestion_pipeline_error", file_id=str(file_id), error=str(exc))
             try:
                 await session.rollback()
-            except Exception:
+            except Exception:  # nosec B110
+                # rollback of an already-failing path is best-effort
                 pass
             # Best-effort removal of any points already upserted this run so a
             # failed ingest never leaves orphaned vectors behind.
@@ -365,7 +366,8 @@ class IngestionService:
             logger.exception("parent_child_ingestion_error", file_id=str(file_id), error=str(exc))
             try:
                 await session.rollback()
-            except Exception:
+            except Exception:  # nosec B110
+                # rollback of an already-failing path is best-effort
                 pass
             # Best-effort removal of any child points already upserted this run.
             try:

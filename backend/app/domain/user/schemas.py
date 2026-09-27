@@ -31,6 +31,23 @@ class TokenRefresh(BaseModel):
     refresh_token: str
 
 
+# ── OAuth / OIDC SSO ────────────────────────────────────────────────────────
+
+class OAuthCallbackRequest(BaseModel):
+    """The authorization-code leg of the OIDC callback."""
+
+    code: str = Field(min_length=1)
+    state: str = Field(min_length=1)
+
+
+class OAuthLoginResponse(BaseModel):
+    """The browser must follow ``authorization_url`` to sign in with SSO."""
+
+    authorization_url: str
+    state: str
+    provider: str
+
+
 # ── Two-Factor Authentication (TOTP) ────────────────────────────────────────
 
 class TwoFactorChallengeResponse(BaseModel):

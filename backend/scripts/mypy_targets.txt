@@ -1,0 +1,29 @@
+# mypy CI allowlist — modules that currently type-check clean under
+# strict mode with --follow-imports=silent.
+#
+# The full backend/app graph carries ~227 pre-existing strict errors
+# (SQLModel attribute typing, jose/passlib missing stubs, lazy deps.py
+# imports). Rather than force a hard-failing gate on that debt, CI runs
+# mypy over THIS growing allowlist: every entry here must stay clean.
+# When you land code across a new module, verify `uv run mypy
+# --follow-imports=silent <that module>` reports nothing, then append it
+# here. See .github/workflows/ci.yml → typecheck job.
+#
+# One entry per path, relative to the repository root.
+backend/app/core/config.py
+backend/app/core/exceptions.py
+backend/app/domain/org/models.py
+backend/app/domain/user/models.py
+backend/app/domain/user/schemas.py
+backend/app/domain/usage/models.py
+backend/app/domain/usage/schemas.py
+backend/app/domain/file/schemas.py
+backend/app/infrastructure/events/base.py
+backend/app/infrastructure/events/celery_publisher.py
+backend/app/infrastructure/events/registry.py
+backend/app/infrastructure/events/__init__.py
+backend/app/infrastructure/resilience/rate_limit.py
+backend/app/services/observability/metrics.py
+backend/app/api/v1/metrics.py
+backend/app/services/usage_service.py
+backend/app/services/hook_service.py

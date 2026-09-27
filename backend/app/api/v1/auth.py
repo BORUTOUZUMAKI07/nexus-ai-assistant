@@ -2,15 +2,20 @@
 Authentication API Router.
 Pure HTTP transport layer — delegates all auth use cases to AuthService (SRP + DIP).
 """
-from backend.app.api.deps import get_auth_service, get_current_user, get_db
+import time
+
+from backend.app.api.deps import get_auth_service, get_current_user, get_db, get_oauth_service
 from backend.app.core.exceptions import AuthenticationError, UserAlreadyExistsError
 from backend.app.core.security import decode_token
 from backend.app.domain.user.models import User
 from backend.app.domain.user.schemas import (
     ForgotPasswordRequest,
+    OAuthCallbackRequest,
+    OAuthLoginResponse,
     ResetPasswordRequest,
     TokenRefresh,
     TokenResponse,
+    TwoFactorChallengeResponse,
     TwoFactorCodeRequest,
     TwoFactorSetupResponse,
     TwoFactorVerifyRequest,
@@ -19,12 +24,13 @@ from backend.app.domain.user.schemas import (
     VerifyEmailRequest,
 )
 from backend.app.infrastructure.cache.redis_client import get_cache_service
+from backend.app.infrastructure.resilience.rate_limit import rate_limit_anon
 from backend.app.services.auth_service import AuthService
+from backend.app.services.oauth_service import OAuthService
 from backend.app.services.two_factor_service import TwoFactorService
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordRequestForm
 from sqlmodel.ext.asyncio.session import AsyncSession
-import time
 
 bearer_optional = HTTPBearer(auto_error=False)
 
@@ -41,7 +47,8 @@ async def register_user(
         # Best-effort verification email ("notify" leg of email infra).
         try:
             await auth_svc.send_verification_email(user)
-        except Exception:
+        except Exception:  # nosec B110
+            # notify leg is best-effort; never block signup
             pass
         return user
     except UserAlreadyExistsError as exc:
@@ -52,6 +59,7 @@ async def register_user(
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     auth_svc: AuthService = Depends(get_auth_service),
+    _rl: None = rate_limit_anon("auth.login", limit=60, window_seconds=60),
 ):
     """
     Returns a token pair. When the user has TOTP 2FA enabled, returns
@@ -105,7 +113,8 @@ async def logout(
                 exp = payload.get("exp")
                 ttl_seconds = max(1, int(exp) - int(time.time())) if exp else 3600
                 await get_cache_service().blacklist_token(str(jti), ttl_seconds)
-        except Exception:
+        except Exception:  # nosec B110
+            # revocation is best-effort; the token's exp still bounds reuse
             pass
     if token_in and token_in.refresh_token:
         await auth_svc.revoke_refresh_token(token_in.refresh_token)
@@ -223,5 +232,40 @@ async def reset_password(
 ):
     try:
         return await auth_svc.reset_password(body.token, body.new_password)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message)
+
+
+# ─── OAuth / OIDC SSO ─────────────────────────────────────────────────────────
+# Authorization Code + PKCE. GET /oauth/login returns the provider authorize
+# URL; POST /oauth/callback accepts the code the provider hands back (the
+# frontend proxy performs the exchange and stores the session in httpOnly
+# cookies). Both endpoints are 404 while SSO is unconfigured.
+
+@router.get("/oauth/login", response_model=OAuthLoginResponse)
+async def oauth_login(
+    oauth_svc: OAuthService = Depends(get_oauth_service),
+):
+    if not oauth_svc.enabled:
+        raise HTTPException(status_code=404, detail="OAuth single sign-on is not configured.")
+    authorization_url, state = await oauth_svc.create_authorization_url()
+    return OAuthLoginResponse(
+        authorization_url=authorization_url,
+        state=state,
+        provider=oauth_svc.provider,
+    )
+
+
+@router.post("/oauth/callback", response_model=TokenResponse | TwoFactorChallengeResponse)
+async def oauth_callback(
+    body: OAuthCallbackRequest,
+    auth_svc: AuthService = Depends(get_auth_service),
+    oauth_svc: OAuthService = Depends(get_oauth_service),
+):
+    if not oauth_svc.enabled:
+        raise HTTPException(status_code=404, detail="OAuth single sign-on is not configured.")
+    try:
+        identity = await oauth_svc.complete_login(body.code, body.state)
+        return await auth_svc.sso_login(identity)
     except AuthenticationError as exc:
         raise HTTPException(status_code=400, detail=exc.message)

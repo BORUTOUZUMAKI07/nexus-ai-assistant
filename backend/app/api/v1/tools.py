@@ -16,6 +16,7 @@ from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.domain.tool.repository import ToolRepository
 from backend.app.domain.tool.schemas import ToolApprovalRequest
 from backend.app.domain.user.models import User
+from backend.app.infrastructure.resilience.rate_limit import rate_limit
 from backend.app.mcp.client import mcp_client
 from backend.app.services.conversation_service import ConversationService
 from backend.app.services.tool_service import ToolService
@@ -52,6 +53,7 @@ async def execute_tool_endpoint(
     tool_svc: ToolService = Depends(get_tool_service),
     conv_svc: ConversationService = Depends(get_conversation_service),
     _idem_key: None = require_idempotency_key("tool.execute"),
+    _rl: None = rate_limit("tool.execute", limit=20, window_seconds=60, org_scope=True),
 ):
     """Directly execute a vetted tool through the 5-step safety gateway."""
     # IDOR guard: the tool call is logged against this conversation — verify the

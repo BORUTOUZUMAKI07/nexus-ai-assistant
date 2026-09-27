@@ -1,0 +1,104 @@
+# Prometheus alerting rules for the Nexus AI Assistant backend.
+#
+# Source of truth for SLO burn-rate pages — see docs/slo.md. Validate with:
+#     promtool check rules docs/alerting/alert-rules.yml
+#
+# Metrics referenced here come from the zero-dependency /metrics endpoint
+# (backend/app/api/v1/metrics.py). Families:
+#   nexus_requests_total{operation}                     counter
+#   nexus_errors_total{error}                           counter
+#   nexus_latency_seconds{operation,quantile}           summary (+_sum/_count)
+#   nexus_latency_avg_seconds{operation}                gauge
+#
+# All times are UTC. Severities map to: page = wake on-call, ticket = issue +
+# next-business-day review.
+
+groups:
+  - name: nexus-slo-burn
+    rules:
+      # Availability / scrape health -------------------------------------------
+      - alert: NexusRequestsDown
+        expr: up{job="nexus-backend"} == 0
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: "Nexus backend is not being scraped"
+          runbook: "docs/runbooks/full-outage.md"
+
+      # Error-rate SLI (identified errors as a share of traffic) ---------------
+      - alert: NexusErrorRateHigh
+        expr: |
+          (
+            sum(rate(nexus_errors_total[5m]))
+            / clamp_min(sum(rate(nexus_requests_total[5m])), 1)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: page
+          slo: error-rate
+        annotations:
+          summary: "Nexus error rate above 5% for 10 minutes"
+          runbook: "docs/runbooks/high-error-rate.md"
+
+      # Latency SLO burn (multi-window burn-rate style) ------------------------
+      - alert: NexusLatencyP95Burn
+        expr: |
+          (
+            sum(nexus_latency_seconds{quantile="0.95"})
+            / count(nexus_latency_seconds{quantile="0.95"})
+          ) > 2.0
+        for: 10m
+        labels:
+          severity: page
+          slo: latency-p95
+        annotations:
+          summary: "p95 latency above 2.0s for 10 minutes"
+          runbook: "docs/runbooks/latency-sli-burn.md"
+
+      - alert: NexusLatencyP99Burn
+        expr: |
+          (
+            sum(nexus_latency_seconds{quantile="0.99"})
+            / count(nexus_latency_seconds{quantile="0.99"})
+          ) > 5.0
+        for: 15m
+        labels:
+          severity: page
+          slo: latency-p99
+        annotations:
+          summary: "p99 latency above 5.0s for 15 minutes"
+          runbook: "docs/runbooks/latency-sli-burn.md"
+
+      # Rate-limit health ------------------------------------------------------
+      - alert: NexusRateLimitStorm
+        expr: |
+          rate(nexus_requests_total{operation="rate_limit_denied"}[5m]) > 0
+        for: 10m
+        labels:
+          severity: page
+          slo: rate-limit-health
+        annotations:
+          summary: "Clients are being throttled (429s) — possible misbehaving tenant or mis-tuned limit"
+          runbook: "docs/runbooks/rate-limit-exhaustion.md"
+
+      # Dependency fail-open visibility ---------------------------------------
+      - alert: NexusRedisFailOpenActive
+        expr: increase(nexus_requests_total{operation="redis_fail_open"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: page
+          slo: dependency-health
+        annotations:
+          summary: "Redis is unreachable; rate-limit/response-cache seams are failing open"
+          runbook: "docs/runbooks/redis-fail-open.md"
+
+      # PLANNED: indexing backlog gauge once the Postgres exporter ships (§7 in
+      # docs/slo.md). A delayed async indexing run should page the data team:
+      # - alert: NexusIndexingBacklog
+      #   expr: nexus_indexing_backlog_seconds > 900
+      #   for: 15m
+      #   labels: {severity: page, slo: indexing-freshness}
+      #   annotations: {summary: "Files stuck in PENDING indexing state"}
+      #   runbook: "docs/runbooks/indexing-backlog.md"

@@ -58,11 +58,15 @@ def _run_locked(task_name: str, ttl_seconds: int, coro_factory):
     rate_limit="10/m",
     acks_late=True,
 )
-def process_file_indexing_task(self, file_id_str: str) -> dict:
+def process_file_indexing_task(self, file_id_str: str, payload: dict | None = None) -> dict:
     """
     Background worker task to chunk a document and store vectors in Qdrant.
+
+    ``payload`` is an optional bag delivered by the event publisher seam
+    (CeleryPublisher → send_task kwargs). Callers using the event seam pass it
+    through; direct ``.delay()`` callers omit it.
     """
-    logger.info("celery_indexing_task_started", file_id=file_id_str)
+    logger.info("celery_indexing_task_started", file_id=file_id_str, payload_keys=list((payload or {}).keys()))
     file_id = UUID(file_id_str)
 
     async def _execute():

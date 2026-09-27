@@ -166,6 +166,20 @@ class FileService:
             offset=offset,
         )
 
+    async def get_file_index_status(
+        self,
+        *,
+        file_id: UUID,
+        user_id: UUID,
+        session: AsyncSession,
+    ) -> File:
+        """Return the indexing job status row for a file the user owns (§6.3)."""
+        repo = FileRepository(session)
+        db_file = await repo.get_by_id(file_id, user_id=user_id)
+        if not db_file:
+            raise ResourceNotFoundError(resource_type="File", identifier=str(file_id))
+        return db_file
+
     async def get_file_chunks(
         self,
         *,

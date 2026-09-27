@@ -1,11 +1,12 @@
 """
 Repository for Usage and Telemetry domain operations.
 """
+from typing import Any
 from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
 from backend.app.domain.conversation.models import Conversation
-from backend.app.domain.usage.models import EvaluationLog, UsageLog
+from backend.app.domain.usage.models import CostLog, EvaluationLog, UsageLog
 from backend.app.domain.usage.schemas import (
     EvaluationLogCreate,
     UsageLogCreate,
@@ -23,6 +24,7 @@ class UsageRepository(BaseRepository[UsageLog]):
     async def log_usage(self, log_in: UsageLogCreate) -> UsageLog:
         db_log = UsageLog(
             user_id=log_in.user_id,
+            org_id=log_in.org_id,
             conversation_id=log_in.conversation_id,
             message_id=log_in.message_id,
             model=log_in.model,
@@ -42,7 +44,11 @@ class UsageRepository(BaseRepository[UsageLog]):
         await self.session.refresh(db_log)
         return db_log
 
-    async def get_summary(self, user_id: UUID) -> UsageSummaryResponse:
+    @staticmethod
+    def _aggregate_statement(*filters) -> Any:
+        """Shared SUM/COUNT/AVG statement over UsageLog rows, filtered by any
+        equality predicates (user_id, org_id) so per-user and per-org rollups
+        share the same aggregation shape."""
         statement = select(
             func.sum(UsageLog.total_tokens).label("total_tokens"),
             func.sum(UsageLog.prompt_tokens).label("prompt_tokens"),
@@ -51,11 +57,14 @@ class UsageRepository(BaseRepository[UsageLog]):
             func.sum(UsageLog.cost_usd).label("total_cost"),
             func.count(UsageLog.id).label("total_requests"),
             func.avg(UsageLog.latency_ms).label("avg_latency"),
-        ).where(UsageLog.user_id == user_id)
+        )
+        for column, value in filters:
+            if value is not None:
+                statement = statement.where(column == value)
+        return statement
 
-        result = await self.session.exec(statement)
-        row = result.first()
-
+    @staticmethod
+    def _summary_from_row(row) -> UsageSummaryResponse:
         if not row or not row[0]:
             return UsageSummaryResponse(
                 total_tokens=0,
@@ -66,7 +75,6 @@ class UsageRepository(BaseRepository[UsageLog]):
                 total_requests=0,
                 average_latency_ms=0.0,
             )
-
         return UsageSummaryResponse(
             total_tokens=int(row[0] or 0),
             prompt_tokens=int(row[1] or 0),
@@ -76,6 +84,41 @@ class UsageRepository(BaseRepository[UsageLog]):
             total_requests=int(row[5] or 0),
             average_latency_ms=float(row[6] or 0.0),
         )
+
+    async def get_summary(self, user_id: UUID) -> UsageSummaryResponse:
+        result = await self.session.exec(
+            self._aggregate_statement((UsageLog.user_id, user_id))
+        )
+        return self._summary_from_row(result.first())
+
+    async def get_org_summary(self, org_id: UUID) -> UsageSummaryResponse:
+        """All-time token/cost rollup for an organization (multi-tenant)."""
+        result = await self.session.exec(
+            self._aggregate_statement((UsageLog.org_id, org_id))
+        )
+        return self._summary_from_row(result.first())
+
+    async def get_org_cost_summary(
+        self, org_id: UUID, billing_period: str | None = None
+    ) -> dict[str, float | int]:
+        """Monthly CostLog rollup for an org (all periods, or one YYYY-MM)."""
+        statement = select(
+            func.count(CostLog.id).label("entries"),
+            func.sum(CostLog.input_cost).label("input_cost"),
+            func.sum(CostLog.output_cost).label("output_cost"),
+            func.sum(CostLog.total_cost).label("total_cost"),
+        ).where(CostLog.org_id == org_id)
+        if billing_period:
+            statement = statement.where(CostLog.billing_period == billing_period)
+        row = (await self.session.exec(statement)).first()
+        if not row or not row[0]:
+            return {"entries": 0, "input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
+        return {
+            "entries": int(row[0] or 0),
+            "input_cost": float(row[1] or 0.0),
+            "output_cost": float(row[2] or 0.0),
+            "total_cost": float(row[3] or 0.0),
+        }
 
     async def log_evaluation(self, eval_in: EvaluationLogCreate) -> EvaluationLog:
         db_eval = EvaluationLog(

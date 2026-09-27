@@ -27,6 +27,12 @@ dependencies = [
     "flower>=2.0.0",
     
     # Authentication & Security
+    # python-jose[cryptography] pulls ecdsa, which carries PYSEC-2026-1325
+    # (Minerva timing attack on P-256) with NO patched release — ecdsa 0.19.x
+    # is the terminal version. The app only ever signs HS256 (JWT_ALGORITHM in
+    # config.py); ecdsa's ES* signing surface is never exercised. pip-audit in
+    # CI ignores exactly this advisory (see .github/workflows/ci.yml). If ES*
+    # algorithms are ever added, re-review ecdsa before enabling them.
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt,argon2]>=1.7.4",
     "authlib>=1.3.0",
@@ -62,8 +68,13 @@ dependencies = [
     
     # Observability & Evaluation
     "deepeval>=1.0.0",
-    "ragas>=0.1.0",
-    "garak>=0.9.0",
+    # ragas + garak were removed in 2026-09 after the dependency audit:
+    #   - ragas  PYSEC-2026-3046 (SSRF, no fixed release through 0.4.3)
+    #   - garak  transitively pinned vulnerable nltk/datasets/accelerate
+    # Both were declared-but-unimported: RagasEvaluationService is a heuristic
+    # LLM-judge implementation, and redteam_service.py is "Garak-style" but
+    # self-contained. Re-add either only if a patched version lands AND the
+    # library is actually used.
     "guardrails-ai>=0.5.0",
     "structlog>=24.0.0",
     "sentry-sdk>=2.7.0",
@@ -92,6 +103,10 @@ dev = [
     "ruff>=0.5.0",
     "mypy>=1.10.0",
     "isort>=5.13.0",
+    "bandit>=1.9.4",
+    "pip-audit>=2.10.1",
+    "hypothesis>=6.168.2",
+    "locust>=2.46.6",
 ]
 
 [project.optional-dependencies]
@@ -132,6 +147,15 @@ ignore = ["E501", "E712"]
 [tool.mypy]
 strict = true
 ignore_missing_imports = true
+
+[tool.bandit]
+# Scans the runtime package (not tests: assert-heavy test code triggers B101
+# noise; the security job's real target is app code). Excludes nothing in app;
+# use targeted "# nosec" comments for intentional patterns instead of blanket
+# skips. Validate with:  uv run bandit -c pyproject.toml -r app -q
+targets = ["app"]
+exclude_dirs = [".venv", "tests", "migrations"]
+skips = []
 
 [tool.pytest.ini_options]
   asyncio_mode = "auto"

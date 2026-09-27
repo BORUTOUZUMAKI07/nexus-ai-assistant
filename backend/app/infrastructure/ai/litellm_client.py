@@ -39,8 +39,8 @@ litellm.register_model(
             "max_tokens": 4096,
             "input_cost_per_token": input_cost,
             "output_cost_per_token": output_cost,
-            "cache_creation_input_token_cost": 0.0,
-            "cache_read_input_token_cost": 0.0,
+            "cache_creation_input_token_cost": 0.0,  # nosec B105
+            "cache_read_input_token_cost": 0.0,  # nosec B105
         }
         for model_slug, (input_cost, output_cost) in _DEPLOYED_MODEL_COSTS.items()
     }
@@ -48,10 +48,10 @@ litellm.register_model(
 
 # Construct model deployment list for LiteLLM Router.
 _CACHE_COST_FIELDS = {
-    "input_cost_per_token": 0.0,
-    "output_cost_per_token": 0.0,
-    "cache_creation_input_token_cost": 0.0,
-    "cache_read_input_token_cost": 0.0,
+    "input_cost_per_token": 0.0,  # nosec B105
+    "output_cost_per_token": 0.0,  # nosec B105
+    "cache_creation_input_token_cost": 0.0,  # nosec B105
+    "cache_read_input_token_cost": 0.0,  # nosec B105
 }
 
 model_list = [

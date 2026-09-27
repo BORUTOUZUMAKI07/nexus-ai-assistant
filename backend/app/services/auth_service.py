@@ -3,6 +3,7 @@ Auth Application Service.
 Owns all authentication and user registration use cases (SRP).
 Route handlers depend on this abstraction, not on UserRepository directly (DIP).
 """
+import secrets
 import time
 from datetime import timedelta
 from uuid import UUID
@@ -20,7 +21,7 @@ from backend.app.core.security import (
     get_password_hash,
     verify_password,
 )
-from backend.app.domain.user.models import User
+from backend.app.domain.user.models import User, UserSettings
 from backend.app.domain.user.repository import UserRepository
 from backend.app.domain.user.schemas import (
     TokenResponse,
@@ -29,6 +30,7 @@ from backend.app.domain.user.schemas import (
 )
 from backend.app.infrastructure.cache.redis_client import get_cache_service
 from backend.app.services.email_service import build_email_link, email_service
+from backend.app.services.oauth_service import OAuthIdentity
 from backend.app.services.two_factor_service import TwoFactorService
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -42,6 +44,7 @@ class AuthService:
     """
 
     def __init__(self, session: AsyncSession) -> None:
+        self._session = session
         self._repo = UserRepository(session)
         self._two_factor = TwoFactorService(session)
 
@@ -126,9 +129,80 @@ class AuthService:
         return TokenResponse(
             access_token=access_token,
             refresh_token=refresh_token,
-            token_type="bearer",
+            token_type="bearer",  # nosec B106
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
+
+    async def sso_login(self, identity: OAuthIdentity) -> TokenResponse | TwoFactorChallengeResponse:
+        """Sign a user in via a verified OIDC identity (find-or-provision by email).
+
+        The IdP verifying the email is a precondition of ``OAuthService``, so a
+        provisioned account is born verified. Existing accounts get their
+        ``is_verified`` flag lifted. TOTP-enabled accounts receive the same
+        ``2fa_required`` preauth challenge as password login.
+        """
+        email = (identity.email or "").lower().strip()
+        if not email or not identity.subject:
+            raise AuthenticationError("OAuth provider returned an unusable identity.")
+
+        user = await self._repo.get_by_email(email)
+        if user is None:
+            user = await self._provision_oauth_user(identity, email)
+        elif not user.is_active:
+            raise AuthenticationError("User account is inactive.")
+
+        if not user.is_verified:
+            await self._repo.update(user, {"is_verified": True})
+
+        if await self._two_factor.is_enabled(user.id):
+            preauth = create_access_token(
+                subject=user.id,
+                expires_delta=timedelta(minutes=settings.TOTP_PREAUTH_MINUTES),
+                additional_claims={"type": "preauth"},
+            )
+            logger.info("two_factor_challenge_issued", user_id=str(user.id), via="sso")
+            return TwoFactorChallengeResponse(
+                status="2fa_required",
+                preauth_token=preauth,
+                expires_in=settings.TOTP_PREAUTH_MINUTES * 60,
+            )
+
+        return await self._issue_token_pair(user)
+
+    async def _provision_oauth_user(self, identity: OAuthIdentity, email: str) -> User:
+        """Auto-provision a passwordless SSO account (the IdP vouches for it)."""
+        user = User(
+            email=email,
+            username=await self._alloc_username(email),
+            hashed_password=None,  # SSO accounts have no password
+            full_name=identity.name,
+            avatar_url=identity.picture,
+            is_verified=True,
+        )
+        self._session.add(user)
+        await self._session.commit()
+        await self._session.refresh(user)
+        # Mirror the default user-settings row that password registration
+        # creates, so SSO accounts behave identically downstream.
+        self._session.add(UserSettings(user_id=user.id))
+        await self._session.commit()
+        logger.info(
+            "user_provisioned_via_sso",
+            user_id=str(user.id),
+            provider=identity.provider,
+        )
+        return user
+
+    async def _alloc_username(self, email: str) -> str:
+        """Derive a unique username from the email local-part (collision-safe)."""
+        local = (email.split("@")[0] or "user")[:32]
+        if not await self._repo.get_by_username(local):
+            return local
+        for _ in range(5):
+            candidate = f"{local}-{secrets.token_hex(3)}"
+            if not await self._repo.get_by_username(candidate):
+                return candidate
+        raise AuthenticationError("Could not allocate a username for the SSO account.")
 
     async def verify_email(self, token: str) -> User:
         """Mark a user's email verified via a signed verification token."""
@@ -242,7 +316,7 @@ class AuthService:
         return TokenResponse(
             access_token=access_token,
             refresh_token=new_refresh,
-            token_type="bearer",
+            token_type="bearer",  # nosec B106
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
 
@@ -255,6 +329,6 @@ class AuthService:
             if jti and exp:
                 ttl_seconds = max(1, int(exp) - int(time.time()))
                 await get_cache_service().set(f"refresh:used:{jti}", "1", ttl_seconds=ttl_seconds)
-        except Exception:
+        except Exception:  # nosec B110
             # Best-effort revocation: expired or malformed tokens cannot be re-used anyway
             pass
