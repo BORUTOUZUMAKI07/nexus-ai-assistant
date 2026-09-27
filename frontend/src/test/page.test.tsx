@@ -75,4 +75,37 @@ describe("Home page integration", () => {
 
     await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/"))
   })
+
+  it("plans in Plan mode: drafts a plan card, then executes it on approval", async () => {
+    clearCookie()
+    render(<Home />)
+
+    // Login through the gate
+    await screen.findByText("Welcome back")
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "test@nexus.ai" },
+    })
+    fireEvent.change(screen.getByPlaceholderText("••••••••"), {
+      target: { value: "password123" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /Sign In/ }))
+    await screen.findByText("Project kickoff")
+
+    // Enable the Plan toggle and send a task
+    fireEvent.click(screen.getByTitle("Plan mode OFF: respond directly"))
+    const textarea = screen.getByPlaceholderText(
+      "Ask Nexus anything, write code, search live web..."
+    )
+    fireEvent.change(textarea, { target: { value: "Refactor the auth layer" } })
+    fireEvent.click(screen.getByTitle("Send message (Enter)"))
+
+    // A plan review card appears instead of a direct answer
+    expect(await screen.findByText("Proposed Plan")).toBeInTheDocument()
+    expect(screen.getByText("Refactor the auth layer")).toBeInTheDocument()
+
+    // Approving commits the plan and streams the agent execution
+    fireEvent.click(screen.getByText("Approve & Execute"))
+    expect(await screen.findByText("Hello from Nexus.")).toBeInTheDocument()
+    expect(screen.queryByText("Proposed Plan")).not.toBeInTheDocument()
+  })
 })

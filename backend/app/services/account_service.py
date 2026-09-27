@@ -10,10 +10,13 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import structlog
+from backend.app.domain.artifact.models import Artifact, ArtifactVersion
 from backend.app.domain.conversation.models import Conversation, Message
 from backend.app.domain.conversation.repository import ConversationRepository
 from backend.app.domain.file.models import File, FileChunk, FileMetadata
+from backend.app.domain.hook.models import HookPolicy
 from backend.app.domain.org.models import Organization, OrganizationInvite, OrganizationMember
+from backend.app.domain.plan.models import Plan
 from backend.app.domain.prompt.models import PromptTemplate, PromptVersion
 from backend.app.domain.share.models import ConversationShare
 from backend.app.domain.tool.models import ToolCall, ToolPermission
@@ -172,6 +175,19 @@ class AccountService:
         conversation_ids = [c.id for c in conversations]
         await self.session.exec(delete(ToolCall).where(ToolCall.conversation_id.in_(conversation_ids)))
         await self.session.exec(delete(ToolPermission).where(ToolPermission.user_id == user_id))
+
+        # 3b. Plans + artifacts the user owns. Conversation-scoped plans/artifacts
+        #     were already removed by the conversation cascade above; these deletes
+        #     clear everything else (e.g. orphaned/standalone artifacts) so the
+        #     erasure is complete.
+        await self.session.exec(delete(Plan).where(Plan.user_id == user_id))
+        artifact_ids = select(Artifact.id).where(Artifact.user_id == user_id)
+        await self.session.exec(delete(ArtifactVersion).where(ArtifactVersion.artifact_id.in_(artifact_ids)))
+        await self.session.exec(delete(Artifact).where(Artifact.user_id == user_id))
+
+        # 3c. Org-scoped hook policies referencing any org the user owned.
+        org_ids = select(Organization.id).where(Organization.owner_id == user_id)
+        await self.session.exec(delete(HookPolicy).where(HookPolicy.org_id.in_(org_ids)))
 
         # 4. Usage + cost telemetry.
         await self.session.exec(delete(UsageLog).where(UsageLog.user_id == user_id))

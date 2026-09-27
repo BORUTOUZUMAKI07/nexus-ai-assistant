@@ -24,8 +24,18 @@ import {
   VolumeX,
   Timer,
   GitBranch,
+  ListChecks,
+  Save,
 } from "lucide-react";
 import { ArtifactItem } from "./ArtifactCanvas";
+
+export interface PlanReviewItem {
+  id: string;
+  title: string;
+  summary: string | null;
+  steps: string[];
+  status: "pending" | "approved" | "rejected";
+}
 
 export interface CitationItem {
   filename: string;
@@ -77,7 +87,14 @@ export interface ChatAreaProps {
     feedback: "thumbs_up" | "thumbs_down"
   ) => void;
   onOpenArtifact?: (artifact: ArtifactItem) => void;
+  onSaveArtifact?: (artifact: ArtifactItem) => void | Promise<void>;
   onSelectCitation?: (citation: CitationItem) => void;
+  /** Pending Plan mode draft awaiting human approval */
+  pendingPlan?: PlanReviewItem | null;
+  onApprovePlan?: (plan: PlanReviewItem) => void | Promise<void>;
+  onRejectPlan?: (plan: PlanReviewItem) => void | Promise<void>;
+  onDismissPlan?: () => void;
+  planBusy?: boolean;
 }
 
 const THOUGHT_STAGES = ["Planning", "Searching", "Analysing", "Synthesising"];
@@ -175,6 +192,87 @@ function extractArtifact(msgId: string, content: string): ArtifactItem | null {
     content: code,
   };
 }
+
+/** Plan mode review card — approving commits the plan to the agent run. */
+const PlanReviewCard: React.FC<{
+  plan: PlanReviewItem;
+  onApprove?: (plan: PlanReviewItem) => void | Promise<void>;
+  onReject?: (plan: PlanReviewItem) => void | Promise<void>;
+  onDismiss?: () => void;
+  busy?: boolean;
+}> = ({ plan, onApprove, onReject, onDismiss, busy }) => {
+  const [action, setAction] = useState<"approve" | "reject" | null>(null);
+
+  const run = async (
+    fn: ((p: PlanReviewItem) => void | Promise<void>) | undefined,
+    act: "approve" | "reject"
+  ) => {
+    if (!fn || busy) return;
+    setAction(act);
+    try {
+      await fn(plan);
+    } finally {
+      setAction(null);
+    }
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto rounded-xl border-2 border-[var(--accent)]/50 bg-[var(--bg-surface)] p-4 shadow-lg">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2 text-sm font-semibold text-white">
+          <ListChecks className="w-4 h-4 text-[var(--accent)] shrink-0" />
+          Proposed Plan
+        </div>
+        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/30 uppercase font-semibold">
+          Plan mode
+        </span>
+      </div>
+      <h4 className="text-sm font-semibold text-white mb-1">{plan.title}</h4>
+      {plan.summary && (
+        <p className="text-xs text-[var(--text-secondary)] leading-relaxed mb-3">
+          {plan.summary}
+        </p>
+      )}
+      <ol className="space-y-1.5 mb-3">
+        {plan.steps.map((step, idx) => (
+          <li key={idx} className="flex items-start gap-2 text-xs text-[var(--text-primary)]">
+            <span className="shrink-0 w-4.5 h-4.5 mt-0.5 rounded bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--accent)] text-[10px] font-mono font-semibold flex items-center justify-center">
+              {idx + 1}
+            </span>
+            <span className="flex-1 leading-relaxed">{step}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => run(onApprove, "approve")}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3.5 py-1.5 text-xs font-semibold text-[var(--accent-foreground)] hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 shadow-sm"
+        >
+          <CheckCircle2 className="w-3.5 h-3.5" />
+          {action === "approve" ? "Approving…" : "Approve & Execute"}
+        </button>
+        <button
+          onClick={() => run(onReject, "reject")}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-white hover:border-[var(--status-danger)] transition-colors disabled:opacity-50"
+        >
+          <XCircle className="w-3.5 h-3.5" />
+          Reject
+        </button>
+        {onDismiss && (
+          <button
+            onClick={onDismiss}
+            disabled={busy}
+            className="rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors disabled:opacity-50"
+          >
+            Dismiss
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, code }) => {
   const [copied, setCopied] = useState(false);
@@ -489,7 +587,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onResolveHITL,
   onFeedback,
   onOpenArtifact,
+  onSaveArtifact,
   onSelectCitation,
+  pendingPlan,
+  onApprovePlan,
+  onRejectPlan,
+  onDismissPlan,
+  planBusy,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [hitlOpen, setHitlOpen] = useState(false);
@@ -661,6 +765,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
+      {/* Plan mode review card */}
+      {pendingPlan && (
+        <PlanReviewCard
+          plan={pendingPlan}
+          onApprove={onApprovePlan}
+          onReject={onRejectPlan}
+          onDismiss={onDismissPlan}
+          busy={planBusy}
+        />
+      )}
+
       {messages.map((msg, msgIndex) => {
         const isUser = msg.role === "user";
         const hasThought = Boolean(msg.thought_process);
@@ -706,13 +821,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </span>
                     </div>
                   </div>
-                  <button
-                    onClick={() => onOpenArtifact(artifact)}
-                    className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)] transition-all shrink-0"
-                  >
-                    Open in Canvas
-                    <ExternalLink className="w-3 h-3" />
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {onSaveArtifact && (
+                      <button
+                        onClick={() => onSaveArtifact(artifact)}
+                        className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)]/50 transition-all"
+                        title="Save artifact (persisted + versioned)"
+                      >
+                        <Save className="w-3 h-3" />
+                        Save
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onOpenArtifact(artifact)}
+                      className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)] transition-all"
+                    >
+                      Open in Canvas
+                      <ExternalLink className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
               )}
 

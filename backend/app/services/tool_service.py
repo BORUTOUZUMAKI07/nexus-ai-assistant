@@ -12,9 +12,11 @@ from backend.app.core.exceptions import (
     ApprovalConsumedError,
     ApprovalExpiredError,
     ResourceNotFoundError,
+    ToolPermissionError,
 )
 from backend.app.domain.tool.repository import ToolRepository
 from backend.app.domain.tool.schemas import ToolApprovalRequest
+from backend.app.services.hook_service import HookService
 from backend.app.services.tools.elicitations import ELICITATION_TOOL_NAME
 from backend.app.services.tools.tool_gateway import tool_gateway
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -29,6 +31,15 @@ class ToolService:
 
     def __init__(self, session: AsyncSession) -> None:
         self._repo = ToolRepository(session)
+        self._session = session
+
+    async def _resolve_org_id(self, user_id: UUID) -> UUID | None:
+        """Best-effort org scope for lifecycle hooks (single-org model)."""
+        try:
+            return await HookService(self._session).resolve_org_id(user_id)
+        except Exception as exc:
+            logger.warning("hook_org_resolution_failed", error=str(exc))
+            return None
 
     async def execute_tool(
         self,
@@ -56,7 +67,18 @@ class ToolService:
             tool_name=tool_name,
             arguments=arguments,
             user_id=user_id,
+            org_id=await self._resolve_org_id(user_id),
         )
+
+        if result.get("status") == "blocked":
+            await self._repo.update_tool_call(
+                tool_call_id=call_log.id,
+                status="blocked",
+                error_message=result.get("message"),
+            )
+            raise ToolPermissionError(
+                message=result.get("message") or "Tool execution blocked by policy."
+            )
 
         await self._repo.update_tool_call(
             tool_call_id=call_log.id,
@@ -128,7 +150,17 @@ class ToolService:
             arguments=call.input_args,
             user_id=user_id,
             is_user_approved=True,
+            org_id=await self._resolve_org_id(user_id),
         )
+        if result.get("status") == "blocked":
+            await self._repo.update_tool_call(
+                tool_call_id=approval.tool_call_id,
+                status="blocked",
+                error_message=result.get("message"),
+            )
+            raise ToolPermissionError(
+                message=result.get("message") or "Tool execution blocked by policy."
+            )
         await self._repo.update_tool_call(
             tool_call_id=approval.tool_call_id,
             status=result.get("status", "completed"),

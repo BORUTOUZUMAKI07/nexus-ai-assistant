@@ -78,6 +78,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # 4. Open LangGraph AsyncPostgresSaver connection pool (durable short-term memory)
     async with lifespan_graph():
+        # 4b. Load lifecycle hook policies into the gateway registry (fail-open:
+        #     an empty registry simply means no hooks are active).
+        try:
+            from backend.app.infrastructure.database.session import async_session_factory
+            from backend.app.services.hook_service import HookService
+            async with async_session_factory() as session:
+                await HookService(session).reload_registry()
+            logger.info("hook_registry_loaded_at_startup")
+        except Exception as exc:
+            logger.warning("hook_registry_startup_load_failed", error=str(exc))
+
         logger.info("langgraph_postgres_checkpointer_ready")
 
         yield  # ← App serves requests here

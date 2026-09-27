@@ -7,9 +7,12 @@ from sqlmodel import SQLModel
 
 # Import all domain models to ensure tables are registered in SQLModel.metadata
 try:
+    import backend.app.domain.artifact.models  # noqa: F401
     import backend.app.domain.conversation.models  # noqa: F401
     import backend.app.domain.file.models  # noqa: F401
+    import backend.app.domain.hook.models  # noqa: F401
     import backend.app.domain.org.models  # noqa: F401
+    import backend.app.domain.plan.models  # noqa: F401
     import backend.app.domain.prompt.models  # noqa: F401
     import backend.app.domain.share.models  # noqa: F401
     import backend.app.domain.system.models  # noqa: F401

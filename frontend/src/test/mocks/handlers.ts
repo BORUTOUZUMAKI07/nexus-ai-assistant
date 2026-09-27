@@ -68,6 +68,52 @@ export const mockAPIKeys = [
   },
 ]
 
+export const mockPlan = {
+  id: "plan-1",
+  conversation_id: "conv-100",
+  user_id: "user-1",
+  title: "Refactor auth service",
+  summary: "Split the session manager out of the auth service.",
+  steps: ["Extract SessionManager", "Add unit tests", "Wire DI container"],
+  status: "pending",
+  decision_reason: null,
+  created_at: "2026-09-06T00:00:00Z",
+  updated_at: "2026-09-06T00:00:00Z",
+  decided_at: null,
+}
+
+export const mockArtifacts = [
+  {
+    id: "art-1",
+    user_id: "user-1",
+    conversation_id: "conv-100",
+    message_id: null,
+    title: "auth.py",
+    language: "python",
+    mime_type: "text/x-python",
+    content: "def auth():\n    return True\n",
+    version: 2,
+    created_at: "2026-09-06T00:00:00Z",
+    updated_at: "2026-09-06T00:00:00Z",
+  },
+]
+
+export const mockHookPolicies = [
+  {
+    id: "hook-1",
+    name: "Block shell exec",
+    tool_name: "run_shell",
+    event: "pre_tool",
+    org_id: null,
+    action: "block",
+    field: null,
+    message: "Shell execution is disabled for safety",
+    enabled: true,
+    created_at: "2026-09-06T00:00:00Z",
+    updated_at: "2026-09-06T00:00:00Z",
+  },
+]
+
 // Vercel AI SDK data-stream protocol body for /api/chat
 export function chatStreamBody(
   textFragments = ["Hello from Nexus."],
@@ -321,5 +367,100 @@ export const handlers = [
         created_at: "2026-09-06T00:00:00Z",
       },
     ])
+  ),
+
+  // ── Plans (plan-then-approve) ───────────────────────────────────────────
+  http.post("/api/conversations/:id/plan", async ({ request }) => {
+    const body = (await request.json()) as { task?: string }
+    return HttpResponse.json({
+      ...mockPlan,
+      id: "plan-new-1",
+      title: body.task?.slice(0, 60) ?? mockPlan.title,
+    })
+  }),
+
+  http.get("/api/conversations/:id/plans", () => HttpResponse.json([mockPlan])),
+
+  http.post("/api/plans/:id/approve", () =>
+    HttpResponse.json({
+      ...mockPlan,
+      status: "approved",
+      decided_at: new Date().toISOString(),
+    })
+  ),
+
+  http.post("/api/plans/:id/reject", () =>
+    HttpResponse.json({
+      ...mockPlan,
+      status: "rejected",
+      decided_at: new Date().toISOString(),
+    })
+  ),
+
+  // ── Artifacts (persisted + versioned) ───────────────────────────────────
+  http.get("/api/artifacts", () => HttpResponse.json(mockArtifacts)),
+
+  http.post("/api/artifacts", async ({ request }) => {
+    const body = (await request.json()) as {
+      title?: string
+      language?: string
+      content?: string
+    }
+    return HttpResponse.json({
+      ...mockArtifacts[0],
+      id: "art-new-1",
+      title: body.title ?? mockArtifacts[0].title,
+      language: body.language ?? mockArtifacts[0].language,
+      content: body.content ?? mockArtifacts[0].content,
+      version: 1,
+    })
+  }),
+
+  http.get("/api/artifacts/:id", () =>
+    HttpResponse.json({
+      ...mockArtifacts[0],
+      versions: [{ ...mockArtifacts[0], version: 1 }],
+    })
+  ),
+
+  http.post("/api/artifacts/:id/versions", () =>
+    HttpResponse.json({
+      ...mockArtifacts[0],
+      version: mockArtifacts[0].version + 1,
+    })
+  ),
+
+  http.delete("/api/artifacts/:id", () =>
+    HttpResponse.json(null, { status: 204 })
+  ),
+
+  // ── Admin: lifecycle hooks ──────────────────────────────────────────────
+  http.get("/api/admin/hooks", () => HttpResponse.json(mockHookPolicies)),
+
+  http.post("/api/admin/hooks", async ({ request }) => {
+    const body = (await request.json()) as {
+      name?: string
+      tool_name?: string
+      action?: string
+    }
+    return HttpResponse.json({
+      ...mockHookPolicies[0],
+      id: "hook-new-1",
+      name: body.name ?? mockHookPolicies[0].name,
+      tool_name: body.tool_name ?? mockHookPolicies[0].tool_name,
+      action: body.action ?? mockHookPolicies[0].action,
+    })
+  }),
+
+  http.put("/api/admin/hooks/:id", async ({ request }) => {
+    const body = (await request.json()) as { enabled?: boolean }
+    return HttpResponse.json({
+      ...mockHookPolicies[0],
+      enabled: body.enabled ?? mockHookPolicies[0].enabled,
+    })
+  }),
+
+  http.delete("/api/admin/hooks/:id", () =>
+    HttpResponse.json(null, { status: 204 })
   ),
 ]

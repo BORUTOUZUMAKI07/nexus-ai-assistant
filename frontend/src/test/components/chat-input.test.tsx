@@ -30,6 +30,7 @@ describe("ChatInput", () => {
       attachments: [],
       agentMode: "deep",
       imageDataUrl: undefined,
+      planMode: false,
     })
     expect((textarea as HTMLTextAreaElement).value).toBe("")
   })
@@ -48,6 +49,7 @@ describe("ChatInput", () => {
       attachments: [],
       agentMode: "deep",
       imageDataUrl: undefined,
+      planMode: false,
     })
   })
 
@@ -68,6 +70,27 @@ describe("ChatInput", () => {
       attachments: [],
       agentMode: "deep",
       imageDataUrl: undefined,
+      planMode: false,
+    })
+  })
+
+  it("passes planMode true when the Plan toggle is enabled", () => {
+    render(<ChatInput onSendMessage={onSendMessage} isLoading={false} />)
+    fireEvent.click(screen.getByTitle("Plan mode OFF: respond directly"))
+
+    const textarea = screen.getByPlaceholderText(
+      "Ask Nexus anything, write code, search live web..."
+    )
+    fireEvent.change(textarea, { target: { value: "Refactor the auth layer" } })
+    fireEvent.click(screen.getByTitle("Send message (Enter)"))
+
+    expect(onSendMessage).toHaveBeenCalledWith("Refactor the auth layer", {
+      enableWeb: false,
+      enableCode: false,
+      attachments: [],
+      agentMode: "deep",
+      imageDataUrl: undefined,
+      planMode: true,
     })
   })
 

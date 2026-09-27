@@ -8,6 +8,7 @@ import {
   MessageItem,
   CitationItem,
   ToolCallItem,
+  PlanReviewItem,
 } from "@/components/ChatArea";
 import { ChatInput, SendMessageOptions } from "@/components/ChatInput";
 import { ArtifactCanvas, ArtifactItem } from "@/components/ArtifactCanvas";
@@ -25,6 +26,12 @@ import {
   forkConversation,
   uploadFile,
   sendMessageFeedback,
+  createPlan,
+  approvePlan,
+  rejectPlan,
+  createArtifact,
+  deleteArtifact,
+  PlanItem as APIPlanItem,
   ConversationMessage,
   CurrentUser,
   fetchCurrentUser,
@@ -59,6 +66,35 @@ function mapServerMessage(m: ConversationMessage): MessageItem {
   };
 }
 
+function mapPlan(p: APIPlanItem): PlanReviewItem {
+  return {
+    id: p.id,
+    title: p.title,
+    summary: p.summary,
+    steps: p.steps ?? [],
+    status: p.status,
+  };
+}
+
+/** Serialises the approved plan as an agent-mode system-prompt preamble. */
+function buildPlanPreamble(plan: PlanReviewItem, task: string): string {
+  const steps = (plan.steps ?? [])
+    .map((s, i) => `${i + 1}. ${s}`)
+    .join("\n");
+  return [
+    "APPROVED PLAN — execute these approved steps (Plan mode):",
+    `Task: ${task}`,
+    `Title: ${plan.title}`,
+    plan.summary ? `Summary: ${plan.summary}` : "",
+    "Steps:",
+    steps,
+    "",
+    "Follow the approved steps. You may clarify details inline, but do not silently deviate from an approved step — flag any material change to the user first.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export default function AppPage() {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
@@ -73,6 +109,11 @@ export default function AppPage() {
   // Dual-Pane Artifact Canvas state
   const [activeArtifact, setActiveArtifact] = useState<ArtifactItem | null>(null);
   const [allArtifacts, setAllArtifacts] = useState<ArtifactItem[]>([]);
+
+  // Plan mode state (draft → review → approved execution)
+  const [pendingPlan, setPendingPlan] = useState<PlanReviewItem | null>(null);
+  const [pendingPlanTask, setPendingPlanTask] = useState("");
+  const [planBusy, setPlanBusy] = useState(false);
 
   const handleOpenArtifact = (artifact: ArtifactItem) => {
     setActiveArtifact(artifact);
@@ -208,6 +249,7 @@ export default function AppPage() {
         setActiveTab("chat");
         setActiveArtifact(null);
         setActiveCitation(null);
+        setPendingPlan(null);
       })
       .catch((err) => {
         console.warn("Could not create conversation:", err);
@@ -249,6 +291,7 @@ export default function AppPage() {
     chat.clearMessages();
     setActiveArtifact(null);
     setActiveCitation(null);
+    setPendingPlan(null);
     router.replace("/");
   };
 
@@ -257,6 +300,7 @@ export default function AppPage() {
     setActiveTab("chat");
     setActiveArtifact(null);
     setActiveCitation(null);
+    setPendingPlan(null);
     void loadHistory(id);
   };
 
@@ -305,10 +349,129 @@ export default function AppPage() {
     chat.stop();
   };
 
+  const handleDraftPlan = async (convId: string, content: string) => {
+    setPlanBusy(true);
+    setPendingPlanTask(content.trim());
+    try {
+      const plan = await createPlan(convId, content.trim());
+      setPendingPlan(mapPlan(plan));
+    } catch (err) {
+      console.warn("Plan draft failed:", err);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const handleApprovePlan = async (plan: PlanReviewItem) => {
+    if (planBusy) return;
+    setPlanBusy(true);
+    try {
+      await approvePlan(plan.id);
+      setPendingPlan(null);
+      const convId = activeConversationId;
+      if (convId && pendingPlanTask) {
+        await chat.sendMessage(pendingPlanTask, {
+          conversationId: convId,
+          mode: "agent",
+          planPreamble: buildPlanPreamble(plan, pendingPlanTask),
+        });
+      }
+    } catch (err) {
+      console.warn("Plan approval failed:", err);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const handleRejectPlan = async (plan: PlanReviewItem) => {
+    if (planBusy) return;
+    setPlanBusy(true);
+    try {
+      await rejectPlan(plan.id, "Rejected in UI");
+      setPendingPlan(null);
+    } catch (err) {
+      console.warn("Plan rejection failed:", err);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const handleDismissPlan = () => {
+    if (planBusy) return;
+    setPendingPlan(null);
+  };
+
+  const handleSaveArtifact = async (artifact: ArtifactItem) => {
+    try {
+      const saved = await createArtifact({
+        title: artifact.title,
+        content: artifact.content,
+        language: artifact.language,
+        conversation_id: activeConversationId || null,
+      });
+      const persisted: ArtifactItem = {
+        ...artifact,
+        id: saved.id,
+        version: saved.version,
+        isActiveVersion: true,
+      };
+      setAllArtifacts((prev) =>
+        prev.map((a) => (a.id === artifact.id ? persisted : a))
+      );
+      setActiveArtifact((prev) =>
+        prev && prev.id === artifact.id ? persisted : prev
+      );
+    } catch (err) {
+      console.warn("Artifact save failed:", err);
+    }
+  };
+
+  const handleDeleteArtifact = async (artifact: ArtifactItem) => {
+    if (artifact.version === undefined) return; // transient canvas item
+    try {
+      await deleteArtifact(artifact.id);
+      setAllArtifacts((prev) => prev.filter((a) => a.id !== artifact.id));
+      setActiveArtifact((prev) => (prev && prev.id === artifact.id ? null : prev));
+    } catch (err) {
+      console.warn("Artifact delete failed:", err);
+    }
+  };
+
   const handleSendMessage = async (
     content: string,
     options: SendMessageOptions
   ) => {
+    // Plan mode: draft an actionable plan first — execution only after approval.
+    if (options.planMode && content.trim()) {
+      let convId = activeConversationId;
+      if (!convId) {
+        try {
+          const conv = await createConversation({
+            title: content.trim().slice(0, 120),
+            model: currentModel,
+          });
+          convId = conv.id;
+          setActiveConversationId(convId);
+          setConversations((prev) => {
+            if (prev.some((c) => c.id === convId)) return prev;
+            const item: ConversationItem = {
+              id: convId,
+              title: conv.title,
+              updated_at: conv.updated_at,
+              model: conv.model,
+              is_pinned: false,
+            };
+            return [item, ...prev];
+          });
+        } catch (err) {
+          console.warn("Conversation creation for plan mode failed:", err);
+          return;
+        }
+      }
+      await handleDraftPlan(convId, content);
+      return;
+    }
+
     // Upload any attachments first
     if (options.attachments && options.attachments.length > 0) {
       for (const file of options.attachments) {
@@ -436,6 +599,12 @@ export default function AppPage() {
                   onFeedback={handleFeedback}
                   onOpenArtifact={handleOpenArtifact}
                   onSelectCitation={setActiveCitation}
+                  onSaveArtifact={handleSaveArtifact}
+                  pendingPlan={pendingPlan}
+                  onApprovePlan={handleApprovePlan}
+                  onRejectPlan={handleRejectPlan}
+                  onDismissPlan={handleDismissPlan}
+                  planBusy={planBusy}
                 />
               )}
               <ChatInput
@@ -452,6 +621,7 @@ export default function AppPage() {
                 artifacts={allArtifacts}
                 onClose={() => setActiveArtifact(null)}
                 onSelectArtifact={(art) => setActiveArtifact(art)}
+                onDeleteArtifact={handleDeleteArtifact}
               />
             )}
 

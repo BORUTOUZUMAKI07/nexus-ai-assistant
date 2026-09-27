@@ -37,7 +37,7 @@ from backend.app.services.observability.tracing import trace_span
 from backend.app.services.usage_service import UsageService
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = structlog.get_logger(__name__)
 
@@ -172,6 +172,9 @@ class StreamChatRequest(BaseModel):
     messages: list[dict]
     mode: Literal["normal", "agent", "code", "research"] = "normal"
     stream: bool = True
+    # Approved-plan preamble: prepended to the agent system prompt when Plan
+    # mode approval hands execution back to the streaming agent path.
+    plan_preamble: str | None = Field(default=None, max_length=4000)
 
 
 class HITLFeedbackRequest(BaseModel):
@@ -242,6 +245,7 @@ async def stream_conversation(
             "conversation_id": thread_id,
             "user_id": str(current_user.id),
             "mode": body.mode,
+            **({"plan_preamble": body.plan_preamble} if body.plan_preamble else {}),
         }
     }
 
@@ -292,8 +296,8 @@ async def stream_conversation(
 
     # Bound the agentic context: only the most recent turns are replayed into the
     # graph every run, preventing unbounded context growth across a conversation.
-    _MAX_AGENTIC_TURNS = 20
-    graph_messages = (user_messages or [])[-_MAX_AGENTIC_TURNS:]
+    max_agentic_turns = 20
+    graph_messages = (user_messages or [])[-max_agentic_turns:]
 
     async def event_generator() -> AsyncGenerator[str, None]:
         emitted_text = ""

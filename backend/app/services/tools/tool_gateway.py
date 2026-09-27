@@ -20,6 +20,7 @@ from backend.app.infrastructure.cache.redis_client import redis_service
 from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.tools.code_execution import code_executor
+from backend.app.services.tools.hook_registry import hook_registry
 from backend.app.services.tools.web_search import web_search_service
 
 logger = structlog.get_logger(__name__)
@@ -91,9 +92,14 @@ class ToolGateway:
         arguments: dict[str, Any],
         user_id: UUID,
         is_user_approved: bool = False,
+        org_id: UUID | None = None,
     ) -> dict[str, Any]:
         """
         Executes the tool call following the 5-step safety ladder.
+
+        ``org_id`` is the caller's resolved organization (if any) used to scope
+        lifecycle hook policies; None means only global (org_id=NULL) policies
+        apply.
         """
         start_time = time.time()
         logger.info("tool_execution_requested", tool_name=tool_name, user_id=str(user_id))
@@ -111,6 +117,21 @@ class ToolGateway:
                 "arguments": arguments,
                 "message": f"Execution of tool '{tool_name}' requires explicit user confirmation.",
             }
+
+        # 2.5 Lifecycle hooks (pre-tool policy: block / redact / log).
+        pre_verdict = hook_registry.evaluate_pre(tool_name, arguments, org_id=org_id)
+        if pre_verdict.blocked:
+            logger.warning("tool_blocked_by_hook", tool_name=tool_name, message=pre_verdict.message)
+            return {
+                "status": "blocked",
+                "tool_name": tool_name,
+                "message": pre_verdict.message
+                or f"Execution of tool '{tool_name}' is blocked by policy.",
+            }
+        if pre_verdict.redacted is not None:
+            arguments = pre_verdict.redacted
+        for entry in pre_verdict.logs:
+            logger.info("tool_hook_log", tool_name=tool_name, **entry)
 
         # 3. Rate Limit Check (20 tool calls per minute per user)
         # Fail-open when Redis is unavailable: rate limiting degrades gracefully
@@ -131,6 +152,20 @@ class ToolGateway:
                 {"tool_name": tool_name, "user_id": str(user_id), "arguments": str(arguments)[:500]},
             ):
                 result = await self._dispatch(tool_name, arguments)
+            # 4.5 Lifecycle hooks (post-tool policy: block / redact / log).
+            post_verdict = hook_registry.evaluate_post(tool_name, result, org_id=org_id)
+            if post_verdict.blocked:
+                logger.warning("tool_result_blocked_by_hook", tool_name=tool_name, message=post_verdict.message)
+                return {
+                    "status": "blocked",
+                    "tool_name": tool_name,
+                    "message": post_verdict.message
+                    or f"Result of tool '{tool_name}' is blocked by policy.",
+                }
+            if post_verdict.redacted is not None:
+                result = post_verdict.redacted
+            for entry in post_verdict.logs:
+                logger.info("tool_hook_log", tool_name=tool_name, **entry)
             duration_ms = (time.time() - start_time) * 1000
             metrics_collector.increment(f"tool_calls:{tool_name}")
             metrics_collector.record_latency(f"tool:{tool_name}", duration_ms)

@@ -20,7 +20,9 @@ from backend.app.services.rag.critique import (
     retrieval_critique_service,
 )
 from backend.app.services.rag_service import rag_service
-from backend.app.services.structured_output import structured_service
+from backend.app.services.structured_output import (
+    structured_service,  # noqa: F401  (tests monkeypatch nodes.structured_service)
+)
 from backend.app.services.tools.evidence_gate import evidence_gate
 from backend.app.services.tools.tool_gateway import tool_gateway
 from langchain_core.messages import AIMessage
@@ -85,22 +87,30 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
     """
     config = get_config()
     conf = (config or {}).get("configurable", {})
+    plan_preamble = str(conf.get("plan_preamble") or "").strip()
+    base_system_prompt = state.get("system_prompt") or (
+        "You are Nexus AI — an elite production assistant engineered for maximum clarity, intelligence, and elegance.\n\n"
+        "Format every response with clean, professional presentation:\n"
+        "- Direct, High-Value Answers: Start with a crisp, direct summary or solution before deep-diving.\n"
+        "- Structured Hierarchy: Use Markdown headers (`##`, `###`), bold keys, and clean bullet points to organize complex answers.\n"
+        "- Visual Anchors: Use intuitive emojis purposefully as section anchors (e.g., 📌 Summary, 🔍 Analysis, ⚡ Recommendation, 💡 Tip, ⚠️ Caution, 🚀 Next Steps).\n"
+        "- Code Excellence: Always fence code blocks with the exact language identifier (```python, ```typescript, ```bash, etc.) and include concise, insightful inline comments.\n"
+        "- Tables & Comparisons: When comparing architectures, libraries, or options, format them into clear Markdown tables.\n"
+        "- Tone: Polished, rigorous, helpful, and concise."
+    )
+    if plan_preamble:
+        # Plan mode: an approved plan was committed — the run must follow its
+        # approved steps rather than plan from scratch (the preamble is the
+        # serialised plan plus an explicit "you may modify but must ask first"
+        # contract so the model never silently deviates).
+        base_system_prompt = f"{base_system_prompt}\n\n{plan_preamble}"
 
     return {
         "user_id": str(conf.get("user_id") or ""),
         "conversation_id": str(conf.get("conversation_id") or conf.get("thread_id") or ""),
         "trace_id": str(conf.get("trace_id") or ""),
         "mode": str(conf.get("mode") or state.get("mode") or "normal"),
-        "system_prompt": state.get("system_prompt") or (
-            "You are Nexus AI — an elite production assistant engineered for maximum clarity, intelligence, and elegance.\n\n"
-            "Format every response with clean, professional presentation:\n"
-            "- Direct, High-Value Answers: Start with a crisp, direct summary or solution before deep-diving.\n"
-            "- Structured Hierarchy: Use Markdown headers (`##`, `###`), bold keys, and clean bullet points to organize complex answers.\n"
-            "- Visual Anchors: Use intuitive emojis purposefully as section anchors (e.g., 📌 Summary, 🔍 Analysis, ⚡ Recommendation, 💡 Tip, ⚠️ Caution, 🚀 Next Steps).\n"
-            "- Code Excellence: Always fence code blocks with the exact language identifier (```python, ```typescript, ```bash, etc.) and include concise, insightful inline comments.\n"
-            "- Tables & Comparisons: When comparing architectures, libraries, or options, format them into clear Markdown tables.\n"
-            "- Tone: Polished, rigorous, helpful, and concise."
-        ),
+        "system_prompt": base_system_prompt,
         "active_skills": state.get("active_skills") or [],
         "user_memories": state.get("user_memories") or [],
         "plan": state.get("plan"),
