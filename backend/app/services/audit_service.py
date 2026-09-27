@@ -96,6 +96,7 @@ class AuditService:
                 "block_policies": sum(1 for h in hook_policies if h.action == "block"),
             }
         except Exception as exc:
+            logger.warning("audit_lifecycle_hooks_failed", error=str(exc))
             sections["lifecycle_hooks"] = {"error": str(exc)}
 
         # Model provenance — last 24h usage by model + variant coverage.
@@ -120,6 +121,7 @@ class AuditService:
                 for model, bucket in sorted(by_model.items())
             ]
         except Exception as exc:
+            logger.warning("audit_model_provenance_failed", error=str(exc))
             sections["model_provenance"] = {"error": str(exc)}
 
         # Prompt provenance
@@ -130,6 +132,7 @@ class AuditService:
                 "latest_timestamp": max((v.created_at.isoformat() for v in versions), default=None),
             }
         except Exception as exc:
+            logger.warning("audit_prompt_provenance_failed", error=str(exc))
             sections["prompt_provenance"] = {"error": str(exc)}
 
         # Red-team battery (persisted runs)
@@ -150,6 +153,7 @@ class AuditService:
                 else {"run_count": 0, "note": "No red-team run persisted yet — run /admin/evaluation/redteam"}
             )
         except Exception as exc:
+            logger.warning("audit_red_team_failed", error=str(exc))
             sections["red_team"] = {"error": str(exc)}
 
         # GDPR evidence
@@ -161,6 +165,7 @@ class AuditService:
                     gdpr_counts[row.action] += 1
             sections["gdpr"] = {key: gdpr_counts[key] for key in _GDPR_ACTIONS}
         except Exception as exc:
+            logger.warning("audit_gdpr_failed", error=str(exc))
             sections["gdpr"] = {"error": str(exc)}
 
         # Evaluation histogram
@@ -181,6 +186,7 @@ class AuditService:
                 for evaluator, bucket in sorted(by_evaluator.items())
             ]
         except Exception as exc:
+            logger.warning("audit_evaluations_failed", error=str(exc))
             sections["evaluations"] = {"error": str(exc)}
 
         sections["retention"] = retention_statement()
