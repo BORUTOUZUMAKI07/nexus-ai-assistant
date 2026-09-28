@@ -316,6 +316,20 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
   );
 };
 
+/**
+ * Renders a ```mermaid fenced block.
+ *
+ * It shows the diagram SOURCE, not a rendered diagram — there is no mermaid
+ * renderer wired up, and the label says "Diagram source" so that is not
+ * mistaken for one. The header used to read "Mermaid Diagram", which
+ * described a rendering that never happened.
+ *
+ * Rendering it for real is a deliberate, separate change, not a missing
+ * import: the `mermaid` package injects generated HTML and inline styles, so
+ * it needs client-only execution plus sanitisation of its output, and it has
+ * to be checked against the CSP in next.config.ts. Worth doing as its own
+ * change with those constraints designed for, rather than bolted on here.
+ */
 const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
   const [copied, setCopied] = useState(false);
 
@@ -330,7 +344,7 @@ const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
       <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-surface-elevated)] border-b border-[var(--border-subtle)] text-[11px] text-[var(--text-muted)]">
         <span className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-[var(--accent)] font-mono">
           <GitBranch className="w-3.5 h-3.5 text-[var(--accent)]" />
-          Mermaid Diagram
+          Diagram source
         </span>
         <button
           onClick={handleCopyCode}

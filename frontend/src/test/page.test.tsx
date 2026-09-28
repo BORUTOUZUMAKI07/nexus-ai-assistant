@@ -108,4 +108,49 @@ describe("Home page integration", () => {
     expect(await screen.findByText("Hello from Nexus.")).toBeInTheDocument()
     expect(screen.queryByText("Proposed Plan")).not.toBeInTheDocument()
   })
+
+  it("surfaces artifacts saved in an earlier session, not just this one's code blocks", async () => {
+    clearCookie()
+    render(<Home />)
+    await screen.findByText("Welcome back")
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "test@nexus.ai" },
+    })
+    fireEvent.change(screen.getByPlaceholderText("••••••••"), {
+      target: { value: "password123" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /Sign In/ }))
+    await screen.findByText("Project kickoff")
+
+    // Loaded from the server, so the artifact survives a reload. The canvas is
+    // not open yet — nothing in the message stream opened it.
+    expect(await screen.findByText("Saved artifacts")).toBeInTheDocument()
+    expect(screen.getByText("auth.py")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText("auth.py"))
+    expect(await screen.findByText("def auth():")).toBeInTheDocument()
+
+    // The list endpoint returns current versions but has no isActiveVersion
+    // field, so the page has to mark it. Without that the canvas would label a
+    // saved artifact as a mere snapshot of the version it actually is.
+    expect(screen.getByText("v2 • saved")).toBeInTheDocument()
+  })
+
+  it("surfaces the conversation's plan history even with none drafted this session", async () => {
+    clearCookie()
+    render(<Home />)
+    await screen.findByText("Welcome back")
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "test@nexus.ai" },
+    })
+    fireEvent.change(screen.getByPlaceholderText("••••••••"), {
+      target: { value: "password123" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /Sign In/ }))
+    await screen.findByText("Project kickoff")
+
+    // The stored plan is listed even though no plan was drafted in this session.
+    expect(await screen.findByText("Refactor auth service")).toBeInTheDocument()
+    expect(screen.getByText("Awaiting decision")).toBeInTheDocument()
+  })
 })
