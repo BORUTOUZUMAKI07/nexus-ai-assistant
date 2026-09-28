@@ -90,7 +90,7 @@ def create_access_token(
     token_type: str = "access",
     additional_claims: dict[str, Any] | None = None,
 ) -> str:
-    """Creates a short-lived access token (default 15 minutes).
+    """Creates a short-lived access token (default ACCESS_TOKEN_EXPIRE_MINUTES).
 
     Accepts an optional `role`, a `token_type` (defaults to "access"), and
     arbitrary `additional_claims` merged into the JWT payload, so callers
@@ -127,7 +127,7 @@ def create_access_token(
 
 
 def create_refresh_token(subject: str | UUID, expires_delta: timedelta | None = None) -> str:
-    """Creates a long-lived refresh token (default 7 days)."""
+    """Creates a long-lived refresh token (default REFRESH_TOKEN_EXPIRE_DAYS)."""
     if expires_delta:
         expire = datetime.now(UTC) + expires_delta
     else:
