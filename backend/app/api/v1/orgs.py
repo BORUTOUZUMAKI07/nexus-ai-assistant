@@ -26,11 +26,6 @@ class OrgCreate(BaseModel):
     description: str | None = None
 
 
-class OrgUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-
-
 class InviteCreate(BaseModel):
     email: EmailStr
     role: str = "member"

@@ -14,8 +14,8 @@ from uuid import UUID
 
 import structlog
 from backend.app.core.config import settings
-from backend.app.domain.user.repository import UserRepository
 from backend.app.domain.user.models import UserSettings
+from backend.app.domain.user.repository import UserRepository
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)

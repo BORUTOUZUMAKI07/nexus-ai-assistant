@@ -3,7 +3,7 @@ Graph Nodes for LangGraph Orchestration.
 Includes Bootstrap, Planner, Orchestrator, Subagent Dispatcher, Tool Execution (with HITL), and Synthesizer.
 Long-term memories from mem0 are injected into every prompt and saved after each response.
 """
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -27,7 +27,6 @@ from backend.app.services.tools.evidence_gate import evidence_gate
 from backend.app.services.tools.tool_gateway import tool_gateway
 from langchain_core.messages import AIMessage
 from langgraph.config import get_config
-from pydantic import BaseModel
 
 logger = structlog.get_logger(__name__)
 
@@ -200,12 +199,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     return {"plan": steps, "current_step": 0, "user_memories": [memory_block] if memory_block else []}
 
 
-class ActionChoice(BaseModel):
-    """Structured router decision: the single primary action for a request."""
-    action: Literal["RESEARCH", "CODE", "ANSWER"]
-
-
-# â”€â”€ ARQ: Attentive Reasoning Query flags â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â”€â”€ ARQ: Attentive Reasoning Query flags â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Lightweight constraint-check that runs before the main routing decision.
 # Prevents instruction drift and detects policy/tool violations early so
 # the synthesizer never silently ignores them mid-conversation.

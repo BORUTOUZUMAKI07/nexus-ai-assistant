@@ -1,10 +1,9 @@
 """
 Pydantic Schemas for Hook Domain (Pydantic V2 Standard).
 """
-from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
 class HookPolicyCreate(BaseModel):
@@ -27,19 +26,3 @@ class HookPolicyUpdate(BaseModel):
     field: str | None = Field(default=None, max_length=120)
     message: str | None = Field(default=None, max_length=500)
     enabled: bool | None = None
-
-
-class HookPolicyResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    name: str
-    tool_name: str
-    event: str
-    org_id: UUID | None = None
-    action: str
-    field: str | None = None
-    message: str | None = None
-    enabled: bool = True
-    created_at: datetime
-    updated_at: datetime

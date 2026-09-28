@@ -10,7 +10,7 @@ can verify authenticity. Delivery is best-effort with bounded retries
 import hashlib
 import hmac
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import UUID
 
