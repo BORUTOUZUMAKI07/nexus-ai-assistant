@@ -3,6 +3,7 @@ RAGAS Synthetic & Semantic RAG Evaluation.
 Evaluates Context Precision, Context Recall, Faithfulness, and Answer Relevance.
 """
 import structlog
+from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
 
 logger = structlog.get_logger(__name__)
@@ -73,7 +74,7 @@ class RagasEvaluationService:
         try:
             res = await ai_client.completion(
                 messages=messages,
-                model="llama-3.1-8b-instant",
+                model=settings.FAST_MODEL,
                 temperature=0.0,
             )
             # Extract float

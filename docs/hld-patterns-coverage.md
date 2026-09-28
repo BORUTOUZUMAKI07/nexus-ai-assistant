@@ -22,7 +22,7 @@ Legend: ✅ implemented · ⚠️ partial · ❌ missing/deferred · ➖ not app
 | 11 | CQRS (where justified) | ⚠️ | Read-heavy admin surfaces (slices/fairness/bandit/audit reports) are on-demand read models over the same store; no separate read replicas (single-node scale) |
 | 12 | DB Sharding / Read Replicas | ⏸ | Explicitly future ("Future PostgreSQL scaling" in the checklist) — deferred by design |
 | 13 | Consistent Hashing | ⏸ | Conditional on scale ("if scale requires") — deferred by design |
-| 14 | Fan-Out/Fan-In | ✅ | Celery `group` for parallel indexing (`tasks.py::trigger_indexing_pipeline`), LangGraph supervisor + subagents, parallel RAG retrieval |
+| 14 | Fan-Out/Fan-In | ✅ | LangGraph supervisor + subagents, parallel RAG retrieval, and Celery fan-out for webhook delivery retries (`tasks.py::retry_webhook_deliveries_task`). The `Celery group` indexing helper (`tasks.py::trigger_indexing_pipeline`) was removed as dead — nothing called it. |
 | 15 | Orchestrator–Worker | ✅ | Compiled LangGraph `StateGraph` + `AsyncPostgresSaver` + Celery workers |
 | 16 | Human-in-the-Loop / Approval | ✅ | LangGraph HITL approval gates; server-side approve→execute (`POST /tools/approval`), plan-then-approve, elicitation single-use |
 | 17 | RAG Pipeline | ✅ | Hybrid dense+BM25, parent-child reindex, RRF fusion, FlashRank rerank, budget-capped generation, citation attribution, CRAG corrective retrieval |

@@ -19,7 +19,6 @@ from backend.app.infrastructure.storage.supabase_storage import storage_client
 from backend.app.services.evaluation.deepeval_service import deepeval_service
 from backend.app.services.rag.ingest import ingestion_service
 from backend.app.worker.celery_app import celery_app
-from celery import group
 
 logger = structlog.get_logger(__name__)
 
@@ -247,11 +246,3 @@ def retry_webhook_deliveries_task() -> dict:
         return {"status": "skipped", "reason": "another_worker_running"}
     logger.info("webhook_retry_pass_completed", retried=retried)
     return {"status": "completed", "retried": retried}
-
-
-def trigger_indexing_pipeline(file_ids: list[str]):
-    """
-    Celery Canvas: Dispatches parallel indexing jobs as a Group.
-    """
-    job = group(process_file_indexing_task.s(fid) for fid in file_ids)
-    return job.apply_async()

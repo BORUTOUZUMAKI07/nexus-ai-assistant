@@ -112,7 +112,7 @@ async def upload_file(
                 # 202 Accepted + Location: the job is queued, poll the index-status
                 # endpoint (roadmap §6.3 async job pattern).
                 response.status_code = status.HTTP_202_ACCEPTED
-                response.headers["Location"] = f"{settings.API_V1_STR}/files/{db_file.id}/index-status"
+                response.headers["Location"] = f"{settings.API_V1_PREFIX}/files/{db_file.id}/index-status"
                 return db_file
             logger.warning("async_indexing_dispatch_failed_falling_back_to_sync", file_id=str(db_file.id))
 

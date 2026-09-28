@@ -6,6 +6,7 @@ and checks for factual inconsistencies or logical errors.
 from typing import Any
 
 import structlog
+from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
 
 logger = structlog.get_logger(__name__)
@@ -43,7 +44,7 @@ class CriticSubagent:
                 {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            model="llama-3.1-8b-instant",
+            model=settings.FAST_MODEL,
             temperature=0.1,
             max_tokens=400,
         )

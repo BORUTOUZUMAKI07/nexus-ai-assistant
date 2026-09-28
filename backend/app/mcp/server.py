@@ -13,8 +13,9 @@ except ImportError:
             from mcp.server.fastmcp import FastMCP
         except (ImportError, ModuleNotFoundError):
             class FastMCP:
-                def __init__(self, name: str):
+                def __init__(self, name: str, **kwargs):
                     self.name = name
+                    self.version = kwargs.get("version")
                 def tool(self):
                     def decorator(fn): return fn
                     return decorator
@@ -34,11 +35,27 @@ import math
 import operator
 
 import structlog
+from backend.app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
-# Initialize FastMCP Server
-mcp = FastMCP("Nexus-MCP-Server")
+# Initialize FastMCP Server.
+#
+# Identity comes from settings so the name MCP clients see in the initialize
+# handshake is configurable. It used to be the literal "Nexus-MCP-Server", which
+# contradicted the "nexus-mcp" this same file reports from its server-info
+# resource and the MCP_SERVER_NAME=nexus-mcp line in .env.example — three names
+# for one server, none of them connected to configuration.
+#
+# `version` is passed only where the installed FastMCP accepts it. The fallback
+# class above and the two legacy SDK import paths take a name alone, so a
+# TypeError here degrades to the older call rather than breaking startup.
+_MCP_IDENTITY = {"name": settings.MCP_SERVER_NAME, "version": settings.MCP_SERVER_VERSION}
+try:
+    mcp = FastMCP(**_MCP_IDENTITY)
+except TypeError:
+    logger.info("mcp_version_unsupported_falling_back_to_name_only", **_MCP_IDENTITY)
+    mcp = FastMCP(_MCP_IDENTITY["name"])
 
 _ALLOWED_MATH_NAMES = {n: getattr(math, n) for n in dir(math) if not n.startswith("_")}
 
@@ -218,7 +235,10 @@ def get_advanced_capabilities() -> str:
     client-owned primitive this server never initiates).
     """
     return json.dumps({
-        "server": "nexus-mcp",
+        # Same source as the FastMCP handshake identity above, so the two can
+        # no longer disagree about what this server is called.
+        "server": settings.MCP_SERVER_NAME,
+        "version": settings.MCP_SERVER_VERSION,
         "capabilities": {
             "tools": True,
             "resources": True,

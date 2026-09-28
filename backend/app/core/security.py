@@ -34,7 +34,53 @@ def get_password_hash(password: str) -> str:
 
 
 # JWT Token Generation & Verification
-ALGORITHM = "HS256"
+#
+# Tokens are always signed with a symmetric HMAC algorithm, because the key is
+# a single shared secret (_signing_key). An asymmetric setting such as RS256
+# would need a private key this app does not have, so it is rejected rather
+# than accepted and then failing at the first sign/verify.
+_JWT_HMAC_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
+
+
+def _algorithm() -> str:
+    """Return the JWT signing algorithm, validated.
+
+    Reads ``settings.JWT_ALGORITHM``. This used to be a module-level literal
+    ``ALGORITHM = "HS256"`` that no setting could influence, so JWT_ALGORITHM
+    was accepted from the environment and never used â€” the same write-only
+    pattern as JWT_SECRET_KEY. pyproject.toml already described HS256 as coming
+    from JWT_ALGORITHM, which is now true.
+
+    Read at call time so settings overrides in tests take effect.
+    """
+    configured = (settings.JWT_ALGORITHM or "HS256").strip().upper()
+    if configured not in _JWT_HMAC_ALGORITHMS:
+        raise ValueError(
+            f"JWT_ALGORITHM={settings.JWT_ALGORITHM!r} is not supported. This app "
+            f"signs with a shared secret, so only HMAC algorithms apply: "
+            f"{', '.join(sorted(_JWT_HMAC_ALGORITHMS))}."
+        )
+    return configured
+
+
+def _signing_key() -> str:
+    """Return the key JWTs are signed and verified with.
+
+    Every token in this module reads the key through this one function so there
+    is a single place that decides which secret applies.
+
+    It resolves to ``settings.JWT_SECRET_KEY``, which the settings validator
+    defaults to ``SECRET_KEY`` when unset. Reading ``SECRET_KEY`` directly here
+    instead made ``JWT_SECRET_KEY`` a write-only setting: it was accepted from
+    the environment, documented in both .env.example files, and then never used,
+    so changing it had no effect whatsoever. Routing through it also means the
+    token-signing key can be rotated independently of the other secrets derived
+    from ``SECRET_KEY``.
+
+    Read at call time, not import time, so tests that override settings still
+    take effect.
+    """
+    return settings.JWT_SECRET_KEY or settings.SECRET_KEY
 
 
 def create_access_token(
@@ -77,7 +123,7 @@ def create_access_token(
                 + ", ".join(sorted(collisions))
             )
         to_encode.update(additional_claims)
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, _signing_key(), algorithm=_algorithm())
 
 
 def create_refresh_token(subject: str | UUID, expires_delta: timedelta | None = None) -> str:
@@ -94,13 +140,13 @@ def create_refresh_token(subject: str | UUID, expires_delta: timedelta | None = 
         "jti": secrets.token_hex(16),
         "type": "refresh"
     }
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, _signing_key(), algorithm=_algorithm())
 
 
 def decode_token(token: str) -> dict[str, Any]:
     """Decodes and validates a JWT token."""
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, _signing_key(), algorithms=[_algorithm()])
         return payload
     except JWTError as e:
         raise InvalidTokenError(details={"error": str(e)})

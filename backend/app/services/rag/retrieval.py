@@ -99,11 +99,31 @@ async def _embed_with_gemini(
     return all_embeddings
 
 
+def _default_top_k() -> int:
+    """How many candidate chunks to pull when a caller does not say.
+
+    Resolved from ``settings.RAG_TOP_K``. The retrieval methods used to hardcode
+    ``top_k=5`` in their signatures, so RAG_TOP_K was accepted from the
+    environment and then never consulted — the one knob that most directly
+    controls recall-versus-latency had no effect.
+
+    This only supplies the *fallback*. Every production caller passes top_k
+    explicitly (RAGService.query forwards it from the caller, files.py from the
+    request body, retrieval_guard.py and nodes.py with their own tuned value),
+    so no request path changes behaviour; what changes is that a new caller which
+    forgets the argument now picks up the configured value instead of a stray
+    literal buried in a signature.
+
+    Read at call time so settings overrides in tests take effect.
+    """
+    return settings.RAG_TOP_K
+
+
 def maximal_marginal_relevance(
     query_vector: list[float],
     candidate_vectors: list[list[float]],
     candidates: list[dict[str, Any]],
-    top_k: int = 5,
+    top_k: int | None = None,
     lambda_mult: float = 0.7,
 ) -> list[dict[str, Any]]:
     """
@@ -112,6 +132,9 @@ def maximal_marginal_relevance(
       arg max [ lambda * Sim(query, d) - (1 - lambda) * max_{s in S} Sim(d, s) ]
     """
     import numpy as np
+
+    if top_k is None:
+        top_k = _default_top_k()
 
     if not candidates:
         return []
@@ -272,13 +295,14 @@ class RetrievalService(IRetriever):
         query: str,
         user_id: UUID,
         file_ids: list[UUID] | None = None,
-        top_k: int = 5,
+        top_k: int | None = None,
         score_threshold: float = 0.35,
         with_vectors: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Hybrid retrieval pipeline.
         """
+        top_k = _default_top_k() if top_k is None else top_k
         logger.info("retrieving_chunks_for_query", query=query, user_id=str(user_id), top_k=top_k)
 
         dense_vector = await self.generate_embedding(query)
@@ -305,7 +329,7 @@ class RetrievalService(IRetriever):
         queries: list[str],
         user_id: UUID,
         file_ids: list[UUID] | None = None,
-        top_k: int = 5,
+        top_k: int | None = None,
         score_threshold: float = 0.35,
         use_mmr: bool = True,
         mmr_lambda: float = 0.7,
@@ -315,6 +339,7 @@ class RetrievalService(IRetriever):
         fetches dense vectors, resolves child hits back to their parent chunks (deduplicated),
         and applies Maximal Marginal Relevance (MMR) for optimal context diversity.
         """
+        top_k = _default_top_k() if top_k is None else top_k
         logger.info("multi_query_retrieval_started", query_count=len(queries), top_k=top_k, use_mmr=use_mmr)
 
         raw_hits: list[dict[str, Any]] = []
@@ -420,8 +445,3 @@ class RetrievalService(IRetriever):
 
 # Singleton instance for backwards-compatibility (default IVectorStore = QdrantService)
 retrieval_service = RetrievalService()
-
-
-def get_retriever() -> IRetriever:
-    """Dependency provider returning the active IRetriever implementation."""
-    return retrieval_service

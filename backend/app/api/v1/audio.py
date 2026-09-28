@@ -7,7 +7,7 @@ import io
 import structlog
 from backend.app.api.deps import get_current_user
 from backend.app.domain.user.models import User
-from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.infrastructure.ai.litellm_client import ai_client, tts_media_type
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
@@ -84,6 +84,12 @@ async def synthesize_speech_endpoint(
     Microsoft Edge neural voices (edge-tts) — free and key-less, so this
     endpoint never requires a provider key.
     """
+    # Validate TTS_MODEL / TTS_FORMAT up front so a bad value is a clear 400
+    # rather than an opaque failure buried in the synthesis call below.
+    try:
+        media_type = tts_media_type()
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     if not text.strip():
         raise HTTPException(status_code=400, detail="text must not be empty")
     if len(text) > 4000:
@@ -100,6 +106,6 @@ async def synthesize_speech_endpoint(
         )
     return Response(
         content=audio_bytes,
-        media_type="audio/mpeg",
+        media_type=media_type,
         headers={"X-Content-Type-Options": "nosniff"},
     )

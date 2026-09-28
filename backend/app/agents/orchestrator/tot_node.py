@@ -7,6 +7,7 @@ from typing import Any
 
 import structlog
 from backend.app.agents.orchestrator.state import AgentState
+from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
 from langchain_core.messages import AIMessage
 
@@ -37,7 +38,7 @@ async def tree_of_thoughts_node(state: AgentState) -> dict[str, Any]:
     try:
         raw_candidates = await ai_client.completion(
             messages=generate_prompt,
-            model="llama-3.1-8b-instant",
+            model=settings.FAST_MODEL,
             temperature=0.8,
             max_tokens=700,
         )
@@ -61,7 +62,7 @@ async def tree_of_thoughts_node(state: AgentState) -> dict[str, Any]:
 
         synthesized_best = await ai_client.completion(
             messages=eval_prompt,
-            model="llama-3.1-8b-instant",
+            model=settings.FAST_MODEL,
             temperature=0.4,
             max_tokens=700,
         )
