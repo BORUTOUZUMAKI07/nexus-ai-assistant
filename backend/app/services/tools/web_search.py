@@ -124,22 +124,6 @@ async def _fetch_with_ssrf_guard(url: str, *, timeout: float = 10.0, max_bytes: 
     return response.status_code, current, response.content
 
 
-class WebSearchResult:
-    def __init__(self, title: str, url: str, snippet: str, content: str = ""):
-        self.title = title
-        self.url = url
-        self.snippet = snippet
-        self.content = content
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "title": self.title,
-            "url": self.url,
-            "snippet": self.snippet,
-            "content": self.content,
-        }
-
-
 class WebSearchService:
     """
     Combines Tavily / Firecrawl search APIs with a DuckDuckGo free-search fallback.

@@ -17,6 +17,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from backend.app.core.config import settings
 
 try:
     from mem0 import AsyncMemory, AsyncMemoryClient
@@ -45,7 +46,7 @@ class LongTermMemoryService:
             logger.info("mem0_not_installed_using_noop_fallback")
             return
 
-        api_key = os.environ.get("MEM0_API_KEY")
+        api_key = settings.MEM0_API_KEY
         if api_key and AsyncMemoryClient is not None:
             # Cloud-managed mem0 (recommended for production)
             try:
@@ -61,8 +62,14 @@ class LongTermMemoryService:
                         "vector_store": {
                             "provider": "qdrant",
                             "config": {
-                                "host": os.environ.get("QDRANT_HOST", "localhost"),
-                                "port": int(os.environ.get("QDRANT_PORT", 6333)),
+                                # Read through settings, not os.environ. Both
+                                # saw the same .env values (core.config calls
+                                # load_dotenv at import), so this is not a
+                                # behaviour change — it removes the second,
+                                # undeclared source of truth for these three
+                                # values and lets them be type-checked.
+                                "host": settings.QDRANT_HOST,
+                                "port": settings.QDRANT_PORT,
                                 "collection_name": "nexus_user_memories",
                                 "embedding_model_dims": 1536,
                             },
@@ -70,9 +77,7 @@ class LongTermMemoryService:
                         "llm": {
                             "provider": "litellm",
                             "config": {
-                                "model": os.environ.get(
-                                    "MEMORY_EXTRACTION_MODEL", "groq/llama-3.1-8b-instant"
-                                ),
+                                "model": settings.MEMORY_EXTRACTION_MODEL,
                                 "temperature": 0.1,
                                 "max_tokens": 2000,
                             },
@@ -80,6 +85,8 @@ class LongTermMemoryService:
                         "embedder": {
                             "provider": "openai",
                             "config": {
+                                # mem0's OpenAI embedder takes a bare model id,
+                                # not this app's "models/…" Gemini-style id.
                                 "model": os.environ.get(
                                     "EMBEDDING_MODEL", "text-embedding-ada-002"
                                 ),

@@ -13,7 +13,13 @@ from backend.app.infrastructure.storage.base import IStorageService
 
 logger = structlog.get_logger(__name__)
 
-STORAGE_BUCKET = "nexus-knowledge"
+# Resolved from settings so the bucket is actually configurable. This used to be
+# a hardcoded literal assigned to the same name, which silently shadowed
+# ``settings.STORAGE_BUCKET`` at every one of its use sites below — so setting
+# STORAGE_BUCKET in the environment did nothing and the app kept talking to
+# "nexus-knowledge" no matter what was configured. The default is unchanged, so
+# existing deployments behave identically.
+STORAGE_BUCKET: str = settings.STORAGE_BUCKET
 
 
 def _normalize_storage_path(storage_path: str) -> str:

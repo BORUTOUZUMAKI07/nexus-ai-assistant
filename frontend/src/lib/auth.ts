@@ -51,19 +51,6 @@ export function authCookieOptions(request: Request): typeof AUTH_COOKIE_OPTIONS 
 }
 
 /**
- * Best-effort document.cookie scan. With httpOnly cookies in a real browser
- * this always returns null — prefer `checkAuth()` for a truthful session check.
- */
-export function getAccessToken(): string | null {
-  if (typeof document === "undefined") return null;
-  const match = document.cookie
-    .split(";")
-    .map((c) => c.trim())
-    .find((c) => c.startsWith(`${TOKEN_COOKIE}=`));
-  return match ? decodeURIComponent(match.slice(TOKEN_COOKIE.length + 1)) : null;
-}
-
-/**
  * Asks the server whether a session exists. The /api/auth/me route handler
  * verifies the httpOnly access cookie against the backend, so this works even
  * though the browser cannot read the cookie itself.

@@ -5,6 +5,7 @@ Specializes in search, web browsing, and multi-source evidence synthesis.
 from typing import Any
 
 import structlog
+from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
 from backend.app.services.tools.web_search import web_search_service
 
@@ -44,7 +45,7 @@ class ResearcherSubagent:
                 {"role": "system", "content": RESEARCHER_SYSTEM_PROMPT},
                 {"role": "user", "content": synthesis_prompt},
             ],
-            model="llama-3.1-8b-instant",
+            model=settings.FAST_MODEL,
             temperature=0.2,
             max_tokens=800,
         )

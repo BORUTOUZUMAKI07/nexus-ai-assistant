@@ -32,11 +32,16 @@ class Settings(BaseSettings):
 
     # ── App Identity ───────────────────────────────────────────────────────────
     ENVIRONMENT: str = Field(default="development", description="development | staging | production")
+    # The single source for the app's display name. A second APP_NAME field with
+    # the identical default used to sit here as a bare "# alias"; nothing read
+    # it, so the two could drift apart silently. Use PROJECT_NAME.
     PROJECT_NAME: str = Field(default="Nexus AI Assistant")
-    APP_NAME: str = Field(default="Nexus AI Assistant")   # alias
 
     # ── API Routing ────────────────────────────────────────────────────────────
-    API_V1_STR: str = Field(default="/api/v1")
+    # One setting for the mount prefix. API_V1_STR was a duplicate of this with
+    # the same default, used in exactly one place (a Location header). Changing
+    # API_V1_PREFIX left that header pointing at the old prefix, so the two are
+    # now merged — every caller reads API_V1_PREFIX.
     API_V1_PREFIX: str = Field(default="/api/v1")         # used in main.py include_router
 
     # ── Security ───────────────────────────────────────────────────────────────
@@ -78,9 +83,9 @@ class Settings(BaseSettings):
     OAUTH_STATE_TTL_SECONDS: int = Field(default=600, description="PKCE state/verifier lifetime")
 
     # ── CORS ───────────────────────────────────────────────────────────────────
-    ALLOWED_ORIGINS: list[str] = Field(
-        default=["http://localhost:3000", "http://127.0.0.1:3000"]
-    )
+    # Single source for the browser allow-list. A second ALLOWED_ORIGINS field
+    # with identical defaults used to sit here; only CORS_ORIGINS was ever read,
+    # so an operator who edited ALLOWED_ORIGINS saw no effect and had no warning.
     CORS_ORIGINS: list[str] = Field(
         default=["http://localhost:3000", "http://127.0.0.1:3000"]
     )
@@ -94,13 +99,18 @@ class Settings(BaseSettings):
     # sqlalchemy query (pg_catalog table checks, etc.).
     DATABASE_ECHO: bool = Field(default=False)
     SUPABASE_URL: str | None = None
-    SUPABASE_ANON_KEY: str | None = None
+    # Only the service-role (admin) key belongs on a server. Every Storage call
+    # authenticates with it. SUPABASE_ANON_KEY is a publishable, client-side key
+    # that was declared here and never read; leaving it in the server config
+    # only invited someone to reach for it where it would not be appropriate.
     SUPABASE_SERVICE_ROLE_KEY: str | None = None
 
     # ── Redis / Celery ─────────────────────────────────────────────────────────
+    # One URL for cache, broker and results. CELERY_BROKER_URL and
+    # CELERY_RESULT_BACKEND were separate fields pointing at databases /1 and /2
+    # while Celery actually used this field's /0 — so configuring them looked
+    # like it worked and did nothing.
     REDIS_URL: str = Field(default="redis://localhost:6379/0")
-    CELERY_BROKER_URL: str = Field(default="redis://localhost:6379/1")
-    CELERY_RESULT_BACKEND: str = Field(default="redis://localhost:6379/2")
 
     # ── Qdrant ─────────────────────────────────────────────────────────────────
     QDRANT_URL: str = Field(default="http://localhost:6333")
@@ -113,18 +123,44 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
     OPENROUTER_API_KEY: str | None = None
+    # Declared for operators who set them expecting direct-provider routing.
+    # Nothing in this codebase reads them: every model in the LiteLLM Router's
+    # model_list is an OpenRouter deployment, and a bare OpenAI/Anthropic/
+    # Together model id would not resolve to any registered model_group, so
+    # routing one in would fail rather than switch provider. Kept as pass-through
+    # env for litellm itself, which reads these from the process environment.
     OPENAI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None
     TOGETHER_API_KEY: str | None = None
 
-    # Default model aliases used across the app
+    # Default model aliases used across the app.
+    #
+    # Both are logical model names, resolved to a Router model_group by
+    # litellm_client.resolve_model_group — the provider prefix is stripped, so
+    # "groq/llama-3.1-8b-instant" and "llama-3.1-8b-instant" both land in
+    # fast_chat.
+    #
+    # FAST_MODEL backs the cheap calls (planner, Tree-of-Thought, the coder /
+    # critic / researcher subagents, RAGAS judging). It was previously unused:
+    # those six call sites each hardcoded the literal "llama-3.1-8b-instant", so
+    # pointing FAST_MODEL at a different fast model changed nothing.
     DEFAULT_MODEL: str = Field(default="groq/llama-3.3-70b-versatile")
     FAST_MODEL: str = Field(default="groq/llama-3.1-8b-instant")
 
     # ── Embeddings ─────────────────────────────────────────────────────────────
     EMBEDDING_MODEL: str = Field(default="models/gemini-embedding-001")
     EMBEDDING_DIMENSION: int = Field(default=768)
-    RERANKER_MODEL: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2")
+    # FlashRank cross-encoder used to re-order retrieved chunks. Must be one of
+    # the names FlashRank ships (ms-marco-TinyBERT-L-2-v2, ms-marco-MiniLM-L-12-v2,
+    # ms-marco-MultiBERT-L-12) — NOT a HuggingFace cross-encoder path.
+    #
+    # This used to default to "cross-encoder/ms-marco-MiniLM-L-6-v2", a
+    # HuggingFace repo id that FlashRank cannot load. Nothing read the setting,
+    # so the mismatch never mattered and the bad value went unnoticed; the
+    # reranker silently kept using its own hardcoded ms-marco-TinyBERT-L-2-v2.
+    # Wiring it up as-is would have made every rerank fail to load and quietly
+    # fall back to plain vector-score ordering. Validated in RerankingService.
+    RERANKER_MODEL: str = Field(default="ms-marco-TinyBERT-L-2-v2")
 
     # ── External Services ──────────────────────────────────────────────────────
     E2B_API_KEY: str | None = None
@@ -135,14 +171,18 @@ class Settings(BaseSettings):
     MEMORY_EXTRACTION_MODEL: str = Field(default="groq/llama-3.1-8b-instant")
 
     # ── Object Storage (Supabase Storage — uses SUPABASE_URL + SERVICE_ROLE_KEY) ─
+    # Storage goes through the Supabase REST API (infrastructure/storage/
+    # supabase_storage.py), which needs no boto2 credentials. The four
+    # SUPABASE_S3_* fields that used to sit here were the boto3-era settings from
+    # the old app/settings.py, read by nothing once the REST client landed.
+    #
+    # Two of them were duplicates of live settings, which is why they were worth
+    # removing rather than keeping: SUPABASE_S3_BUCKET repeated STORAGE_BUCKET
+    # and STORAGE_MAX_FILE_SIZE_MB repeated MAX_UPLOAD_SIZE_MB, both with
+    # identical defaults. Editing either one did nothing.
+    #
+    # The upload ceiling is MAX_UPLOAD_SIZE_MB (enforced in api/v1/files.py).
     STORAGE_BUCKET: str = Field(default="nexus-knowledge", description="Supabase Storage bucket name")
-    STORAGE_MAX_FILE_SIZE_MB: int = Field(default=50, description="Max file upload size in MB (Supabase bucket)")
-
-    # ── Object Storage (S3 legacy aliases — fused from the old app/settings.py) ─
-    SUPABASE_S3_ENDPOINT: str | None = None
-    SUPABASE_S3_BUCKET: str = Field(default="nexus-knowledge")
-    SUPABASE_S3_ACCESS_KEY_ID: str | None = None
-    SUPABASE_S3_SECRET_ACCESS_KEY: str | None = None
 
     # ── Prompt templates ──────────────────────────────────────────────────────
     # Single source of truth, computed at import so the default works in any
@@ -153,11 +193,23 @@ class Settings(BaseSettings):
     )
 
     # ── Observability (LangSmith & Sentry Free Tiers) ──────────────────────────
+    # Read from the process environment by the LangSmith SDK itself, not by this
+    # codebase — core.config calls load_dotenv() at import, so the variables are
+    # present in os.environ. Declared here so they are documented, defaulted and
+    # type-checked alongside everything else; do not delete them from .env on the
+    # grounds that nothing references these attributes.
     LANGSMITH_API_KEY: str | None = None
     LANGSMITH_PROJECT: str = Field(default="nexus-ai-assistant")
     LANGSMITH_TRACING: bool = Field(default=False)
     SENTRY_DSN: str | None = None
-    LOG_LEVEL: str = Field(default="INFO")
+    # Verbosity for the whole app. None means "work it out from ENVIRONMENT":
+    # INFO in production, DEBUG elsewhere. Set it to override that explicitly
+    # (e.g. LOG_LEVEL=DEBUG on a production box to debug one incident).
+    #
+    # This used to default to the string "INFO" and was never read — logging
+    # picked its level straight from settings.ENVIRONMENT — so setting it did
+    # nothing. Resolution and validation live in core/logging.setup_logging.
+    LOG_LEVEL: str | None = None
 
     # ── Rate Limiting ──────────────────────────────────────────────────────────
     RATE_LIMIT_PER_MINUTE: int = Field(default=100)
@@ -265,6 +317,8 @@ class Settings(BaseSettings):
     # Key-less Microsoft Edge neural voices (edge-tts) — free, no API key,
     # no billing. TTS_VOICE is an edge-tts voice id (e.g. en-US-AriaNeural).
     # /audio/speech always works; no provider key is ever required.
+    # Validated on every synthesis call by litellm_client.tts_media_type(),
+    # which rejects anything outside these sets instead of ignoring it.
     TTS_MODEL: str = Field(default="edge-tts")
     TTS_VOICE: str = Field(default="en-US-AriaNeural")
     TTS_FORMAT: str = Field(default="mp3")
@@ -294,7 +348,7 @@ class Settings(BaseSettings):
     # endpoint is open (local/dev scraping) — always set it in production.
     METRICS_TOKEN: str | None = Field(default=None)
 
-    @field_validator("CORS_ORIGINS", "ALLOWED_ORIGINS", mode="before")
+    @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def parse_cors(cls, v: str | list[str]) -> list[str]:
         if isinstance(v, str):

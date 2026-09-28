@@ -276,13 +276,6 @@ def get_graph() -> Any:
     return _compiled_graph
 
 
-def get_store() -> InMemoryStore:
-    """Returns the cross-thread LangGraph store."""
-    if _store is None:
-        raise RuntimeError("Store not initialised.")
-    return _store
-
-
 # Convenience alias — importable before lifespan (will raise only if called)
 class _LazyGraph:
     """Proxy that defers access to the compiled graph until after lifespan init."""

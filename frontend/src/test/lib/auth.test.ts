@@ -2,37 +2,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import {
   checkAuth,
   clearSession,
-  getAccessToken,
-  TOKEN_COOKIE,
   SESSION_EXPIRED_EVENT,
 } from "@/lib/auth"
 
 describe("auth session helper", () => {
   beforeEach(() => {
-    document.cookie.split(";").forEach((c) => {
-      const name = c.split("=")[0].trim()
-      document.cookie = `${name}=; path=/; max-age=0`
-    })
     vi.unstubAllGlobals()
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
-  })
-
-  it("returns null when no token cookie is present", () => {
-    expect(getAccessToken()).toBeNull()
-  })
-
-  it("reads a (non-httpOnly) token cookie as a best-effort compat helper", () => {
-    document.cookie = `${TOKEN_COOKIE}=abc.def.ghi; path=/`
-    expect(getAccessToken()).toBe("abc.def.ghi")
-  })
-
-  it("URL-decodes special characters in a token", () => {
-    const token = "eyJhbGciOiJIUzI1NiJ9.+/="
-    document.cookie = `${TOKEN_COOKIE}=${encodeURIComponent(token)}; path=/`
-    expect(getAccessToken()).toBe(token)
   })
 
   it("checkAuth resolves true when the /api/auth/me probe succeeds", async () => {

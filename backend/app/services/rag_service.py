@@ -11,6 +11,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from backend.app.core.config import settings
 from backend.app.domain.file.schemas import RAGCitation, RAGQueryResult
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.rag.base import IReranker, IRetriever, IRewriter
@@ -53,7 +54,7 @@ class RAGService:
         query: str,
         user_id: UUID,
         file_ids: list[UUID] | None = None,
-        top_k: int = 5,
+        top_k: int | None = None,
         score_threshold: float = 0.35,
     ) -> RAGQueryResult:
         """
@@ -63,6 +64,14 @@ class RAGService:
         3. Cross-Encoder reranking via injected IReranker.
         4. Citation formatting via CitationService.
         """
+        # Fallback only — every production caller passes top_k explicitly, so
+        # this changes no request path. It exists so a new caller that omits the
+        # argument inherits settings.RAG_TOP_K instead of a literal in a
+        # signature. Note RAG_TOP_K defaults to 20, not the 5 this signature
+        # used to hardcode, so the two are not interchangeable: callers that
+        # relied on the old default must keep passing top_k explicitly.
+        if top_k is None:
+            top_k = settings.RAG_TOP_K
         logger.info("rag_service_query_started", query=query, user_id=str(user_id), top_k=top_k)
 
         async with trace_span("rag_query", {"query": query, "user_id": str(user_id), "top_k": top_k}):

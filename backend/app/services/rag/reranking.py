@@ -14,9 +14,21 @@ import re
 from typing import Any
 
 import structlog
+from backend.app.core.config import settings
 from backend.app.services.rag.base import IReranker
 
 logger = structlog.get_logger(__name__)
+
+# The cross-encoder names FlashRank actually ships. Anything else — notably a
+# HuggingFace repo id like "cross-encoder/ms-marco-MiniLM-L-6-v2" — is rejected
+# by FlashRank at load time.
+_FLASH_RANK_MODELS = frozenset(
+    {
+        "ms-marco-TinyBERT-L-2-v2",
+        "ms-marco-MiniLM-L-12-v2",
+        "ms-marco-MultiBERT-L-12",
+    }
+)
 
 # Ranker construction loads model weights — cache one instance per model name
 # and reuse it, instead of re-initializing the model for every rerank call.
@@ -147,18 +159,32 @@ class RerankingService(IReranker):
     Reranker to prioritize high-precision chunks and filter out low-relevance noise.
     """
 
-    def __init__(self, model_name: str = "ms-marco-TinyBERT-L-2-v2"):
-        self.model_name = model_name
+    def __init__(self, model_name: str | None = None):
+        # Resolved from settings.RERANKER_MODEL, which used to be ignored in
+        # favour of this hardcoded name. The default is unchanged
+        # (ms-marco-TinyBERT-L-2-v2), so behaviour is identical.
+        self.model_name = settings.RERANKER_MODEL if model_name is None else model_name
+        if self.model_name not in _FLASH_RANK_MODELS:
+            # Fail loudly. rerank() catches every exception and falls back to
+            # sorting by vector score, so an unrecognised model name would
+            # otherwise disable reranking app-wide with nothing but a
+            # "flashrank_unavailable" warning to show for it.
+            raise ValueError(
+                f"RERANKER_MODEL={self.model_name!r} is not a model FlashRank "
+                f"provides. Use one of: {', '.join(sorted(_FLASH_RANK_MODELS))}."
+            )
 
     async def rerank(
         self,
         query: str,
         candidates: list[dict[str, Any]],
-        top_n: int = 5,
+        top_n: int | None = None,
     ) -> list[dict[str, Any]]:
         """
         Rerank retrieved chunks by relevance to the query.
         """
+        if top_n is None:
+            top_n = settings.RAG_RERANK_TOP_N
         if not candidates:
             return []
 
@@ -191,8 +217,3 @@ class RerankingService(IReranker):
 
 # Singleton instance for backwards-compatibility
 reranker = RerankingService()
-
-
-def get_reranker() -> IReranker:
-    """Dependency provider returning the active IReranker implementation."""
-    return reranker

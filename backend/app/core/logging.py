@@ -28,12 +28,41 @@ def add_correlation_id(
     return event_dict
 
 
+def resolve_log_level() -> int:
+    """Return the stdlib logging level the app should run at.
+
+    ``settings.LOG_LEVEL`` wins when it is set; otherwise the level is derived
+    from the environment, exactly as before: INFO in production, DEBUG
+    everywhere else. Leaving LOG_LEVEL unset therefore reproduces the previous
+    behaviour precisely.
+
+    An unrecognised level is rejected loudly rather than silently falling back
+    to a default — a typo'd LOG_LEVEL=VERBOSE that quietly did nothing is the
+    exact failure this setting had before it was wired.
+    """
+    configured = (settings.LOG_LEVEL or "").strip()
+    if not configured:
+        return logging.INFO if settings.ENVIRONMENT == "production" else logging.DEBUG
+
+    resolved = logging.getLevelNamesMapping().get(configured.upper())
+    if resolved is None:
+        valid = ", ".join(
+            name for name, value in logging.getLevelNamesMapping().items()
+            if isinstance(value, int)
+        )
+        raise ValueError(
+            f"LOG_LEVEL={configured!r} is not a valid level. Use one of: {valid}."
+        )
+    return resolved
+
+
 def setup_logging() -> None:
     """
     Configures structured logging across the entire application runtime.
     In production: Emits newline-delimited JSON with ISO timestamps and tracebacks.
     In development: Emits colorized console output with rich contextual key-value pairs.
     """
+    log_level = resolve_log_level()
     shared_processors = [
         structlog.contextvars.merge_contextvars,
         add_correlation_id,
@@ -75,7 +104,7 @@ def setup_logging() -> None:
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
-        level=logging.INFO if settings.ENVIRONMENT == "production" else logging.DEBUG,
+        level=log_level,
     )
 
     if hasattr(sys.stdout, "reconfigure"):

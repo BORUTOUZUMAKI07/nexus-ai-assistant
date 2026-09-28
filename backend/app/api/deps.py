@@ -20,8 +20,6 @@ from backend.app.infrastructure.storage.base import IStorageService
 # Infrastructure singletons (imported lazily to avoid circular imports)
 # --------------------------------------------------------------------------- #
 from backend.app.infrastructure.storage.supabase_storage import get_storage_service
-from backend.app.infrastructure.vector.base import IVectorStore
-from backend.app.infrastructure.vector.qdrant_client import get_vector_store
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -142,11 +140,6 @@ def require_idempotency_key(scope: str):
 def get_storage() -> IStorageService:
     """Inject the active IStorageService implementation."""
     return get_storage_service()
-
-
-def get_vector_db() -> IVectorStore:
-    """Inject the active IVectorStore implementation."""
-    return get_vector_store()
 
 
 def get_cache() -> ICacheService:

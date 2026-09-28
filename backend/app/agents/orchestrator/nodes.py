@@ -89,17 +89,17 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
     conf = (config or {}).get("configurable", {})
     plan_preamble = str(conf.get("plan_preamble") or "").strip()
     base_system_prompt = state.get("system_prompt") or (
-        "You are Nexus AI — an elite production assistant engineered for maximum clarity, intelligence, and elegance.\n\n"
+        "You are Nexus AI â€” an elite production assistant engineered for maximum clarity, intelligence, and elegance.\n\n"
         "Format every response with clean, professional presentation:\n"
         "- Direct, High-Value Answers: Start with a crisp, direct summary or solution before deep-diving.\n"
         "- Structured Hierarchy: Use Markdown headers (`##`, `###`), bold keys, and clean bullet points to organize complex answers.\n"
-        "- Visual Anchors: Use intuitive emojis purposefully as section anchors (e.g., 📌 Summary, 🔍 Analysis, ⚡ Recommendation, 💡 Tip, ⚠️ Caution, 🚀 Next Steps).\n"
+        "- Visual Anchors: Use intuitive emojis purposefully as section anchors (e.g., ðŸ“Œ Summary, ðŸ” Analysis, âš¡ Recommendation, ðŸ’¡ Tip, âš ï¸ Caution, ðŸš€ Next Steps).\n"
         "- Code Excellence: Always fence code blocks with the exact language identifier (```python, ```typescript, ```bash, etc.) and include concise, insightful inline comments.\n"
         "- Tables & Comparisons: When comparing architectures, libraries, or options, format them into clear Markdown tables.\n"
         "- Tone: Polished, rigorous, helpful, and concise."
     )
     if plan_preamble:
-        # Plan mode: an approved plan was committed — the run must follow its
+        # Plan mode: an approved plan was committed â€” the run must follow its
         # approved steps rather than plan from scratch (the preamble is the
         # serialised plan plus an explicit "you may modify but must ask first"
         # contract so the model never silently deviates).
@@ -157,7 +157,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         return {"plan": None, "current_step": 0, "user_memories": [], "task_type": "vision"}
     last_user_msg = _extract_text_content(last_user_raw)
 
-    # ── Load long-term memories relevant to this query (mem0 semantic search) ──
+    # â”€â”€ Load long-term memories relevant to this query (mem0 semantic search) â”€â”€
     memory_block = ""
     if user_id:
         memory_block = await long_term_memory.build_memory_context_block(
@@ -188,7 +188,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
 
     plan_response = await ai_client.completion(
         messages=[{"role": "user", "content": plan_prompt}],
-        model="llama-3.1-8b-instant",
+        model=settings.FAST_MODEL,
         temperature=0.1,
     )
 
@@ -205,14 +205,14 @@ class ActionChoice(BaseModel):
     action: Literal["RESEARCH", "CODE", "ANSWER"]
 
 
-# ── ARQ: Attentive Reasoning Query flags ─────────────────────────────────────
+# â”€â”€ ARQ: Attentive Reasoning Query flags â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Lightweight constraint-check that runs before the main routing decision.
 # Prevents instruction drift and detects policy/tool violations early so
 # the synthesizer never silently ignores them mid-conversation.
-# Based on §2.2 (Attentive Reasoning Queries) of AI_Engineering_Complete_Notes.
+# Based on Â§2.2 (Attentive Reasoning Queries) of AI_Engineering_Complete_Notes.
 _ARQ_PROMPT_TEMPLATE = """
 You are a constraint-checker for an AI assistant. Analyse the user request below
-and return a compact JSON object with EXACTLY these keys — no others:
+and return a compact JSON object with EXACTLY these keys â€” no others:
   "needs_tool"   : true if the task requires an external tool (web search, code exec, file read)
   "safety_flag"  : true if the request touches PII, harmful content, or violates AI safety policy
   "recency_needed" : true if answering well requires real-time or post-training-cutoff data
@@ -288,12 +288,12 @@ async def orchestrator_node(state: AgentState) -> dict[str, Any]:
     )
     if mode == "code":
         router_prompt += (
-            "\nNOTE: Developer mode is active — bias toward 'CODE' whenever the request "
+            "\nNOTE: Developer mode is active â€” bias toward 'CODE' whenever the request "
             "involves implementation, data work, or execution."
         )
     elif mode == "research":
         router_prompt += (
-            "\nNOTE: Research mode is active — bias toward 'RESEARCH' whenever the request "
+            "\nNOTE: Research mode is active â€” bias toward 'RESEARCH' whenever the request "
             "needs current or external information."
         )
 
@@ -395,7 +395,7 @@ async def tool_node(state: AgentState) -> dict[str, Any]:
     try:
         user_id = UUID(user_id_str)
     except (ValueError, TypeError, AttributeError):
-        # bootstrap_node sets user_id to "" when absent — never let a bad
+        # bootstrap_node sets user_id to "" when absent â€” never let a bad
         # string crash the execution node.
         user_id = UUID(int=0)
     tool_results: list[dict[str, Any]] = list(state.get("tool_results", []))
@@ -443,7 +443,7 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
     1. Runs local RAG retrieval for the latest user message.
     2. Grades the retrieved context: relevant | insufficient | unrelated.
     3. On insufficient/unrelated, queues a web_search tool call so CRAG can
-       supplement the answer (tool_node → synthesizer). Otherwise flows to
+       supplement the answer (tool_node â†’ synthesizer). Otherwise flows to
        synthesizer with local citations only.
     """
     messages = state.get("messages", [])
@@ -470,7 +470,7 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
     except ValueError:
         user_id = UUID(_FALLBACK_USER_ID)
 
-    # 1. Local RAG retrieval (multi-query + conditional HyDE + child→parent)
+    # 1. Local RAG retrieval (multi-query + conditional HyDE + childâ†’parent)
     retrieval_ok = False
     try:
         result = await rag_service.query(
@@ -482,7 +482,7 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
         citations = [c.model_dump() for c in result.citations]
         retrieval_ok = True
     except Exception as exc:
-        # Retrieval infrastructure unavailable → treat as no grounding and
+        # Retrieval infrastructure unavailable â†’ treat as no grounding and
         # fall through to CRAG web search instead of failing the whole turn.
         logger.warning("critic_retrieval_failed_falling_back_to_web", error=str(exc))
         result = None
@@ -500,7 +500,7 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
     )
     crag_correction: dict[str, Any] | None = None
     if not retrieval_ok:
-        # Vector store unreachable → keep the CRAG fallback (regression guard).
+        # Vector store unreachable â†’ keep the CRAG fallback (regression guard).
         verdict, score = VERDICT_UNRELATED, 0.0
         needs_web_search = True
     elif not getattr(result, "citations", None):
@@ -511,7 +511,7 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
         verdict, score = retrieval_critique_service.grade(result.citations)
         needs_web_search = verdict in ("insufficient", "unrelated") or wants_recency
 
-        # ── CRAG corrective retrieval (bounded re-retrieve before web fallback) ─
+        # â”€â”€ CRAG corrective retrieval (bounded re-retrieve before web fallback) â”€
         # When the initial grade is "insufficient" (weak but present grounding)
         # and the user is not asking for fresh/current data, run one corrective
         # local re-query with a refined query variant. Only if that still fails
@@ -689,7 +689,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     else:
         augmented_prompt = last_user_content
 
-    # ── Multimodal Vision Path ───────────────────────────────────────────────
+    # â”€â”€ Multimodal Vision Path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if is_vision:
         if isinstance(last_user_raw, list):
             augmented_content = []
@@ -715,7 +715,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     else:
         final_messages.append({"role": "user", "content": augmented_prompt})
 
-        # ── Critic-driven self-refinement loop (bounded) ───────────────────────
+        # â”€â”€ Critic-driven self-refinement loop (bounded) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         task_type = state.get("task_type", "general")
         max_revisions = int(getattr(settings, "CRITIC_MAX_REVISIONS", 2)) if task_type in ("code", "research") else 0
         revision_count = int(state.get("revision_count", 0))
@@ -749,7 +749,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
                 feedback = str(critique.get("critique", ""))[:2000]
                 draft_prompt = (
                     f"{draft_prompt}\n\n"
-                    f"[Critic Feedback — revise the draft, addressing every point raised]:\n{feedback}"
+                    f"[Critic Feedback â€” revise the draft, addressing every point raised]:\n{feedback}"
                 )
                 revisions_used += 1
             else:
@@ -758,7 +758,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
 
     revision_count = revision_count + revisions_used
 
-    # ── Guardrail on the final draft (input guardrail parity on output) ─────────
+    # â”€â”€ Guardrail on the final draft (input guardrail parity on output) â”€â”€â”€â”€â”€â”€â”€â”€â”€
     from backend.app.services.evaluation.guardrail_service import (
         guardrail_service as gs,
     )
@@ -769,7 +769,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("output_guardrail_skipped", error=str(exc))
 
-    # ── Grounding verification via the Evidence Gate against used sources ───────
+    # â”€â”€ Grounding verification via the Evidence Gate against used sources â”€â”€â”€â”€â”€â”€â”€
     evidence_gate_result = {"passed_gate": False, "confidence_score": 0.0, "citations": [], "reason": ""}
     raw_citations = state.get("citations", [])
     evidence_contexts: list[str] = []
@@ -798,8 +798,8 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("evidence_gate_evaluation_failed", error=str(exc))
 
-    # ── Calibrated confidence gate (record-only, fail-open) ───────────────────
-    # The gate never rewrites or blocks a draft — it records a decision
+    # â”€â”€ Calibrated confidence gate (record-only, fail-open) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # The gate never rewrites or blocks a draft â€” it records a decision
     # (answer / hedge) any upstream consumer or admin surface can act on.
     confidence_decision: dict[str, Any] = {
         "confidence": 0.0,
@@ -830,7 +830,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("confidence_gate_skipped", error=str(exc))
 
-    # ── Save new memories from this exchange via mem0 (background, non-blocking) ──
+    # â”€â”€ Save new memories from this exchange via mem0 (background, non-blocking) â”€â”€
     if user_id:
         exchange = [
             {"role": "user", "content": last_user_content},
@@ -843,10 +843,10 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
                 metadata={"conversation_id": state.get("conversation_id", "")},
             )
         except Exception as exc:
-            # Memory saving is best-effort — never fail the main response
+            # Memory saving is best-effort â€” never fail the main response
             logger.warning("mem0_save_failed_non_blocking", error=str(exc))
 
-    # Guard: never emit an empty AIMessage — LangGraph/litellm raise
+    # Guard: never emit an empty AIMessage â€” LangGraph/litellm raise
     # "model output must contain either output text or tool calls" when
     # content is None or empty string.  Provide a safe fallback instead.
     if not response_text or not response_text.strip():

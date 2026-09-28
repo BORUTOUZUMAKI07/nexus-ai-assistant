@@ -232,6 +232,39 @@ def resolve_provider_model(model: str) -> str:
     return model
 
 
+# The only TTS engine this codebase ships, and the only container edge-tts can
+# emit. Both were declared as settings (TTS_MODEL, TTS_FORMAT) and read by
+# nothing, so pointing them at anything else was silently a no-op.
+_TTS_ENGINES = {"edge-tts"}
+_TTS_MEDIA_TYPES = {"mp3": "audio/mpeg"}
+
+
+def tts_media_type() -> str:
+    """Validate the configured TTS engine/format and return the HTTP media type.
+
+    edge-tts streams a single fixed encoding (24 kHz, 48 kbit/s, mono MP3) and
+    offers no model selection, so these two settings cannot in fact steer the
+    output. What they can do is be checked: rather than accept a value and
+    quietly ignore it, an unsupported engine or format is rejected with a
+    message naming the supported ones. That is the difference between a
+    misconfiguration that is visible and one that is not.
+    """
+    engine = (settings.TTS_MODEL or "").strip().lower()
+    fmt = (settings.TTS_FORMAT or "").strip().lower().lstrip(".")
+
+    if engine not in _TTS_ENGINES:
+        raise ValueError(
+            f"TTS_MODEL={settings.TTS_MODEL!r} is not a supported TTS engine. "
+            f"Supported: {', '.join(sorted(_TTS_ENGINES))}."
+        )
+    if fmt not in _TTS_MEDIA_TYPES:
+        raise ValueError(
+            f"TTS_FORMAT={settings.TTS_FORMAT!r} is not a format edge-tts can "
+            f"produce. Supported: {', '.join(sorted(_TTS_MEDIA_TYPES))}."
+        )
+    return _TTS_MEDIA_TYPES[fmt]
+
+
 # Initialize LiteLLM Router with 3 Specialized Fallback Tiers.
 router = Router(
     model_list=model_list,
@@ -536,9 +569,13 @@ class LiteLLMService:
         edge-tts voice id (default settings.TTS_VOICE). The `model` argument
         is accepted for API compatibility and ignored; the response is still
         a raw MP3 byte string so the /audio/speech endpoint contract holds.
+
+        The configured TTS engine and format are validated first, so a bad
+        TTS_MODEL/TTS_FORMAT surfaces here instead of being ignored.
         """
         import edge_tts
 
+        tts_media_type()
         voice_id = voice or settings.TTS_VOICE
         try:
             communicate = edge_tts.Communicate(text, voice=voice_id)

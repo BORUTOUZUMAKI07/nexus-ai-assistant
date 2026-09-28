@@ -8,14 +8,26 @@ from typing import Any
 
 import litellm
 import structlog
+from backend.app.core.config import settings
 from backend.app.services.rag.base import IChunker
 
 logger = structlog.get_logger(__name__)
 
-# Defaults from settings (imported lazily inside methods to keep import-time light)
-PARENT_TOKEN_TARGET = 512
-CHILD_TOKEN_TARGET = 128
-CHILD_OVERLAP_TOKENS = 32
+# Chunk geometry, resolved from settings so it is actually tunable.
+#
+# These used to be bare literals 512 / 128 / 32 sitting under a comment that
+# claimed they were "defaults from settings". They were not: CHUNK_SIZE,
+# PARENT_CHUNK_SIZE, CHILD_CHUNK_SIZE and CHILD_CHUNK_OVERLAP were all
+# configurable in config.py and read nowhere, so retuning chunking meant editing
+# this file and redeploying. The defaults are unchanged, so existing
+# documents chunk exactly as they did before.
+#
+# `backend.app.core.config` has no service-layer imports, so importing settings
+# here cannot create a cycle — and retrieval.py and retrieval_guard.py in this
+# same package already import it at module level.
+PARENT_TOKEN_TARGET: int = settings.PARENT_CHUNK_SIZE
+CHILD_TOKEN_TARGET: int = settings.CHILD_CHUNK_SIZE
+CHILD_OVERLAP_TOKENS: int = settings.CHILD_CHUNK_OVERLAP
 
 
 class DocumentChunk:
@@ -55,9 +67,17 @@ class ChunkingService(IChunker):
     Preserves heading hierarchies and context spans.
     """
 
-    def __init__(self, max_tokens: int = 512, overlap_tokens: int = 64):
-        self.max_tokens = max_tokens
-        self.overlap_tokens = overlap_tokens
+    def __init__(
+        self,
+        max_tokens: int | None = None,
+        overlap_tokens: int | None = None,
+    ):
+        # Configurable, with the previous literals as the effective defaults.
+        # An explicit argument still wins, so callers and tests can override.
+        self.max_tokens = settings.CHUNK_SIZE if max_tokens is None else max_tokens
+        self.overlap_tokens = (
+            settings.CHUNK_OVERLAP if overlap_tokens is None else overlap_tokens
+        )
 
     def count_tokens(self, text: str) -> int:
         try:
@@ -260,8 +280,3 @@ class ChunkingService(IChunker):
 
 # Singleton instance for backwards-compatibility
 chunking_service = ChunkingService()
-
-
-def get_chunker() -> IChunker:
-    """Dependency provider returning the active IChunker implementation."""
-    return chunking_service

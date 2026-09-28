@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 import structlog
+from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
 from backend.app.services.tools.code_execution import code_executor
 
@@ -45,7 +46,7 @@ class CoderSubagent:
             # 1. Generate code
             response = await ai_client.completion(
                 messages=messages,
-                model="llama-3.1-8b-instant",
+                model=settings.FAST_MODEL,
                 temperature=0.1,
                 max_tokens=1024,
             )
