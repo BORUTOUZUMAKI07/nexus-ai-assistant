@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Field, SQLModel
 
@@ -19,14 +20,22 @@ class PromptOptimizationRun(SQLModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True, index=True)
     prompt_key: str = Field(index=True)  # e.g. chat_system_prompt, researcher
-    baseline_prompt: str = Field(default="")
+    # Text, not AutoString: these hold whole prompts, which are unbounded. The
+    # explicit type also matches the migrated column, so autogenerate stays
+    # quiet instead of proposing a table rewrite to VARCHAR.
+    baseline_prompt: str = Field(default="", sa_column=Column(Text, nullable=False))
     status: str = Field(default="running")  # running | completed | failed
     candidate_count: int = Field(default=0)
-    accepted_variant: str | None = Field(default=None)  # prompt text or "baseline"
+    # Either the winning prompt text, or the literal "baseline" if none won.
+    accepted_variant: str | None = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
     baseline_score: float = Field(default=0.0)
     best_score: float = Field(default=0.0)
     average_score: float = Field(default=0.0)
-    details: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
+    details: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC).replace(tzinfo=None), index=True
     )

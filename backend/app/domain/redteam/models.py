@@ -20,7 +20,9 @@ class RedTeamRun(SQLModel, table=True):
     total_probes: int = Field(default=0)
     blocked_probes: int = Field(default=0)
     defense_rate: float = Field(default=0.0)  # 0..1
-    report: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
+    report: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC).replace(tzinfo=None), index=True
     )

@@ -2,14 +2,30 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Float, Text
+from sqlalchemy import Float, Index, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlmodel import Column, Field, SQLModel
 
 
 class User(SQLModel, table=True):
     __tablename__ = "users"
-    __table_args__ = {"extend_existing": True}
+    # The partial unique index is declared here (not only in the migration) so
+    # Alembic's autogenerate sees it as part of the intended schema. Without
+    # this, autogenerate treats any index it cannot find in the metadata as
+    # extraneous and emits a DROP for it — quietly un-enforcing the one-IdP-
+    # account-per-user rule.
+    __table_args__ = (
+        Index(
+            "uq_users_oauth_identity",
+            "oauth_provider",
+            "oauth_sub",
+            unique=True,
+            postgresql_where=text(
+                "oauth_provider IS NOT NULL AND oauth_sub IS NOT NULL"
+            ),
+        ),
+        {"extend_existing": True},
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     email: str = Field(unique=True, index=True, nullable=False)

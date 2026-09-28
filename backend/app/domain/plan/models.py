@@ -10,6 +10,7 @@ in ``backend/app/services/plan_service.py``.
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Field, SQLModel
 
@@ -24,11 +25,17 @@ class Plan(SQLModel, table=True):
     )
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True, nullable=False)
     title: str = Field(default="Plan", nullable=False)
-    summary: str | None = Field(default=None, description="One-paragraph plan rationale")
+    # summary: one-paragraph plan rationale.
+    # Declared as Text (not the default AutoString) to match the column these
+    # were migrated with, and because a plan rationale is unbounded prose.
+    # Keeping model and column in agreement means Alembic never proposes
+    # rewriting the table to VARCHAR.
+    summary: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     steps: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
     status: str = Field(default="pending", description="pending | approved | rejected")
+    # decision_reason: rejection reason, or any human note on the decision.
     decision_reason: str | None = Field(
-        default=None, description="Rejection reason, or any human note on the decision"
+        default=None, sa_column=Column(Text, nullable=True)
     )
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None))
