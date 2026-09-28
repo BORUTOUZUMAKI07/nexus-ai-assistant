@@ -55,7 +55,18 @@ async def test_create_and_list_own_template(client, user_auth_headers):
 
     listing = await client.get("/api/v1/prompts/templates", headers=user_auth_headers)
     assert listing.status_code == 200
-    assert [t["title"] for t in listing.json()] == ["Code Reviewer"]
+    # Not `== ["Code Reviewer"]`: this listing returns the caller's own templates
+    # *plus every public template* (see test_public_templates_are_shared_private_are_not),
+    # and the suite shares one database, so another test's public template is
+    # legitimately in the result depending on the order tests run in. Comparing
+    # the whole list for equality made this test pass only when it happened to run
+    # first. Assert the property the test is named for instead: the template just
+    # created is listed once, with the fields it was stored with.
+    rows = [t for t in listing.json() if t["title"] == "Code Reviewer"]
+    assert len(rows) == 1, f"expected exactly one 'Code Reviewer', got {listing.json()}"
+    assert rows[0]["version"] == 1
+    assert rows[0]["category"] == "engineering"
+    assert rows[0]["input_variables"] == ["language"]
 
 
 @pytest.mark.asyncio
