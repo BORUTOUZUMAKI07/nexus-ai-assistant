@@ -76,7 +76,9 @@ def _stub_mcp_discovery(monkeypatch):
 def _stub_tool_gateway(monkeypatch):
     """Canned tool execution result (no network/sandbox)."""
 
-    async def _execute(*, tool_name, arguments, user_id, is_user_approved=False):
+    async def _execute(
+        *, tool_name, arguments, user_id, org_id=None, is_user_approved=False
+    ):
         return {
             "status": "completed",
             "tool_name": tool_name,

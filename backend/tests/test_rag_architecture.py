@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from backend.app.core.config import settings
 from backend.app.domain.file.schemas import RAGCitation, RAGQueryResult
 from backend.app.services.rag.base import IReranker, IRetriever, IRewriter
 from backend.app.services.rag.chunking import DocumentChunk, chunking_service
@@ -385,10 +386,28 @@ async def test_retrieve_multi_merges_and_caps_top_k(monkeypatch):
         return [{"id": query, "score": 0.7, "payload": {"chunk_index": 0, "content": query}}]
 
     monkeypatch.setattr(RetrievalService, "retrieve", fake_retrieve)
+
+    # retrieve_multi embeds the primary query itself for MMR. Faking only
+    # ``retrieve`` left that as a live call to the Gemini embeddings endpoint,
+    # so this "unit" test needed network access, a valid key, and quota headroom
+    # -- and failed with a 429 from a third party when the quota ran out.
+    embedded: list = []
+
+    async def fake_embedding(self, texts, *args, **kwargs):
+        embedded.append(texts)
+        count_ = len(texts) if isinstance(texts, list) else 1
+        return [[0.1] * settings.EMBEDDING_DIMENSION for _ in range(count_)]
+
+    monkeypatch.setattr(RetrievalService, "generate_embedding", fake_embedding)
+
     results = await svc.retrieve_multi(
         queries=["a", "b", "c"], user_id=uuid.uuid4(), top_k=2
     )
     assert len(results) == 2  # capped to top_k after merging three queries
+    # Pinned deliberately: without this the stub could be deleted and the test
+    # would still pass via the local FastEmbed fallback, re-introducing a live
+    # network call that only fails once a third party's quota runs out.
+    assert embedded, "generate_embedding was not stubbed; this test hit the embedding provider"
 
 
 # ─── 7. RAGService wiring (rewriter → multi-query → rerank → citations) ───────
