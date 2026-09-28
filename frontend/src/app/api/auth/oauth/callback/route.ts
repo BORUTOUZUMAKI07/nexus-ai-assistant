@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
     if (data.refresh_token) {
       response.cookies.set(REFRESH_COOKIE, String(data.refresh_token), {
         ...cookieOptions,
-        maxAge: REFRESH_TOKEN_MAX_AGE,
+        maxAge: Number(data.refresh_expires_in) || REFRESH_TOKEN_MAX_AGE,
       });
     }
     return response;

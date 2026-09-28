@@ -16,8 +16,14 @@ export const TOKEN_COOKIE = "nexus_access_token";
 export const REFRESH_COOKIE = "nexus_refresh_token";
 export const SESSION_EXPIRED_EVENT = "nexus:session-expired";
 
-export const ACCESS_TOKEN_MAX_AGE = 60 * 60 * 24 * 7; // seconds (matches backend default)
-export const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 7; // seconds
+// Fallback cookie lifetimes, used only when the backend response omits the
+// corresponding `expires_in` / `refresh_expires_in`. They mirror the backend
+// defaults (ACCESS_TOKEN_EXPIRE_MINUTES=60, REFRESH_TOKEN_EXPIRE_DAYS=30) and
+// were previously 7 days for BOTH cookies, which meant a cookie could outlive
+// its own token by up to 6 days — the browser kept presenting a refresh cookie
+// the backend had already expired, turning a clean expiry into a 401 loop.
+export const ACCESS_TOKEN_MAX_AGE = 60 * 60; // 1 hour
+export const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
 // Cookie attributes shared by the auth route handlers. httpOnly + Secure keep
 // the JWTs out of document.cookie.

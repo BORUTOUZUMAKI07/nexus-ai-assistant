@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import structlog
+from backend.app.core.config import settings
 from backend.app.domain.user.repository import UserRepository
 from backend.app.domain.user.models import UserSettings
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -40,7 +41,9 @@ class TwoFactorService:
         if not PYOTP_AVAILABLE or not secret:
             return False
         totp = pyotp.TOTP(secret)
-        return totp.verify(code, valid_window=1)
+        # Read the drift tolerance from settings — it used to be hardcoded to 1
+        # here, which silently ignored TOTP_VALID_WINDOW entirely.
+        return totp.verify(code, valid_window=settings.TOTP_VALID_WINDOW)
 
     async def is_enabled(self, user_id: UUID) -> bool:
         settings_row = await self._settings(user_id)
@@ -66,7 +69,9 @@ class TwoFactorService:
         self.session.add(settings_row)
         await self.session.commit()
         await self.session.refresh(settings_row)
-        uri = pyotp.TOTP(secret).provisioning_uri(name=email, issuer_name="Nexus AI Assistant")
+        uri = pyotp.TOTP(secret).provisioning_uri(
+            name=email, issuer_name=settings.TOTP_ISSUER
+        )
         logger.info("two_factor_setup_pending", user_id=str(user_id))
         return {"secret": secret, "otpauth_uri": uri}
 

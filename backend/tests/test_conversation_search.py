@@ -1,6 +1,7 @@
 """
 Unit tests for owner-scoped conversation search (title + message body matching).
 """
+import asyncio
 from uuid import uuid4
 
 from backend.app.domain.conversation.models import Conversation, Message
@@ -53,12 +54,23 @@ def _service(user_a, user_b):
     return svc
 
 
+def _await(coro):
+    # Sync test driving a coroutine directly. pytest-asyncio tears the current
+    # loop down after each async test, so get_event_loop() raises once one has
+    # run. Re-establish a loop instead of depending on collection order.
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
 def test_search_matches_title_only_for_owner():
     user_a, user_b = uuid4(), uuid4()
     svc = _service(user_a, user_b)
-    import asyncio
 
-    hits = asyncio.get_event_loop().run_until_complete(
+    hits = _await(
         svc.search_conversations(user_a, "quantum", limit=20)
     )
     ids = {str(c.id) for c in hits}
@@ -70,9 +82,8 @@ def test_search_matches_title_only_for_owner():
 def test_search_matches_message_body():
     user_a, user_b = uuid4(), uuid4()
     svc = _service(user_a, user_b)
-    import asyncio
 
-    hits = asyncio.get_event_loop().run_until_complete(
+    hits = _await(
         svc.search_conversations(user_a, "Amsterdam", limit=20)
     )
     assert len(hits) == 1
@@ -82,9 +93,8 @@ def test_search_matches_message_body():
 def test_search_does_not_cross_users():
     user_a, user_b = uuid4(), uuid4()
     svc = _service(user_a, user_b)
-    import asyncio
 
-    hits = asyncio.get_event_loop().run_until_complete(
+    hits = _await(
         svc.search_conversations(user_a, "draft", limit=20)
     )
     # user B's title is the only "draft" match -> user A sees nothing

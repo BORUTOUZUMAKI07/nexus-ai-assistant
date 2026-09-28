@@ -35,7 +35,8 @@ class RedisService(ICacheService):
         """Atomically write ``key`` only if it does not exist (SETNX + TTL).
 
         Returns True when the write succeeded (key was absent), False when the
-        key is already present. Used for single-use refresh-token guards.
+        key is already present. Used for single-use refresh-token guards and
+        the resilience guards in ``infrastructure.resilience.guards``.
         """
         return bool(await self.client.set(key, value, nx=True, ex=ttl_seconds))
 

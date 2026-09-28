@@ -20,6 +20,12 @@ class User(SQLModel, table=True):
     is_active: bool = Field(default=True)
     is_verified: bool = Field(default=False)
     role: str = Field(default="user", description="user | admin | moderator")
+    # SSO linkage. ``oauth_sub`` is the provider's stable per-account identifier
+    # (OIDC ``sub``) and is the ONLY trustworthy join key: an email claim can be
+    # reassigned or recycled by the provider, a subject id cannot. The pair
+    # (provider, sub) is unique so one IdP account maps to exactly one user.
+    oauth_provider: str | None = Field(default=None, index=True)
+    oauth_sub: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None))
 

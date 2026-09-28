@@ -21,6 +21,20 @@ class ICacheService(ABC):
         pass
 
     @abstractmethod
+    async def set_if_absent(self, key: str, value: str, ttl_seconds: int) -> bool:
+        """Atomically write ``key`` only when it does not already exist.
+
+        Returns True when the write won the race, False when the key was
+        already present. This is the primitive behind every "exactly once"
+        decision in the app — single-use refresh tokens (AuthService.refresh)
+        and the resilience circuit-breaker / rate-limit guards
+        (infrastructure.resilience.guards) — all call it through the
+        ``ICacheService`` seam, so it must be part of the interface rather than
+        an implementation detail of ``RedisService``.
+        """
+        pass
+
+    @abstractmethod
     async def delete(self, key: str) -> int:
         """Delete a key from cache."""
         pass

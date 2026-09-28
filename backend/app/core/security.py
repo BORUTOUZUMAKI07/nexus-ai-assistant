@@ -137,9 +137,3 @@ def decrypt_api_key(encrypted_key: str) -> str:
     ciphertext = combined[12:]
     decrypted_bytes = aesgcm.decrypt(nonce, ciphertext, None)
     return decrypted_bytes.decode()
-
-
-# CSRF Double-Submit Token
-def generate_csrf_token() -> str:
-    """Generates a cryptographically random CSRF token."""
-    return secrets.token_urlsafe(32)

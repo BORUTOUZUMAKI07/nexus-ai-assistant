@@ -41,7 +41,9 @@ export async function POST(request: NextRequest) {
       if (data.refresh_token) {
         response.cookies.set(REFRESH_COOKIE, data.refresh_token, {
           ...cookieOptions,
-          maxAge: REFRESH_TOKEN_MAX_AGE,
+          // The rotated token gets the backend's own lifetime, so the sliding
+          // window stays in lockstep with the JWT instead of drifting.
+          maxAge: data.refresh_expires_in ?? REFRESH_TOKEN_MAX_AGE,
         });
       }
     }

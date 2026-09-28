@@ -82,7 +82,16 @@ def _make_service(
 
 
 def _await(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # These tests are sync but drive coroutines directly. Once pytest-asyncio has
+    # run an async test it tears the current loop down, so get_event_loop()
+    # raises in later sync tests. Re-establish one rather than depending on
+    # collection order.
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 def _s256_challenge(verifier: str) -> str:
@@ -280,6 +289,103 @@ def test_sso_requires_subject():
     svc = AuthService(fake)
     with pytest.raises(AuthenticationError, match="identity"):
         _await(svc.sso_login(_identity(subject="")))
+
+
+def test_complete_login_rejects_missing_email_verified_claim():
+    """A provider that simply omits ``email_verified`` must be rejected.
+
+    Accepting a missing claim silently grants full trust to any IdP that does
+    not bother to assert verification — the exact shape of the GitHub /user
+    response, where ``email_verified`` is often absent while the address is
+    user-supplied and unverified.
+    """
+    async def no_claim(token):
+        return {"sub": "s1", "email": "unverified@nexus.ai"}  # no email_verified
+
+    svc = _make_service(fetcher=no_claim)
+    _, state = _await(svc.create_authorization_url())
+
+    with pytest.raises(AuthenticationError, match="not verified"):
+        _await(svc.complete_login("auth-code-1", state))
+
+
+def test_complete_login_accepts_stringified_true_claim():
+    """Some providers serialise booleans as strings; "true" still counts."""
+    async def string_claim(token):
+        return {"sub": "s1", "email": "ok@nexus.ai", "email_verified": "true"}
+
+    svc = _make_service(fetcher=string_claim)
+    _, state = _await(svc.create_authorization_url())
+
+    identity = _await(svc.complete_login("auth-code-1", state))
+    assert identity.email_verified is True
+
+
+def test_sso_login_rejects_unverified_identity():
+    """Defence in depth: sso_login itself refuses an unverified identity.
+
+    ``OAuthService`` already gates this, so the only way to get here is a caller
+    that skipped that gate — the check must not be reachable-around.
+    """
+    fake = FakeSession()
+    svc = AuthService(fake)
+    with pytest.raises(AuthenticationError, match="not verified"):
+        _await(svc.sso_login(_identity(email_verified=False)))
+    assert fake.rows.get(User, []) == []  # nothing provisioned
+
+
+def test_sso_binds_existing_account_to_provider_subject():
+    """First SSO login for a password account records the provider linkage."""
+    fake = FakeSession()
+    user = User(email="sso@nexus.ai", username="sso", is_verified=True)
+    fake.seed(User, [user])
+    svc = AuthService(fake)
+
+    _await(svc.sso_login(_identity()))
+
+    assert user.oauth_provider == "oidc"
+    assert user.oauth_sub == "idp-subject-123"
+    assert len(fake.rows.get(User, [])) == 1  # adopted, not duplicated
+
+
+def test_sso_resolves_by_subject_when_provider_reassigns_email():
+    """The subject id — not the email — is the authoritative join key.
+
+    The IdP reports a *different* address for the same account (address
+    recycled at the provider, or a corporate rename). Login must still resolve
+    to the already-linked user, and must NOT provision a second account for the
+    new address. Under the old email-only lookup this silently created a
+    duplicate or hijacked whichever account owned that address.
+    """
+    fake = FakeSession()
+    linked = User(
+        email="old-address@nexus.ai",
+        username="linked",
+        is_verified=True,
+        oauth_provider="oidc",
+        oauth_sub="idp-subject-123",
+    )
+    fake.seed(User, [linked])
+    svc = AuthService(fake)
+
+    result = _await(svc.sso_login(_identity(email="reassigned@nexus.ai")))
+
+    assert isinstance(result, TokenResponse)
+    # Exactly one account, and the linked one — no duplicate for the new email.
+    assert len(fake.rows.get(User, [])) == 1
+    assert linked.email == "old-address@nexus.ai"  # we never rewrite it
+
+
+def test_sso_new_account_stores_provider_identity():
+    """A provisioned SSO account records the subject that created it."""
+    fake = FakeSession()
+    svc = AuthService(fake)
+
+    _await(svc.sso_login(_identity()))
+
+    user = fake.rows.get(User, [])[0]
+    assert user.oauth_provider == "oidc"
+    assert user.oauth_sub == "idp-subject-123"
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────

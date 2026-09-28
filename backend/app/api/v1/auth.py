@@ -206,10 +206,16 @@ async def two_factor_disable(
 
 @router.post("/2fa/verify", response_model=TokenResponse)
 async def two_factor_verify(
+    request: Request,
     body: TwoFactorVerifyRequest,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
     """Exchange a preauth challenge + valid TOTP code for the real token pair."""
+    # A TOTP code is 6 digits and pyotp accepts a +/-1 step window, so only a
+    # few codes are valid at any instant. Without this limit the endpoint is an
+    # unthrottled oracle: an attacker holding a stolen preauth token could grind
+    # codes until one lands.
+    await _enforce_auth_rate_limit(request, action="2fa_verify", limit=10)
     try:
         return await auth_svc.verify_2fa(body.preauth_token, body.code)
     except AuthenticationError as exc:
@@ -290,12 +296,17 @@ async def oauth_login(
 
 @router.post("/oauth/callback", response_model=TokenResponse | TwoFactorChallengeResponse)
 async def oauth_callback(
+    request: Request,
     body: OAuthCallbackRequest,
     auth_svc: AuthService = Depends(get_auth_service),
     oauth_svc: OAuthService = Depends(get_oauth_service),
 ):
     if not oauth_svc.enabled:
         raise HTTPException(status_code=404, detail="OAuth single sign-on is not configured.")
+    # The callback mints a full session, so it needs the same per-IP ceiling as
+    # password login — otherwise the IdP leg is a cheaper way to hammer the
+    # provisioning path.
+    await _enforce_auth_rate_limit(request, action="oauth_callback", limit=20)
     try:
         identity = await oauth_svc.complete_login(body.code, body.state)
         return await auth_svc.sso_login(identity)

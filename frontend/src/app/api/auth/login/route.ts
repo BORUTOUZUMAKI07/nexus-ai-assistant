@@ -49,7 +49,9 @@ export async function POST(req: NextRequest) {
       if (data.refresh_token) {
         response.cookies.set(REFRESH_COOKIE, data.refresh_token, {
           ...cookieOptions,
-          maxAge: REFRESH_TOKEN_MAX_AGE,
+          // Authoritative lifetime comes from the backend; the constant is only
+          // a fallback so the cookie never outlives the token inside it.
+          maxAge: data.refresh_expires_in ?? REFRESH_TOKEN_MAX_AGE,
         });
       }
     }
