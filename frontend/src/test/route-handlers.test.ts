@@ -19,6 +19,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { readdirSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
+import {
+  ACCESS_TOKEN_MAX_AGE,
+  REFRESH_COOKIE,
+  REFRESH_TOKEN_MAX_AGE,
+  TOKEN_COOKIE,
+} from "@/lib/auth"
 
 // Capture what each relay forwards instead of performing a real fetch.
 const backendFetch = vi.fn()
@@ -634,5 +640,126 @@ describe("proxyJson propagates backend status instead of flattening it", () => {
     // Everything else must still authenticate, or the app sees the user as
     // anonymous on every request except login.
     expect(seen[2].get("Authorization")).toBe("Bearer stale-token")
+  })
+})
+
+/**
+ * A cookie that outlives the token inside it is the failure mode that matters
+ * here: the browser keeps presenting a credential the backend has already
+ * expired, so a clean session expiry turns into a 401 loop instead. That bug
+ * shipped once -- both auth cookies were given 7 days regardless of the token --
+ * and nothing in the suite asserted the cookie lifetimes at all, so it could
+ * have come back unnoticed. These tests pin the contract.
+ */
+describe("auth cookie lifetimes follow the tokens they carry", () => {
+  // The proxyJson describe above calls vi.doUnmock("@/lib/proxy") to test the
+  // real helper, and nothing put the mock back. Any describe declared after it
+  // therefore ran against the *real* proxy, which tries a real fetch and yields
+  // a 503. Re-establish both mocks here so these tests do not depend on where
+  // they sit in the file.
+  beforeEach(() => {
+    vi.resetModules()
+    vi.doMock("@/lib/proxy", () => ({
+      backendFetch: (...args: unknown[]) => backendFetch(...args),
+      proxyJson: (...args: unknown[]) => proxyJson(...args),
+    }))
+    vi.doMock("next/headers", () => ({ cookies: async () => cookieStore() }))
+    backendFetch.mockImplementation(async () => fakeBackendResponse())
+  })
+
+  /**
+   * The Max-Age, in seconds, that a Set-Cookie header asks the browser for.
+   *
+   * Read from Next's own cookie store rather than the raw header: the standard
+   * Headers.getSetCookie() is empty under this jsdom setup, and the store is
+   * what Next serialises from anyway. The header is still parsed as a fallback
+   * so the test keeps working if that ever changes.
+   */
+  function maxAgeOf(res: Response, name: string): number {
+    const viaStore = (res as unknown as {
+      cookies?: { get: (n: string) => { maxAge?: number } | null }
+    }).cookies?.get(name)
+    if (viaStore && typeof viaStore.maxAge === "number") return viaStore.maxAge
+
+    const all = [
+      ...(res.headers.getSetCookie?.() ?? []),
+      res.headers.get("set-cookie") ?? "",
+    ]
+    const hit = all.find((h) => h && h.startsWith(`${name}=`))
+    if (!hit) throw new Error(`no Set-Cookie for ${name} in ${JSON.stringify(all)}`)
+    const m = /Max-Age=(\d+)/i.exec(hit)
+    if (!m) throw new Error(`Set-Cookie for ${name} carries no Max-Age: ${hit}`)
+    return Number(m[1])
+  }
+
+  const routeFile = (route: string) => ROUTES.find((r) => r.route === route)?.file
+
+  it("login gives each cookie exactly the lifetime the backend advertised", async () => {
+    const mod = await loadRoute(routeFile("/api/auth/login")!)
+    // 1h access, 30d refresh: deliberately different, which is the whole point.
+    backendFetch.mockImplementation(async () =>
+      fakeBackendResponse(200, {
+        access_token: "at",
+        refresh_token: "rt",
+        expires_in: 3600,
+        refresh_expires_in: 2592000,
+      }),
+    )
+
+    const res = await mod.POST!(
+      nextRequest("/api/auth/login"),
+      routeContext("/api/auth/login"),
+    )
+
+    expect(res.status).toBe(200)
+    expect(maxAgeOf(res, TOKEN_COOKIE)).toBe(3600)
+    expect(maxAgeOf(res, REFRESH_COOKIE)).toBe(2592000)
+  })
+
+  it("refresh re-bakes both cookies from the rotated tokens' own lifetimes", async () => {
+    const mod = await loadRoute(routeFile("/api/auth/refresh")!)
+    backendFetch.mockImplementation(async () =>
+      fakeBackendResponse(200, {
+        access_token: "at2",
+        refresh_token: "rt2",
+        expires_in: 1800,
+        refresh_expires_in: 1209600,
+      }),
+    )
+
+    const res = await mod.POST!(
+      nextRequest("/api/auth/refresh"),
+      routeContext("/api/auth/refresh"),
+    )
+
+    expect(res.status).toBe(200)
+    expect(maxAgeOf(res, TOKEN_COOKIE)).toBe(1800)
+    expect(maxAgeOf(res, REFRESH_COOKIE)).toBe(1209600)
+  })
+
+  it("falls back to the documented lifetimes when the backend omits them", async () => {
+    const mod = await loadRoute(routeFile("/api/auth/login")!)
+    backendFetch.mockImplementation(async () =>
+      fakeBackendResponse(200, { access_token: "at", refresh_token: "rt" }),
+    )
+
+    const res = await mod.POST!(
+      nextRequest("/api/auth/login"),
+      routeContext("/api/auth/login"),
+    )
+
+    expect(maxAgeOf(res, TOKEN_COOKIE)).toBe(ACCESS_TOKEN_MAX_AGE)
+    expect(maxAgeOf(res, REFRESH_COOKIE)).toBe(REFRESH_TOKEN_MAX_AGE)
+  })
+
+  it("keeps the fallbacks in step with the backend token defaults", () => {
+    // Mirrors ACCESS_TOKEN_EXPIRE_MINUTES=60 and REFRESH_TOKEN_EXPIRE_DAYS=30 in
+    // backend/app/core/config.py. If either side changes, this fails rather than
+    // leaving the cookie quietly outliving its token.
+    expect(ACCESS_TOKEN_MAX_AGE).toBe(60 * 60)
+    expect(REFRESH_TOKEN_MAX_AGE).toBe(30 * 24 * 60 * 60)
+    // The original bug was these two being equal, which let the access cookie
+    // outlive its own token by the whole refresh window.
+    expect(ACCESS_TOKEN_MAX_AGE).toBeLessThan(REFRESH_TOKEN_MAX_AGE)
   })
 })
