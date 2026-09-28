@@ -73,7 +73,6 @@ def test_search_matches_title_only_for_owner():
     hits = _await(
         svc.search_conversations(user_a, "quantum", limit=20)
     )
-    ids = {str(c.id) for c in hits}
     # title match, but the other user's "quantum"-containing message must not leak
     assert any("Quantum computing" in c.title for c in hits)
     assert all(c.user_id == user_a for c in hits)

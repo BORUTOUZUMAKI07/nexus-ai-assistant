@@ -13,7 +13,6 @@ verdicts come from a seeded registry snapshot (same technique as test_hooks).
 import uuid
 
 import pytest
-
 from backend.app.services.tools.hook_registry import hook_registry
 from backend.app.services.tools.tool_gateway import tool_gateway
 

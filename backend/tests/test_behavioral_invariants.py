@@ -6,9 +6,10 @@ Three test categories from Chip Huyen's evaluation framework:
   2. Directional  — scores must move the right way when input quality changes
   3. Min-function — critical safety / ARQ paths must always fire correctly
 """
+from uuid import uuid4
+
 import pytest
 from langchain_core.messages import HumanMessage
-from uuid import uuid4
 
 
 def _state(**overrides):
@@ -45,8 +46,8 @@ async def test_route_invariant_to_name(monkeypatch):
 # ── 2. DIRECTIONAL ────────────────────────────────────────────────────────────
 
 def test_grader_score_higher_with_better_evidence():
-    from backend.app.services.rag.critique import retrieval_critique_service
     from backend.app.domain.file.schemas import RAGCitation
+    from backend.app.services.rag.critique import retrieval_critique_service
 
     def _c(txt, sc):
         return RAGCitation(file_id=uuid4(), filename="t.pdf",
@@ -155,9 +156,16 @@ def test_salience_no_query_vector():
 async def test_planner_skips_llm_for_chat(monkeypatch):
     from backend.app.agents.orchestrator import nodes
     calls = []
-    async def _c(*a, **k): calls.append(1); return "DIRECT"
+
+    async def _c(*a, **k):
+        calls.append(1)
+        return "DIRECT"
+
     monkeypatch.setattr(nodes.ai_client, "completion", _c)
-    async def _bm(*_a, **_k): return ""
+
+    async def _bm(*_a, **_k):
+        return ""
+
     monkeypatch.setattr(nodes.long_term_memory, "build_memory_context_block", _bm)
     r = await nodes.planner_node(_state(messages=[HumanMessage(content="Hi!")]))
     assert r["plan"] is None

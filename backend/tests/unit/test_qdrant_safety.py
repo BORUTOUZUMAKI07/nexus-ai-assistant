@@ -2,7 +2,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
 from backend.app.infrastructure.vector.qdrant_client import QdrantService
 
 

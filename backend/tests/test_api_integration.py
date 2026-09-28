@@ -1,8 +1,8 @@
 """
 Integration tests for FastAPI application endpoints, RAG chunking, and memory service.
 """
-import pytest
 import backend.app.main as main_module
+import pytest
 from backend.app.main import app
 from backend.app.services.rag.chunking import chunking_service
 from httpx import ASGITransport, AsyncClient

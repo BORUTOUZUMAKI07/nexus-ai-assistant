@@ -15,8 +15,8 @@ from backend.app.domain.user.schemas import (
     TokenResponse,
     TwoFactorChallengeResponse,
 )
-from backend.app.services.two_factor_service import TwoFactorService
 from backend.app.services.auth_service import AuthService
+from backend.app.services.two_factor_service import TwoFactorService
 
 
 def _await(coro):

@@ -1,7 +1,6 @@
 from unittest.mock import AsyncMock
 
 import pytest
-
 from backend.app.infrastructure.cache.redis_client import RedisService
 
 
