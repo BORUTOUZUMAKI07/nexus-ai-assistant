@@ -29,6 +29,20 @@ class UserRepository(BaseRepository[User]):
         result = await self.session.exec(statement)
         return result.first()
 
+    async def get_by_oauth_identity(self, provider: str, subject: str) -> User | None:
+        """Look a user up by the IdP's stable subject id.
+
+        This is the authoritative SSO join key. Email is deliberately NOT part
+        of the predicate: matching on it would let anyone who controls a
+        recycled or reassigned address inherit an existing account.
+        """
+        statement = select(User).where(
+            User.oauth_provider == provider,
+            User.oauth_sub == subject,
+        )
+        result = await self.session.exec(statement)
+        return result.first()
+
     async def create(self, user_in) -> User:
         db_user = User(
             email=user_in.email.lower().strip(),

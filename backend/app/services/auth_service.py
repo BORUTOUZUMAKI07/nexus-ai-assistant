@@ -36,6 +36,12 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
 
+# Presence of this key means "every refresh token for this user is revoked".
+# Unlike the per-jti ``refresh:used:`` marker (which only blocks the one token
+# that was replayed), this cascades: one replayed token locks out sibling
+# sessions too, which is what turns a silent theft into a detectable event.
+_REFRESH_REVOKED_PREFIX = "refresh:revoked:"
+
 
 class AuthService:
     """
@@ -141,21 +147,38 @@ class AuthService:
             refresh_token=refresh_token,
             token_type="bearer",  # nosec B106
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            refresh_expires_in=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         )
 
     async def sso_login(self, identity: OAuthIdentity) -> TokenResponse | TwoFactorChallengeResponse:
-        """Sign a user in via a verified OIDC identity (find-or-provision by email).
+        """Sign a user in via a verified OIDC identity.
 
-        The IdP verifying the email is a precondition of ``OAuthService``, so a
-        provisioned account is born verified. Existing accounts get their
-        ``is_verified`` flag lifted. TOTP-enabled accounts receive the same
-        ``2fa_required`` preauth challenge as password login.
+        Identity resolution order is deliberate: the IdP's stable subject id is
+        the authoritative key, and the email is only a first-time linking
+        fallback. Once linked, later logins resolve by subject alone, so a
+        provider that later reassigns or recycles an address can never hand the
+        address to a different person who would then inherit the account.
+        TOTP-enabled accounts receive the same ``2fa_required`` preauth
+        challenge as password login.
         """
         email = (identity.email or "").lower().strip()
         if not email or not identity.subject:
             raise AuthenticationError("OAuth provider returned an unusable identity.")
+        if not identity.email_verified:
+            # Defence in depth. ``OAuthService.complete_login`` already fails
+            # closed on an unverified email claim, so arriving here with False
+            # means this method was handed an identity that bypassed that gate.
+            raise AuthenticationError("Provider has not verified this email.")
 
-        user = await self._repo.get_by_email(email)
+        user = await self._repo.get_by_oauth_identity(identity.provider, identity.subject)
+        if user is None:
+            # First time this IdP identity is seen: fall back to the email to
+            # find a pre-existing (password) account to adopt.
+            user = await self._repo.get_by_email(email)
+            if user is not None and user.oauth_sub is None:
+                user.oauth_provider = identity.provider
+                user.oauth_sub = identity.subject
+                await self._repo.update(user, {})
         if user is None:
             user = await self._provision_oauth_user(identity, email)
         elif not user.is_active:
@@ -187,7 +210,11 @@ class AuthService:
             hashed_password=None,  # SSO accounts have no password
             full_name=identity.name,
             avatar_url=identity.picture,
+            # The caller has already established email_verified, so the
+            # provisioned account is born trusted.
             is_verified=True,
+            oauth_provider=identity.provider,
+            oauth_sub=identity.subject,
         )
         self._session.add(user)
         await self._session.commit()
@@ -275,6 +302,11 @@ class AuthService:
         user.hashed_password = get_password_hash(new_password)
         user.is_verified = True
         await self._repo.update(user, {})
+        # A reset is a credential change: cut every existing refresh session so
+        # a token captured before the reset cannot outlive it. Otherwise an
+        # attacker holding a refresh token keeps access for the full
+        # REFRESH_TOKEN_EXPIRE_DAYS window even after the owner resets.
+        await self._revoke_refresh_family(user.id)
         logger.info("password_reset_completed", user_id=str(user_id))
         return user
 
@@ -287,7 +319,13 @@ class AuthService:
             raise AuthenticationError("Invalid token subject.")
 
     async def refresh(self, refresh_token_str: str) -> TokenResponse:
-        """Issue a new access token from a valid, single-use refresh token."""
+        """Issue a new access token from a valid, single-use refresh token.
+
+        Presenting the same token twice is a replay. With
+        ``REFRESH_REVOKE_ON_REUSE`` on (the default) a replay revokes the user's
+        whole refresh-token family, so a captured token cannot be redeemed to
+        establish a session that quietly outlives the legitimate one.
+        """
         payload = decode_token(refresh_token_str)
         if payload.get("type") != "refresh":
             raise AuthenticationError("Invalid or expired refresh token.")
@@ -296,15 +334,6 @@ class AuthService:
         if not jti:
             raise AuthenticationError("Invalid refresh token.")
 
-        # Single-use guard: mark this refresh token jti as consumed in Redis.
-        # If it was already redeemed, refuse the exchange (reuse detection).
-        ttl_seconds = max(1, int(payload["exp"]) - int(time.time()))
-        first_use = await get_cache_service().set_if_absent(
-            f"refresh:used:{jti}", "1", ttl_seconds=ttl_seconds
-        )
-        if not first_use:
-            raise AuthenticationError("Refresh token has already been used.")
-
         sub_str = payload.get("sub")
         if not sub_str:
             raise AuthenticationError("Invalid token subject.")
@@ -312,6 +341,23 @@ class AuthService:
             user_id = UUID(str(sub_str))
         except (ValueError, TypeError):
             raise AuthenticationError("Invalid user ID in token.")
+
+        if await self._is_refresh_family_revoked(user_id):
+            raise AuthenticationError("Session has been revoked. Please sign in again.")
+
+        # Single-use guard: mark this refresh token jti as consumed in Redis.
+        # If it was already redeemed, refuse the exchange (reuse detection).
+        ttl_seconds = max(1, int(payload["exp"]) - int(time.time()))
+        first_use = await get_cache_service().set_if_absent(
+            f"refresh:used:{jti}", "1", ttl_seconds=ttl_seconds
+        )
+        if not first_use:
+            # Replay of an already-redeemed token. Assume the token leaked and
+            # cut every refresh session this user holds; the next legitimate
+            # sign-in mints a fresh family.
+            if settings.REFRESH_REVOKE_ON_REUSE:
+                await self._revoke_refresh_family(user_id)
+            raise AuthenticationError("Refresh token has already been used.")
 
         user = await self._repo.get_by_id(user_id)
         if not user or not user.is_active:
@@ -328,7 +374,43 @@ class AuthService:
             refresh_token=new_refresh,
             token_type="bearer",  # nosec B106
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            refresh_expires_in=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         )
+
+    async def _revoke_refresh_family(self, user_id: UUID) -> None:
+        """Revoke every refresh token for a user for the refresh-token lifetime.
+
+        Best-effort: if the cache is unreachable the marker is simply not
+        written, so the replayed token still hits its own single-use rejection
+        but sibling sessions survive. Never raises.
+        """
+        try:
+            await get_cache_service().set(
+                f"{_REFRESH_REVOKED_PREFIX}{user_id}",
+                "1",
+                ttl_seconds=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "refresh_family_revoke_failed",
+                user_id=str(user_id),
+                error=type(exc).__name__,
+            )
+
+    async def _is_refresh_family_revoked(self, user_id: UUID) -> bool:
+        """Whether this user's refresh family was revoked. Fails open."""
+        try:
+            return bool(
+                await get_cache_service().get(f"{_REFRESH_REVOKED_PREFIX}{user_id}")
+            )
+        except Exception as exc:
+            # Fail open: an offline cache must never lock every user out.
+            logger.warning(
+                "refresh_family_check_failed",
+                user_id=str(user_id),
+                error=type(exc).__name__,
+            )
+            return False
 
     async def revoke_refresh_token(self, refresh_token_str: str) -> None:
         """Revoke a refresh token by recording its jti in Redis until its expiration."""

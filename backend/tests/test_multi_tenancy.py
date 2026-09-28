@@ -25,7 +25,15 @@ from fastapi import Request, Response
 def _await(coro):
     import asyncio
 
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # pytest-asyncio tears the current loop down after each async test, so once
+    # one has run get_event_loop() raises here. Re-establish a loop instead of
+    # depending on collection order.
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 def _user(email="member@example.com") -> User:

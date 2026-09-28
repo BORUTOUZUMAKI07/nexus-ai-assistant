@@ -25,6 +25,11 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int
+    # Lifetime of the refresh token, in seconds. The Next.js route handlers use
+    # this to set the httpOnly refresh cookie's maxAge so the cookie always
+    # expires exactly when the token inside it does — a cookie that outlives its
+    # token advertises a session the backend no longer honours.
+    refresh_expires_in: int | None = None
 
 
 class TokenRefresh(BaseModel):

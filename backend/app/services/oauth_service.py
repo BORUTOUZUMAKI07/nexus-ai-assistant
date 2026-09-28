@@ -39,6 +39,22 @@ CodeExchanger = Callable[[str, str], Awaitable[dict[str, Any]]]
 UserinfoFetcher = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
+def _claim_is_true(value: Any) -> bool:
+    """Strictly interpret an OIDC boolean claim.
+
+    Only an explicit affirmative counts. ``None``/missing, ``False``, ``0`` and
+    the empty string are all treated as "not verified" — the safe default for a
+    claim whose absence must never be read as consent. Some providers serialise
+    booleans as the strings ``"true"``/``"false"``, so the exact string ``"true"``
+    (any case) is honoured as well.
+    """
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return False
+
+
 @dataclass(frozen=True)
 class OAuthIdentity:
     """Verified identity lifted from an OIDC userinfo response."""
@@ -192,21 +208,26 @@ class OAuthService:
         email = str(userinfo.get("email") or "").lower().strip()
         if not subject or not email:
             raise AuthenticationError("Provider did not return a usable identity.")
-        if userinfo.get("email_verified") is False:
-            # Never auto-create an account for a provider that could not verify
-            # the email (account-takeover prevention).
+        if not _claim_is_true(userinfo.get("email_verified")):
+            # Fail closed on anything other than an explicit affirmative.
+            # Accepting a *missing* email_verified claim (as this did before)
+            # hands a fully trusted account to any provider that simply omits
+            # the field — GitHub's /user endpoint is a live example — which is
+            # a direct account-takeover path once the account can also be
+            # matched by email. An unverified or silent provider must fail the
+            # login, not provision a user.
             raise AuthenticationError("Provider has not verified this email.")
 
         logger.info(
             "oauth_identity_verified",
             provider=self._provider,
-            email_verified=bool(userinfo.get("email_verified")),
+            email_verified=True,
         )
         return OAuthIdentity(
             provider=self._provider,
             subject=subject,
             email=email,
-            email_verified=bool(userinfo.get("email_verified")),
+            email_verified=True,
             name=userinfo.get("name") or userinfo.get("preferred_username"),
             picture=userinfo.get("picture"),
         )

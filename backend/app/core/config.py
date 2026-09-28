@@ -50,6 +50,13 @@ class Settings(BaseSettings):
 
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=30)
+    # When a refresh token is presented twice (replay), revoke *every* refresh
+    # token for that user for the remainder of the refresh-token lifetime
+    # instead of only refusing the replayed one. Turns a silent token theft
+    # into a visible, recoverable event (the user must sign in again) and stops
+    # the attacker from riding a parallel session. Set False to keep the
+    # previous per-token-only behaviour.
+    REFRESH_REVOKE_ON_REUSE: bool = Field(default=True)
 
     # ── OAuth / OIDC SSO (Authorization Code + PKCE) ─────────────────────────
     # Generic OpenID Connect client (Google, GitHub, Azure AD, Keycloak…).
