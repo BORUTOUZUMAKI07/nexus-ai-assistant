@@ -13,6 +13,9 @@ import {
   Sparkles,
   LogOut,
   GitFork,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 
 export interface ConversationItem {
@@ -30,6 +33,11 @@ interface SidebarProps {
   onNewChat: () => void;
   onDeleteConversation: (id: string, e: React.MouseEvent) => void;
   onForkConversation?: (id: string, e: React.MouseEvent) => void;
+  /**
+   * Persists a new title. Optional so a caller that does not allow renaming can
+   * omit it and the pencil button is not rendered.
+   */
+  onRenameConversation?: (id: string, title: string) => Promise<void> | void;
   activeTab: "chat" | "files" | "settings" | "usage" | "admin";
   setActiveTab: (tab: "chat" | "files" | "settings" | "usage" | "admin") => void;
   currentModel: string;
@@ -52,6 +60,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNewChat,
   onDeleteConversation,
   onForkConversation,
+  onRenameConversation,
   activeTab,
   setActiveTab,
   currentModel,
@@ -67,6 +76,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const pinnedList = conversations.filter((c) => c.is_pinned);
   const recentList = conversations.filter((c) => !c.is_pinned);
+
+  // Inline rename state. `editingId` tracks which row is in edit mode and
+  // `editingTitle` holds the in-progress text, so a rename never round-trips
+  // through the server until the user commits it.
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = React.useState("");
+
+  const beginRename = (c: ConversationItem) => {
+    setEditingId(c.id);
+    setEditingTitle(c.title);
+  };
+
+  const cancelRename = () => {
+    setEditingId(null);
+    setEditingTitle("");
+  };
+
+  const commitRename = async (c: ConversationItem) => {
+    const next = editingTitle.trim();
+    // Reset the editor first: a rejected save should still leave the row
+    // editable rather than stuck in a mode the user cannot get out of.
+    cancelRename();
+    if (!next || next === c.title) return;
+    try {
+      await onRenameConversation?.(c.id, next);
+    } catch {
+      // The parent re-throws only to surface a toast; the list is reloaded
+      // from the server on failure so the title snaps back.
+    }
+  };
 
   const navItems: NavItem[] = [
     { tab: "files", label: "Knowledge", Icon: FileText },
@@ -89,9 +128,70 @@ export const Sidebar: React.FC<SidebarProps> = ({
     >
       <div className="flex items-center gap-2 truncate">
         <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-70" />
-        <span className="truncate">{c.title}</span>
+        {editingId === c.id ? (
+          <input
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            aria-label={`Rename ${c.title}`}
+            value={editingTitle}
+            onChange={(e) => setEditingTitle(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onBlur={() => void commitRename(c)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void commitRename(c);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancelRename();
+              }
+            }}
+            maxLength={200}
+            className="w-full bg-[var(--bg-surface)] border border-[var(--accent)] rounded px-1.5 py-0.5 text-xs text-white outline-none"
+          />
+        ) : (
+          <span className="truncate">{c.title}</span>
+        )}
       </div>
       <div className="flex items-center gap-1">
+        {editingId === c.id ? (
+          <>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                void commitRename(c);
+              }}
+              title="Save name"
+              className="text-[var(--accent)] p-0.5"
+            >
+              <Check className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                cancelRename();
+              }}
+              title="Cancel rename"
+              className="text-[var(--text-faint)] hover:text-white p-0.5"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </>
+        ) : (
+          <>
+        {onRenameConversation && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              beginRename(c);
+            }}
+            title="Rename conversation"
+            aria-label={`Rename ${c.title}`}
+            className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent)] p-0.5 transition-opacity"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+        )}
         {onForkConversation && (
           <button
             onClick={(e) => onForkConversation(c.id, e)}
@@ -108,6 +208,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <Trash2 className="w-3.5 h-3.5" />
         </button>
+          </>
+        )}
       </div>
     </div>
   );
