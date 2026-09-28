@@ -12,6 +12,8 @@ import {
 } from "@/components/ChatArea";
 import { ChatInput, SendMessageOptions } from "@/components/ChatInput";
 import { ArtifactCanvas, ArtifactItem } from "@/components/ArtifactCanvas";
+import PlanHistory from "@/components/PlanHistory";
+import SavedArtifacts from "@/components/SavedArtifacts";
 import { CitationInspector } from "@/components/CitationInspector";
 import { KnowledgeView } from "@/components/KnowledgeView";
 import { UsageView } from "@/components/UsageView";
@@ -31,6 +33,9 @@ import {
   rejectPlan,
   createArtifact,
   deleteArtifact,
+  fetchArtifacts,
+  addArtifactVersion,
+  fetchPlans,
   PlanItem as APIPlanItem,
   ConversationMessage,
   CurrentUser,
@@ -114,6 +119,12 @@ export default function AppPage() {
   const [pendingPlan, setPendingPlan] = useState<PlanReviewItem | null>(null);
   const [pendingPlanTask, setPendingPlanTask] = useState("");
   const [planBusy, setPlanBusy] = useState(false);
+  // Every plan drafted for the active conversation, newest first. Distinct from
+  // `pendingPlan`, which only holds the single card awaiting a decision — that
+  // card is cleared on approve or reject, so without this the conversation kept
+  // no record of what it had actually agreed to run, and a reload lost it
+  // entirely.
+  const [planHistory, setPlanHistory] = useState<APIPlanItem[]>([]);
 
   const handleOpenArtifact = (artifact: ArtifactItem) => {
     setActiveArtifact(artifact);
@@ -229,6 +240,67 @@ export default function AppPage() {
     },
     [setMessages]
   );
+
+  // Load the conversation's saved artifacts.
+  //
+  // Without this the artifact list only ever contained what was opened in the
+  // current page session: a reload produced an empty switcher even though the
+  // rows were still in the database, so a saved artifact was effectively lost
+  // to the user until they found the conversation that produced it. This
+  // restores them the same way loadHistory restores messages, keyed on the
+  // active conversation so switching chats swaps the set.
+  const loadArtifacts = useCallback(async (convId: string) => {
+    try {
+      const list = await fetchArtifacts(convId);
+      // Mark each row as the active version. The server has no such field —
+      // ArtifactResponse carries only `version` — and the canvas uses the flag
+      // to decide between the "Persisted version N • saved" badge and the
+      // "Snapshot of version N" one. The list endpoint returns each artifact's
+      // current version, so without setting it here every reloaded artifact
+      // would be mislabelled as a mere snapshot of a version it actually is.
+      setAllArtifacts(
+        Array.isArray(list) ? list.map((a) => ({ ...a, isActiveVersion: true })) : []
+      );
+    } catch (err) {
+      // A failure here is not fatal — the canvas still works for new artifacts,
+      // it just cannot show what was saved before. Do not clear on error, so a
+      // transient network error does not wipe artifacts already in state.
+      console.warn("Failed to load artifacts:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!mounted || isAuthOpen || !activeConversationId) return;
+    void loadArtifacts(activeConversationId);
+  }, [mounted, isAuthOpen, activeConversationId, loadArtifacts]);
+
+  // Load the conversation's plan history. Without it the plan-then-approve
+  // contract was write-only from the UI's point of view: plans were drafted,
+  // approved and rejected, and the only trace left afterwards was the agent run
+  // itself — there was no way to see which plan had been agreed to.
+  const loadPlans = useCallback(async (convId: string) => {
+    try {
+      const list = await fetchPlans(convId);
+      setPlanHistory(Array.isArray(list) ? list : []);
+    } catch (err) {
+      // Non-fatal: the pending-plan card and the approval flow are unaffected.
+      console.warn("Failed to load plan history:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!mounted || isAuthOpen || !activeConversationId) return;
+    void loadPlans(activeConversationId);
+  }, [mounted, isAuthOpen, activeConversationId, loadPlans]);
+
+  // Signing out must not leave another user's artifacts or plans in memory.
+  useEffect(() => {
+    if (isAuthOpen) {
+      setAllArtifacts([]);
+      setActiveArtifact(null);
+      setPlanHistory([]);
+    }
+  }, [isAuthOpen]);
 
   const handleNewChat = useCallback(() => {
     createConversation({
@@ -355,6 +427,9 @@ export default function AppPage() {
     try {
       const plan = await createPlan(convId, content.trim());
       setPendingPlan(mapPlan(plan));
+      // Pull the new draft into history immediately, so the list reflects the
+      // pending decision without waiting for a reload.
+      void loadPlans(convId);
     } catch (err) {
       console.warn("Plan draft failed:", err);
     } finally {
@@ -369,6 +444,9 @@ export default function AppPage() {
       await approvePlan(plan.id);
       setPendingPlan(null);
       const convId = activeConversationId;
+      // Re-read so the history row flips to "approved" rather than staying
+      // "pending" until the conversation is reloaded.
+      if (convId) void loadPlans(convId);
       if (convId && pendingPlanTask) {
         await chat.sendMessage(pendingPlanTask, {
           conversationId: convId,
@@ -389,6 +467,7 @@ export default function AppPage() {
     try {
       await rejectPlan(plan.id, "Rejected in UI");
       setPendingPlan(null);
+      if (activeConversationId) void loadPlans(activeConversationId);
     } catch (err) {
       console.warn("Plan rejection failed:", err);
     } finally {
@@ -402,13 +481,32 @@ export default function AppPage() {
   };
 
   const handleSaveArtifact = async (artifact: ArtifactItem) => {
+    // `version` is only present on an artifact the server has already stored.
+    //
+    // NOTE: as of writing this branch is unreachable from the UI. The only
+    // caller is ChatArea's Save button, which is handed an item built by
+    // extractArtifact() from the message id and never carries a version, and
+    // ArtifactCanvas has no edit-or-save affordance at all. So every save today
+    // is a first save.
+    //
+    // It is kept because it is the correct handling of the two cases and costs
+    // nothing: the moment a saved artifact can be edited, a single
+    // unconditional createArtifact would POST to /artifacts and leave a second
+    // row for the same document instead of recording a new version. Delete this
+    // branch only together with a decision to stop supporting versioning.
+    const isPersisted = artifact.version !== undefined;
     try {
-      const saved = await createArtifact({
-        title: artifact.title,
-        content: artifact.content,
-        language: artifact.language,
-        conversation_id: activeConversationId || null,
-      });
+      const saved = isPersisted
+        ? await addArtifactVersion(artifact.id, artifact.content, {
+            title: artifact.title,
+            language: artifact.language,
+          })
+        : await createArtifact({
+            title: artifact.title,
+            content: artifact.content,
+            language: artifact.language,
+            conversation_id: activeConversationId || null,
+          });
       const persisted: ArtifactItem = {
         ...artifact,
         id: saved.id,
@@ -416,7 +514,9 @@ export default function AppPage() {
         isActiveVersion: true,
       };
       setAllArtifacts((prev) =>
-        prev.map((a) => (a.id === artifact.id ? persisted : a))
+        isPersisted
+          ? prev.map((a) => (a.id === artifact.id ? persisted : a))
+          : [...prev.filter((a) => a.id !== artifact.id), persisted]
       );
       setActiveArtifact((prev) =>
         prev && prev.id === artifact.id ? persisted : prev
@@ -607,13 +707,14 @@ export default function AppPage() {
                   planBusy={planBusy}
                 />
               )}
+              <SavedArtifacts artifacts={allArtifacts} onOpen={handleOpenArtifact} />
+              <PlanHistory plans={planHistory} />
               <ChatInput
                 onSendMessage={handleSendMessage}
                 isLoading={chat.isLoading}
                 onStop={handleStop}
               />
             </div>
-
             {/* Dual-Pane Artifact Canvas */}
             {activeArtifact && (
               <ArtifactCanvas

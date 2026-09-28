@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   X,
   Copy,
@@ -12,7 +12,10 @@ import {
   Minimize2,
   FileCode,
   Trash2,
+  History,
+  CornerUpLeft,
 } from "lucide-react";
+import { fetchArtifact, type ArtifactVersionItem } from "@/lib/api";
 
 export interface ArtifactItem {
   id: string;
@@ -48,6 +51,12 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Version history for the active artifact, loaded on demand. null = not
+  // loaded / not applicable; [] = loaded and genuinely has no history.
+  const [versions, setVersions] = useState<ArtifactVersionItem[] | null>(null);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  // When set, the code view shows this past version instead of the live one.
+  const [viewingVersion, setViewingVersion] = useState<ArtifactVersionItem | null>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
 
   // Keyboard shortcut Ctrl+F / Cmd+F for find in file
@@ -71,10 +80,42 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   const allArtifacts = artifacts && artifacts.length > 0 ? artifacts : artifact ? [artifact] : [];
   const activeArtifact = artifact;
 
+  // Reset per-artifact state and load history when the open artifact changes.
+  // Only persisted artifacts have history; a transient canvas item has no id
+  // on the server, so requesting it would just 404.
+  useEffect(() => {
+    setViewingVersion(null);
+    setVersions(null);
+    if (!activeArtifact || activeArtifact.version === undefined) return;
+
+    let cancelled = false;
+    setVersionsLoading(true);
+    fetchArtifact(activeArtifact.id)
+      .then((detail) => {
+        if (cancelled) return;
+        setVersions(Array.isArray(detail.versions) ? detail.versions : []);
+      })
+      .catch(() => {
+        // Version history is supplementary — failing to load it must not break
+        // the canvas itself.
+        if (!cancelled) setVersions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setVersionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeArtifact?.id, activeArtifact?.version]);
+
   if (!activeArtifact) return null;
 
+  // The content actually shown: a selected past version, or the live one.
+  const displayContent = viewingVersion ? viewingVersion.content : activeArtifact.content;
+  const displayTitle = viewingVersion ? `${activeArtifact.title} (v${viewingVersion.version})` : activeArtifact.title;
+
   const handleCopy = () => {
-    navigator.clipboard.writeText(activeArtifact.content);
+    navigator.clipboard.writeText(displayContent);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -99,7 +140,9 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
     };
     const ext = extMap[activeArtifact.language.toLowerCase()] || "txt";
     const filename = `${activeArtifact.title.replace(/[^a-zA-Z0-9_-]/g, "_")}.${ext}`;
-    const blob = new Blob([activeArtifact.content], { type: "text/plain;charset=utf-8" });
+    // Downloads what is on screen, so downloading while previewing an old
+    // version gives you that version rather than silently the latest.
+    const blob = new Blob([displayContent], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -108,7 +151,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  const lines = activeArtifact.content.split("\n");
+  const lines = displayContent.split("\n");
   // Highlight lines matching search query
   const lowerSearch = searchQuery.toLowerCase();
   const matchCount = searchQuery
@@ -151,7 +194,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
           </div>
           <div className="min-w-0">
             <h3 className="text-xs font-semibold text-white truncate">
-              {activeArtifact.title}
+              {displayTitle}
             </h3>
             <span className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
               {activeArtifact.language} • {lines.length} lines
@@ -259,6 +302,90 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
         </div>
       </div>
 
+      {/* Return-to-current banner while previewing an earlier version */}
+      {viewingVersion && (
+        <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-[var(--accent)]/30 bg-[var(--accent-soft)] text-[11px] text-[var(--accent)]">
+          <span>
+            Viewing version {viewingVersion.version} — this is not the current version.
+          </span>
+          <button
+            onClick={() => setViewingVersion(null)}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-[var(--accent)]/40 hover:bg-[var(--accent)]/10 transition-colors"
+          >
+            <CornerUpLeft className="w-3 h-3" />
+            Back to current
+          </button>
+        </div>
+      )}
+
+      {/* Version history. The backend stored every version and the header already
+          reported the current number, but nothing ever listed them, so the history
+          was unreachable from the UI. */}
+      {activeArtifact.version !== undefined && !viewingVersion && (
+        <details className="border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]">
+          <summary className="flex cursor-pointer items-center gap-1.5 px-3 py-1.5 text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)] select-none hover:text-[var(--text-secondary)]">
+            <History className="w-3 h-3" />
+            <span>Version history</span>
+            {versionsLoading && <span className="normal-case tracking-normal">loading…</span>}
+            {!versionsLoading && versions !== null && (
+              <span className="normal-case tracking-normal">({versions.length})</span>
+            )}
+          </summary>
+
+          {!versionsLoading && versions !== null && versions.length > 0 && (
+            <ul className="max-h-40 overflow-y-auto border-t border-[var(--border-subtle)]">
+              {versions
+                .slice()
+                .sort((a, b) => b.version - a.version)
+                .map((v) => (
+                  <li
+                    key={v.id}
+                    className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-[var(--border-subtle)] last:border-b-0 text-[11px]"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={`font-mono font-semibold ${
+                          v.version === activeArtifact.version
+                            ? "text-[var(--accent)]"
+                            : "text-[var(--text-secondary)]"
+                        }`}
+                      >
+                        v{v.version}
+                      </span>
+                      <span className="ml-2 text-[var(--text-faint)]">
+                        {new Date(v.created_at).toLocaleString(undefined, {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })}
+                      </span>
+                      {v.title && v.title !== activeArtifact.title && (
+                        <span className="ml-2 text-[var(--text-faint)] truncate">"{v.title}"</span>
+                      )}
+                    </span>
+                    {v.version !== activeArtifact.version && (
+                      <button
+                        onClick={() => setViewingVersion(v)}
+                        title={`View version ${v.version}`}
+                        aria-label={`View version ${v.version}`}
+                        className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-white hover:border-[var(--border-strong)] transition-colors"
+                      >
+                        <Eye className="w-3 h-3" />
+                        View
+                      </button>
+                    )}
+                  </li>
+                ))}
+            </ul>
+          )}
+
+          {!versionsLoading && versions !== null && versions.length === 0 && (
+            <p className="px-3 py-2 border-t border-[var(--border-subtle)] text-[11px] text-[var(--text-faint)]">
+              No earlier versions recorded.
+            </p>
+          )}
+        </details>
+      )}
+
       {/* Find in File bar */}
       {showSearch && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)]">
@@ -312,7 +439,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
           </div>
         ) : (
           <div className="prose-nexus text-sm text-[var(--text-primary)] whitespace-pre-wrap font-sans leading-relaxed">
-            {activeArtifact.content}
+            {displayContent}
           </div>
         )}
       </div>

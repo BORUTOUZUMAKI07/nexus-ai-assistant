@@ -212,8 +212,28 @@ class Settings(BaseSettings):
     LOG_LEVEL: str | None = None
 
     # ── Rate Limiting ──────────────────────────────────────────────────────────
+    # Size of the sliding-window token bucket, per (scope, tenant), enforced in
+    # infrastructure/resilience/rate_limit.py via a Redis Lua script.
+    #
+    # Note it fails OPEN: if Redis is unreachable the limiter allows the request
+    # rather than rejecting it, so this is a cost control, not an availability
+    # control, and it will not protect the backend from a flood during a cache
+    # outage. The outage is counted as nexus_requests_total{operation=
+    # "redis_fail_open"} for that reason.
     RATE_LIMIT_PER_MINUTE: int = Field(default=100)
-    RATE_LIMIT_STREAM_COST: int = Field(default=5)
+    #
+    # A companion cap on *spend* per streaming response used to sit here as
+    # RATE_LIMIT_STREAM_COST. It was removed rather than wired: spend-based
+    # limiting has never been implemented anywhere in this codebase — there is
+    # no per-response cost accumulator, only the per-minute request counter
+    # above — so it was a setting for a feature that did not exist.
+    #
+    # Reinstating it means a real feature, not a wire: a Redis float counter
+    # keyed per tenant, incremented as usage is recorded and checked alongside
+    # the request limit. It would also need its own window setting, since this
+    # one was per-minute-denominated and cost is not. It is intentionally not
+    # added back on a speculative basis, to keep the invariant that every
+    # field in this class is actually read by the application.
 
     # ── PII Redaction ──────────────────────────────────────────────────────────
     # When True, a structlog processor scrubs emails, phone numbers, SSNs,
