@@ -15,11 +15,6 @@ class UserCreate(BaseModel):
     full_name: str | None = Field(default=None, max_length=100)
 
 
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=1, max_length=128)
-
-
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -90,14 +85,6 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str = Field(min_length=8)
-
-
-class UserUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    full_name: str | None = Field(default=None, max_length=100)
-    avatar_url: str | None = Field(default=None, max_length=2048)
-    password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 class UserResponse(BaseModel):

@@ -5,13 +5,13 @@ and Dynamic Skill & Memory Injection.
 """
 import hashlib
 import json
+from pathlib import Path
 
 import structlog
 from backend.app.core.config import settings
 from backend.app.domain.prompt.models import Skill
 from backend.app.domain.user.models import UserMemory
 from backend.app.infrastructure.cache.cag_service import cag_service
-from pathlib import Path
 
 logger = structlog.get_logger(__name__)
 

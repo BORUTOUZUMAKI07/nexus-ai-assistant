@@ -9,9 +9,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import structlog
-from backend.app.core.config import settings
 from backend.app.domain.conversation.models import Conversation, Message
-from backend.app.domain.conversation.repository import ConversationRepository
 from backend.app.domain.share.models import ConversationShare
 from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession

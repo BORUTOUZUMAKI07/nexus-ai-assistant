@@ -17,10 +17,9 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 import structlog
+from backend.app.core.config import settings
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
-
-from backend.app.core.config import settings
 
 try:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver

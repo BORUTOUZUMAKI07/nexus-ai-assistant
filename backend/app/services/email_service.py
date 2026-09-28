@@ -10,13 +10,11 @@ Supports three channels, in priority order:
 Never raises: delivery problems degrade to the dev sink with a logged warning.
 """
 import asyncio
-import logging
 from email.message import EmailMessage
-from smtplib import SMTPAuthenticationError, SMTPException, SMTP_SSL, SMTP
+from smtplib import SMTP, SMTP_SSL, SMTPAuthenticationError, SMTPException
 
 import httpx
 import structlog
-
 from backend.app.core.config import settings
 
 logger = structlog.get_logger(__name__)
