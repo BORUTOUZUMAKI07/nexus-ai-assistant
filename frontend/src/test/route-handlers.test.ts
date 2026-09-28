@@ -229,15 +229,24 @@ describe("route handler inventory", () => {
     expect(ROUTES.length).toBeGreaterThan(30)
   })
 
-  it("every route exports at least one HTTP method", async () => {
-    const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
-    const bad: string[] = []
-    for (const { route, file } of ROUTES) {
-      const mod = await loadRoute(file)
-      if (!methods.some((m) => typeof mod[m] === "function")) bad.push(route)
-    }
-    expect(bad).toEqual([])
-  })
+  // Explicit timeout: loadRoute() calls vi.resetModules() so each route picks up
+  // a fresh proxyJson, which means this loop re-evaluates all 43 route modules
+  // from scratch. That is inherent to the mock isolation, not incidental, and it
+  // blows past the 5s default when the rest of the suite is running in parallel.
+  // 30s still fails a genuine hang.
+  it(
+    "every route exports at least one HTTP method",
+    async () => {
+      const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+      const bad: string[] = []
+      for (const { route, file } of ROUTES) {
+        const mod = await loadRoute(file)
+        if (!methods.some((m) => typeof mod[m] === "function")) bad.push(route)
+      }
+      expect(bad).toEqual([])
+    },
+    30_000,
+  )
 
   it("the exception table only names routes that actually exist", () => {
     // An entry left behind by a renamed route would make the table a lie.
