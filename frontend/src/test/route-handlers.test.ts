@@ -80,6 +80,27 @@ async function loadRoute(file: string): Promise<RouteModule> {
 }
 
 /**
+ * Load a route module once and reuse it, for checks that only inspect what the
+ * module *exports* rather than what its handlers do.
+ *
+ * loadRoute() has to call vi.resetModules() so each test picks up a fresh
+ * proxyJson, which means every call re-evaluates the route from scratch. That
+ * isolation is the point for the forwarding tests, but it is pure cost for a
+ * question like "does this file export a GET?". A module's export shape does
+ * not depend on what proxyJson is mocked to, so a cached module answers it
+ * just as correctly -- and does not push the test past the 5s default.
+ */
+const staticModules = new Map<string, Promise<RouteModule>>()
+function loadRouteStatic(file: string): Promise<RouteModule> {
+  let mod = staticModules.get(file)
+  if (!mod) {
+    mod = import(/* @vite-ignore */ file) as Promise<RouteModule>
+    staticModules.set(file, mod)
+  }
+  return mod
+}
+
+/**
  * A stand-in NextRequest. The handlers use more than .json() -- some construct
  * `new URL(req.url)` to read query params, some read headers to derive cookie
  * flags, some take multipart uploads -- so a bare { json } object throws
@@ -229,24 +250,19 @@ describe("route handler inventory", () => {
     expect(ROUTES.length).toBeGreaterThan(30)
   })
 
-  // Explicit timeout: loadRoute() calls vi.resetModules() so each route picks up
-  // a fresh proxyJson, which means this loop re-evaluates all 43 route modules
-  // from scratch. That is inherent to the mock isolation, not incidental, and it
-  // blows past the 5s default when the rest of the suite is running in parallel.
-  // 30s still fails a genuine hang.
-  it(
-    "every route exports at least one HTTP method",
-    async () => {
-      const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
-      const bad: string[] = []
-      for (const { route, file } of ROUTES) {
-        const mod = await loadRoute(file)
-        if (!methods.some((m) => typeof mod[m] === "function")) bad.push(route)
-      }
-      expect(bad).toEqual([])
-    },
-    30_000,
-  )
+  it("every route exports at least one HTTP method", async () => {
+    const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+    // Concurrently, not in a sequential await loop: each import is independent
+    // and async, so awaiting them one at a time serialises 43 module loads for
+    // no reason. This is the one test in the suite that imports every route, so
+    // it is also the one that blows the default budget when the other 23 files
+    // are running in parallel.
+    const mods = await Promise.all(ROUTES.map(({ file }) => loadRouteStatic(file)))
+    const bad = ROUTES.filter((_, i) => !methods.some((m) => typeof mods[i][m] === "function")).map(
+      ({ route }) => route,
+    )
+    expect(bad).toEqual([])
+  })
 
   it("the exception table only names routes that actually exist", () => {
     // An entry left behind by a renamed route would make the table a lie.
