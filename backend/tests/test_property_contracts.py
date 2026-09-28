@@ -24,11 +24,10 @@ import re
 from collections import Counter
 from datetime import UTC, datetime
 
-from hypothesis import given, settings
-from hypothesis import strategies as st
-
 from backend.app.infrastructure.resilience.rate_limit import _build_header_payload
 from backend.app.services.rag.retrieval import RetrievalService
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 # generate_sparse_vector touches no instance state (it only needs the class to
 # exist), so we skip __init__ entirely and avoid constructing the vector store.

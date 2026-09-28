@@ -6,11 +6,11 @@ conftest) so the real ToolService + ToolRepository persist calls to sqlite.
 import uuid
 
 import pytest
-from backend.app.domain.tool.models import ToolCall
-from backend.app.domain.tool.schemas import ToolCreate, ToolUpdate
 from backend.app.api.v1.tools import ToolExecuteRequest
-from pydantic import ValidationError
+from backend.app.domain.tool.models import ToolCall
 from backend.app.domain.tool.repository import ToolRepository
+from backend.app.domain.tool.schemas import ToolCreate, ToolUpdate
+from pydantic import ValidationError
 from sqlmodel import select
 
 

@@ -25,7 +25,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-
 from backend.app.domain.webhook.models import WebhookEndpoint
 from backend.app.services.webhook_service import WebhookService
 from fakes import FakeSession
@@ -41,7 +40,7 @@ DOCUMENTED_HEADERS = {
 ENVELOPE_KEYS = ("event", "delivery_id", "timestamp", "payload")
 
 
-class ContractViolation(Exception):
+class ContractViolationError(Exception):
     """Raised when an inbound webhook request violates the documented contract."""
 
 
@@ -66,37 +65,37 @@ class ConsumerWebhookVerifier:
         """Validate a request; returns the parsed envelope or raises."""
         missing = [h for h in self.REQUIRED_HEADERS if h not in headers]
         if missing:
-            raise ContractViolation(f"missing required headers: {missing}")
+            raise ContractViolationError(f"missing required headers: {missing}")
         if headers["Content-Type"] != "application/json":
-            raise ContractViolation(f"bad Content-Type: {headers['Content-Type']!r}")
+            raise ContractViolationError(f"bad Content-Type: {headers['Content-Type']!r}")
 
         sig_header = headers.get("X-Nexus-Signature", "")
         if not sig_header.startswith("sha256="):
-            raise ContractViolation(f"signature header not in sha256=<hex> form: {sig_header!r}")
+            raise ContractViolationError(f"signature header not in sha256=<hex> form: {sig_header!r}")
 
         expected = hmac.new(self._secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig_header[len("sha256="):], expected):
-            raise ContractViolation("signature does not match raw body")
+            raise ContractViolationError("signature does not match raw body")
 
         try:
             envelope = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ContractViolation(f"envelope is not valid JSON: {exc}") from exc
+            raise ContractViolationError(f"envelope is not valid JSON: {exc}") from exc
 
         missing_keys = [k for k in ENVELOPE_KEYS if k not in envelope]
         if missing_keys:
-            raise ContractViolation(f"envelope missing keys: {missing_keys}")
+            raise ContractViolationError(f"envelope missing keys: {missing_keys}")
         try:
             timestamp = datetime.fromisoformat(envelope["timestamp"])
         except ValueError as exc:
-            raise ContractViolation("envelope timestamp is not ISO-8601") from exc
+            raise ContractViolationError("envelope timestamp is not ISO-8601") from exc
         if timestamp.tzinfo is None:
-            raise ContractViolation("envelope timestamp must carry a UTC offset")
+            raise ContractViolationError("envelope timestamp must carry a UTC offset")
 
         if envelope["delivery_id"] != headers.get("X-Nexus-Delivery"):
-            raise ContractViolation("X-Nexus-Delivery does not match envelope delivery_id")
+            raise ContractViolationError("X-Nexus-Delivery does not match envelope delivery_id")
         if envelope["event"] != headers.get("X-Nexus-Event"):
-            raise ContractViolation("X-Nexus-Event does not match envelope event")
+            raise ContractViolationError("X-Nexus-Event does not match envelope event")
         return envelope
 
 
@@ -169,7 +168,7 @@ def test_consumer_rejects_tampered_payload():
     tampered = raw[:-1] + bytes([raw[-1] ^ 0x01])
 
     verifier = ConsumerWebhookVerifier("s3cret")
-    with pytest.raises(ContractViolation, match="signature does not match"):
+    with pytest.raises(ContractViolationError, match="signature does not match"):
         verifier.verify(headers=headers, raw_body=tampered)
 
 
@@ -177,7 +176,7 @@ def test_consumer_rejects_wrong_secret():
     """Verifying with a different secret must fail (e.g. rotated endpoint key)."""
     (_, headers, raw), _ = _deliver_one()
     verifier = ConsumerWebhookVerifier("wrong-secret")
-    with pytest.raises(ContractViolation, match="signature does not match"):
+    with pytest.raises(ContractViolationError, match="signature does not match"):
         verifier.verify(headers=headers, raw_body=raw)
 
 
@@ -186,7 +185,7 @@ def test_consumer_rejects_unsigned_request():
     (_, headers, raw), _ = _deliver_one()
     headers = {k: v for k, v in headers.items() if k != "X-Nexus-Signature"}
     verifier = ConsumerWebhookVerifier("s3cret")
-    with pytest.raises(ContractViolation, match="missing required headers"):
+    with pytest.raises(ContractViolationError, match="missing required headers"):
         verifier.verify(headers=headers, raw_body=raw)
 
 

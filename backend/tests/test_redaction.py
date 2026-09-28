@@ -2,7 +2,6 @@
 Unit tests for PII/secret redaction utilities (log hygiene, MD §8.6).
 """
 import structlog
-
 from backend.app.core import redaction
 from backend.app.core.redaction import redact_event, redact_text
 

@@ -12,10 +12,10 @@ import operator as _pyop
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.sql import operators as _saop
 from sqlalchemy.sql.dml import Delete
 from sqlalchemy.sql.elements import BinaryExpression, BindParameter, BooleanClauseList
-from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 
 class FakeResult:
