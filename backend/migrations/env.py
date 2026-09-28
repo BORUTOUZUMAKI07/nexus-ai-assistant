@@ -1,4 +1,4 @@
-# ruff: noqa: F401, I001
+# ruff: noqa: F401, I001, E402
 """
 Alembic environment configuration for Nexus AI Assistant database migrations.
 Uses async engine for SQLModel + asyncpg compatibility.
@@ -22,7 +22,19 @@ PGBOUNCER_SAFE_CONNECT_ARGS = {
     "max_cached_statement_lifetime": 0,
 }
 
-# Import all models to ensure they are registered with SQLModel metadata
+# Import every model module so ALL tables are registered in SQLModel metadata
+# before autogenerate compares it against the live database.
+#
+# This list must stay complete. ``target_metadata`` is the ONLY thing
+# autogenerate compares against the database, so a model module missing here is
+# a table it cannot see — and an unseen table is indistinguishable from one that
+# should not exist, so the next ``alembic revision --autogenerate`` emits a DROP
+# for it. That silently targets live, populated tables.
+#
+# When you add a domain, add its ``models`` module to this list in the same
+# commit. The check: this list should yield the same table count as the
+# database, except LangGraph's checkpoint_* tables, which are runtime-owned and
+# filtered out by include_object below.
 from backend.app.domain.user.models import User, UserSettings, UserMemory, APIKey
 from backend.app.domain.conversation.models import Conversation, Message, MessageAttachment, ConversationBranch
 from backend.app.domain.experiment.models import BanditReward
@@ -36,6 +48,9 @@ from backend.app.domain.hook.models import HookPolicy
 from backend.app.domain.optimization.models import PromptOptimizationRun
 from backend.app.domain.redteam.models import RedTeamRun
 from backend.app.domain.artifact.models import Artifact, ArtifactVersion
+from backend.app.domain.webhook.models import WebhookEndpoint, WebhookDelivery
+from backend.app.domain.org.models import Organization, OrganizationMember, OrganizationInvite
+from backend.app.domain.share.models import ConversationShare
 
 # this is the Alembic Config object
 config = context.config
@@ -50,7 +65,13 @@ target_metadata = SQLModel.metadata
 # metadata. Exclude them (and anything else owned by the graph runtime) from
 # autogenerate comparisons so a future `revision --autogenerate` never proposes
 # dropping them. See migrations/versions/9290fa24428d_codify_schema_drift.py.
-RUNTIME_OWNED_TABLE_PREFIXES = ("checkpoint_", "langgraph_", "sqlite_")
+#
+# "checkpoints" is listed WITHOUT a trailing underscore deliberately: the main
+# checkpointer table is named `checkpoints`, while its siblings are
+# `checkpoint_blobs` / `checkpoint_writes` / `checkpoint_migrations`. A prefix
+# of "checkpoint_" alone matches the siblings but NOT the main table, which is
+# exactly the kind of near-miss that drops live conversation state.
+RUNTIME_OWNED_TABLE_PREFIXES = ("checkpoints", "checkpoint_", "langgraph_", "sqlite_")
 
 
 def include_object(
