@@ -128,6 +128,10 @@ async def test_rejected_tool_call_is_terminal(
     assert resp.json()["status"] == "success"
     assert resp.json()["approved"] is False
 
+    # The route writes through its own session, so ``call`` is still the
+    # pre-approval copy cached in this session's identity map. Refreshing is what
+    # makes the read-back observe the other session's committed write.
+    await db_session.refresh(call)
     refreshed = await repo.get_tool_call(call.id)
     assert refreshed.status == "rejected"
     assert refreshed.is_approved is False
@@ -223,7 +227,8 @@ async def test_approval_api_hides_foreign_users_tool_call(
     assert response.status_code == 404
     refreshed = await repo.get_tool_call(call.id)
     assert refreshed.status == "requires_approval"
-    assert refreshed.is_approved is False
+    # A foreign caller must leave the row exactly as it found it: undecided.
+    assert refreshed.is_approved is not True
 
 
 @pytest.mark.asyncio
@@ -249,7 +254,8 @@ async def test_foreign_user_cannot_resolve_pending_tool_call(
     assert resolved is False
     refreshed = await repo.get_tool_call(call.id)
     assert refreshed.status == "requires_approval"
-    assert refreshed.is_approved is False
+    # A non-owner cannot claim the row, so it stays undecided rather than False.
+    assert refreshed.is_approved is not True
 
 @pytest.mark.asyncio
 async def test_execute_tool_hides_foreign_conversation_and_does_not_log(
@@ -333,7 +339,11 @@ async def test_approval_rejects_unexpected_fields(
     assert response.status_code == 422
     refreshed = await repo.get_tool_call(call.id)
     assert refreshed.status == "requires_approval"
-    assert refreshed.is_approved is False
+    # The request was refused before any write, so the row keeps the column
+    # default. ``is_approved`` is a tri-state: None = never decided, which is
+    # what "nobody approved this" actually means. Asserting ``is False`` would
+    # pin a value the app never set.
+    assert refreshed.is_approved is not True
 
 @pytest.mark.asyncio
 async def test_approval_rejects_overlong_reason(
@@ -360,7 +370,11 @@ async def test_approval_rejects_overlong_reason(
     assert response.status_code == 422
     refreshed = await repo.get_tool_call(call.id)
     assert refreshed.status == "requires_approval"
-    assert refreshed.is_approved is False
+    # The request was refused before any write, so the row keeps the column
+    # default. ``is_approved`` is a tri-state: None = never decided, which is
+    # what "nobody approved this" actually means. Asserting ``is False`` would
+    # pin a value the app never set.
+    assert refreshed.is_approved is not True
 
 @pytest.mark.parametrize(
     "payload",

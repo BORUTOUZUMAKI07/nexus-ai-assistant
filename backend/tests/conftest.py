@@ -9,6 +9,7 @@ dialect, JSONB/ARRAY columns, and constraint behavior as production.
 """
 import sys
 import uuid
+from itertools import count
 from pathlib import Path
 
 import pytest
@@ -111,7 +112,21 @@ def redis_backend():
         socket_connect_timeout=2.0,
         socket_timeout=2.0,
     )
+    stale = cache_module.redis_service
     cache_module.redis_service = cache_module.RedisService(cache_module.redis_client)
+
+    # Modules that did ``from ...redis_client import redis_service`` captured the
+    # object at *their* import time, so rebinding the module attribute above does
+    # not reach them -- they keep calling the pre-container client and time out.
+    # Repoint every holder of the stale object. Without this, tests that patch
+    # ``redis_service.check_rate_limit`` silently patch an object the route no
+    # longer uses, and pass or fail purely on test execution order.
+    for module in list(sys.modules.values()):
+        if module is None or module is cache_module:
+            continue
+        if getattr(module, "redis_service", None) is stale:
+            module.redis_service = cache_module.redis_service
+
     yield cache_module.redis_service
 
 
@@ -138,10 +153,40 @@ async def override_get_db(session_factory, schema_ready):
     app.dependency_overrides.pop(deps.get_db, None)
 
 
+class _PerTestClientIp:
+    """ASGI wrapper that presents a unique client IP to the app per test.
+
+    The auth rate limiter buckets by client IP, and every request made through
+    ``ASGITransport`` reports the same one. So a test that registers a handful
+    of users exhausts the shared bucket and silently 429s a later test's
+    setup -- which then fails somewhere unrelated, as a 401 on login.
+
+    Giving each test its own IP keeps the limiter real (it is still enforced
+    within a test) while removing the cross-test bleed. Tests that exercise
+    the limiter patch ``check_rate_limit`` directly and are unaffected.
+    """
+
+    def __init__(self, app, host):
+        self.app = app
+        self.host = host
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            scope = dict(scope, client=(self.host, 0))
+        await self.app(scope, receive, send)
+
+
+_CLIENT_IP_SEQ = count(1)
+
+
 @pytest.fixture
 async def client(override_get_db):
     """httpx AsyncClient talking to the ASGI app with Postgres overrides."""
-    transport = ASGITransport(app=app)
+    # Unique for the first 65_536 tests in a session; the suite is ~10x smaller,
+    # so no two tests can land on the same bucket.
+    seq = next(_CLIENT_IP_SEQ)
+    host = f"10.{seq // 65536 % 256}.{seq // 256 % 256}.{seq % 256}"
+    transport = ASGITransport(app=_PerTestClientIp(app, host))
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 

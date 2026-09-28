@@ -59,7 +59,8 @@ async def test_evaluations_round_trip(client, user_auth_headers, db_session, tes
     conv_resp = await client.post(
         "/api/v1/conversations",
         headers=user_auth_headers,
-        json={"title": "Eval conversation", "mode": "normal"},
+        # ConversationCreate forbids extra fields, and "mode" is not one of them.
+        json={"title": "Eval conversation"},
     )
     assert conv_resp.status_code == 201
     conv_id = uuid.UUID(conv_resp.json()["id"])

@@ -23,6 +23,19 @@ async def _headers_for(client, payload):
     return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
+async def _registered(client, prefix):
+    """Register a user and return its auth headers.
+
+    The register response is asserted on purpose. Ignoring it turns a
+    throttled or rejected registration into a confusing 401 from the login
+    that follows, which points at the wrong thing entirely.
+    """
+    created = _register(client, prefix)
+    response = await client.post("/api/v1/auth/register", json=created["payload"])
+    assert response.status_code == 201, f"register {prefix} -> {response.status_code} {response.text}"
+    return await _headers_for(client, created["payload"])
+
+
 @pytest.mark.asyncio
 async def test_create_and_list_own_template(client, user_auth_headers):
     created = await client.post(
@@ -56,12 +69,7 @@ async def test_public_templates_are_shared_private_are_not(
     )
     assert own.status_code == 201
 
-    other = _register(client, "other")
-    await client.post(
-        "/api/v1/auth/register",
-        json=other["payload"],
-    )
-    other_headers = await _headers_for(client, other["payload"])
+    other_headers = await _registered(client, "other")
     public = await client.post(
         "/api/v1/prompts/templates",
         json={
@@ -73,12 +81,7 @@ async def test_public_templates_are_shared_private_are_not(
     )
     assert public.status_code == 201
 
-    third = _register(client, "third")
-    await client.post(
-        "/api/v1/auth/register",
-        json=third["payload"],
-    )
-    third_headers = await _headers_for(client, third["payload"])
+    third_headers = await _registered(client, "third")
     await client.post(
         "/api/v1/prompts/templates",
         json={"title": "Hidden", "system_prompt": "Do not share this."},
