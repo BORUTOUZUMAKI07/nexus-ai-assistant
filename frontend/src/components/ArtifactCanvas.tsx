@@ -14,6 +14,10 @@ import {
   Trash2,
   History,
   CornerUpLeft,
+  Pencil,
+  Save,
+  AlertCircle,
+  Loader2,
 } from "lucide-react";
 import { fetchArtifact, type ArtifactVersionItem } from "@/lib/api";
 
@@ -36,6 +40,15 @@ export interface ArtifactCanvasProps {
   onSelectArtifact?: (artifact: ArtifactItem) => void;
   /** When provided, shows a Delete button (persisted artifacts only) */
   onDeleteArtifact?: (artifact: ArtifactItem) => void;
+  /**
+   * Persists a new version of a saved artifact. Required for the Edit control
+   * to appear: a transient canvas item has no server-side id, so there is
+   * nothing to write a version to.
+   */
+  onSaveVersion?: (
+    artifact: ArtifactItem,
+    content: string
+  ) => Promise<ArtifactItem | void>;
 }
 
 export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
@@ -44,6 +57,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   onClose,
   onSelectArtifact,
   onDeleteArtifact,
+  onSaveVersion,
 }) => {
   const [viewTab, setViewTab] = useState<"code" | "preview">("code");
   const [copied, setCopied] = useState(false);
@@ -57,7 +71,21 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   const [versionsLoading, setVersionsLoading] = useState(false);
   // When set, the code view shows this past version instead of the live one.
   const [viewingVersion, setViewingVersion] = useState<ArtifactVersionItem | null>(null);
+  // Edit buffer. `isEditing` gates the textarea; `draft` holds the unsaved text
+  // so toggling Edit and back does not lose work. `saved` drives the transient
+  // "version N saved" confirmation.
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedVersion, setSavedVersion] = useState<number | null>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
+  // The Ctrl/Cmd+S shortcut reads both of these through refs rather than
+  // closing over them. Binding the listener with [isEditing] in its dependency
+  // array left it holding a stale `isEditing`, so the shortcut silently did
+  // nothing while an edit was open -- the one state it exists for.
+  const handleSaveRef = React.useRef<() => Promise<void>>(async () => {});
+  const isEditingRef = React.useRef(false);
 
   // Keyboard shortcut Ctrl+F / Cmd+F for find in file
   React.useEffect(() => {
@@ -70,10 +98,26 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
       if (e.key === "Escape") {
         setShowSearch(false);
         setSearchQuery("");
+        // Escape abandons an edit. Handled here rather than on the textarea so
+        // it works whether or not the field has focus.
+        setIsEditing(false);
+        setSaveError(null);
+      }
+      // Ctrl/Cmd+S saves an in-progress edit instead of the browser's own
+      // "save page" dialog, which would lose the buffer.
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.key === "s" &&
+        isEditingRef.current
+      ) {
+        e.preventDefault();
+        void handleSaveRef.current();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
+    // Registered once: the handler reads current state through refs, so
+    // re-binding per render would only churn the listener.
   }, []);
 
   // Use artifacts array if provided (multi-file mode), or single artifact
@@ -86,6 +130,12 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   useEffect(() => {
     setViewingVersion(null);
     setVersions(null);
+    // Switching artifacts must abandon any unsaved edit, or the next artifact
+    // would open showing the previous one's draft.
+    setIsEditing(false);
+    setDraft("");
+    setSaveError(null);
+    setSavedVersion(null);
     if (!activeArtifact || activeArtifact.version === undefined) return;
 
     let cancelled = false;
@@ -120,6 +170,59 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  /** Only a persisted artifact can take a new version, and only if a saver exists. */
+  const canEdit = Boolean(onSaveVersion) && activeArtifact?.version !== undefined;
+
+  const beginEdit = () => {
+    // Seed the buffer from the live content, never from a past version: saving
+    // "v2" must not silently overwrite the current file with v1's text.
+    setDraft(activeArtifact.content);
+    setSaveError(null);
+    setIsEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setDraft("");
+    setSaveError(null);
+  };
+
+  const handleSave = async () => {
+    if (!canEdit || !onSaveVersion || saving) return;
+    const next = draft;
+    // Saving identical text would burn a version number and a history row for
+    // no change. The backend snapshots the old content, so this is not free.
+    if (next === activeArtifact.content) {
+      setSaveError("No changes to save.");
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await onSaveVersion(activeArtifact, next);
+      setIsEditing(false);
+      setDraft("");
+      setSavedVersion(updated?.version ?? (activeArtifact.version ?? 0) + 1);
+      setTimeout(() => setSavedVersion(null), 4000);
+    } catch (err) {
+      // Stay in edit mode with the buffer intact so the work is not lost.
+      setSaveError(
+        err instanceof Error ? err.message : "Could not save a new version"
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Publish the current edit state to the once-bound keydown listener. Kept in
+  // an effect (rather than assigned during render) so the refs are only written
+  // once the render is committed.
+  React.useEffect(() => {
+    isEditingRef.current = isEditing;
+    handleSaveRef.current = handleSave;
+  });
+
   const handleDownload = () => {
     const extMap: Record<string, string> = {
       python: "py",
@@ -151,7 +254,9 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  const lines = displayContent.split("\n");
+  // While editing, the buffer is what the line numbers and match count describe
+  // -- otherwise the gutter would be out of step with the visible text.
+  const lines = (isEditing ? draft : displayContent).split("\n");
   // Highlight lines matching search query
   const lowerSearch = searchQuery.toLowerCase();
   const matchCount = searchQuery
@@ -278,6 +383,25 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
             )}
           </button>
 
+          {canEdit && !isEditing && (
+            <button
+              onClick={beginEdit}
+              disabled={viewingVersion !== null}
+              className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-white hover:border-[var(--border-strong)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              // Stable accessible name; only the tooltip varies with state, so
+              // the control does not appear to vanish while a past version is
+              // being previewed.
+              aria-label="Edit and save a new version"
+              title={
+                viewingVersion
+                  ? "Back to current before editing"
+                  : "Edit and save a new version"
+              }
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           {onDeleteArtifact && activeArtifact.version !== undefined && (
             <button
               onClick={() => {
@@ -302,6 +426,88 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
         </div>
       </div>
 
+      {/* Editor toolbar. Save/Cancel live here rather than in the body so the
+          buffer stays put while the body swaps between code and preview.
+          The error belongs here too: a failed save keeps the editor open, so
+          reporting it only after the editor closes would hide it entirely. */}
+      {isEditing && (
+        <div className="px-3 py-1.5 border-b border-[var(--accent)]/30 bg-[var(--accent-soft)] text-[11px] text-[var(--accent)]">
+          {saveError ? (
+            <p className="flex items-center gap-1.5 text-[var(--status-danger)]">
+              <AlertCircle className="w-3 h-3 shrink-0" />
+              {saveError}
+            </p>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate">
+                Editing — saving writes version{" "}
+                {(activeArtifact.version ?? 0) + 1}; the current version is kept
+                as history.
+              </span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={cancelEdit}
+                  disabled={saving}
+                  className="px-2 py-0.5 rounded border border-[var(--border-subtle)] hover:bg-[var(--bg-main)] transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleSave()}
+                  disabled={saving}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--accent)] text-[var(--accent-foreground)] font-semibold hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+                >
+                  {saving ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Save className="w-3 h-3" />
+                  )}
+                  Save new version
+                </button>
+              </div>
+            </div>
+          )}
+          {/* With an error on screen the buttons are still needed, otherwise
+              the only way out is Escape. */}
+          {saveError && (
+            <div className="flex items-center justify-end gap-1.5 mt-1.5">
+              <button
+                onClick={cancelEdit}
+                disabled={saving}
+                className="px-2 py-0.5 rounded border border-[var(--border-subtle)] hover:bg-[var(--bg-main)] transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleSave()}
+                disabled={saving}
+                className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--accent)] text-[var(--accent-foreground)] font-semibold hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+              >
+                {saving ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Save className="w-3 h-3" />
+                )}
+                Save new version
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {saveError && !isEditing && (
+        <p className="px-3 py-1.5 border-b border-[var(--status-danger)]/30 bg-[var(--status-danger)]/10 text-[11px] text-[var(--status-danger)] flex items-center gap-1.5">
+          <AlertCircle className="w-3 h-3" />
+          {saveError}
+        </p>
+      )}
+
+      {savedVersion !== null && !isEditing && (
+        <p className="px-3 py-1.5 border-b border-[var(--status-success)]/30 bg-[var(--status-success)]/10 text-[11px] text-[var(--status-success)] flex items-center gap-1.5">
+          <Check className="w-3 h-3" /> Saved as version {savedVersion}
+        </p>
+      )}
+
       {/* Return-to-current banner while previewing an earlier version */}
       {viewingVersion && (
         <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-[var(--accent)]/30 bg-[var(--accent-soft)] text-[11px] text-[var(--accent)]">
@@ -321,7 +527,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
       {/* Version history. The backend stored every version and the header already
           reported the current number, but nothing ever listed them, so the history
           was unreachable from the UI. */}
-      {activeArtifact.version !== undefined && !viewingVersion && (
+      {activeArtifact.version !== undefined && !viewingVersion && !isEditing && (
         <details className="border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]">
           <summary className="flex cursor-pointer items-center gap-1.5 px-3 py-1.5 text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)] select-none hover:text-[var(--text-secondary)]">
             <History className="w-3 h-3" />
@@ -412,10 +618,35 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
 
       {/* Canvas Body */}
       <div className="flex-1 overflow-auto p-4 font-mono text-xs text-[var(--text-primary)]">
-        {viewTab === "code" ? (
+        {isEditing ? (
+          <div className="flex min-w-full">
+            {/* Same gutter as the read-only view, counting the draft rather
+                than the saved file, so the numbers track what is on screen. */}
+            <div
+              aria-hidden="true"
+              className="select-none pr-4 text-right text-[var(--text-faint)] font-mono text-[11px] leading-5 shrink-0 border-r border-[var(--border-subtle)]"
+            >
+              {lines.map((_, i) => (
+                <div key={i}>{i + 1}</div>
+              ))}
+            </div>
+            <textarea
+              // eslint-disable-next-line jsx-a11y/no-autofocus
+              autoFocus
+              aria-label={`Edit ${activeArtifact.title}`}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              spellCheck={false}
+              className="pl-4 h-full min-h-[24rem] flex-1 resize-none bg-transparent outline-none text-[12px] leading-5 text-[var(--text-primary)] font-mono"
+            />
+          </div>
+        ) : viewTab === "code" ? (
           <div className="flex min-w-full">
             {/* Line numbers column */}
-            <div className="select-none pr-4 text-right text-[var(--text-faint)] font-mono text-[11px] leading-5 shrink-0 border-r border-[var(--border-subtle)]">
+            <div
+              aria-hidden="true"
+              className="select-none pr-4 text-right text-[var(--text-faint)] font-mono text-[11px] leading-5 shrink-0 border-r border-[var(--border-subtle)]"
+            >
               {lines.map((_, i) => (
                 <div key={i}>{i + 1}</div>
               ))}

@@ -16,16 +16,14 @@ import {
   fetchKnowledgeFiles,
   uploadFile,
   deleteFile,
+  ragQuery,
   KnowledgeFile,
+  MessageCitation,
 } from "@/lib/api";
 
-interface SearchResultItem {
-  filename?: string;
-  chunk_index?: number;
-  score?: number;
-  content_snippet?: string;
-  snippet?: string;
-}
+// A search hit is a citation. The backend returns the same shape the chat
+// transcript renders, so it is typed as MessageCitation rather than a local
+// near-duplicate that would silently drift from the real fields.
 
 export const KnowledgeView: React.FC = () => {
   const [files, setFiles] = useState<KnowledgeFile[]>([]);
@@ -34,7 +32,12 @@ export const KnowledgeView: React.FC = () => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
+  const [searchResults, setSearchResults] = useState<MessageCitation[]>([]);
+  const [searchTookMs, setSearchTookMs] = useState<number | null>(null);
+  // The last query actually sent, used to tell "searched and found nothing"
+  // apart from "has not searched yet". Results are not cleared when the box is
+  // edited, so the empty state must not key off the live input.
+  const [searchedQuery, setSearchedQuery] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -105,19 +108,19 @@ export const KnowledgeView: React.FC = () => {
   };
 
   const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
+    const query = searchQuery.trim();
+    if (!query) return;
     setIsSearching(true);
     setSearchError(null);
     setSearchResults([]);
+    setSearchTookMs(null);
+    setSearchedQuery(query);
     try {
-      const res = await fetch("/api/files/rag/query", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: searchQuery, top_k: 5 }),
-      });
-      if (!res.ok) throw new Error(`RAG query failed: ${res.status}`);
-      const data = await res.json();
-      setSearchResults(data.citations || []);
+      // Goes through the api module rather than a hand-rolled fetch, so the
+      // auth headers and the shared error wording come from one place.
+      const data = await ragQuery(query);
+      setSearchResults(data.citations ?? []);
+      setSearchTookMs(typeof data.took_ms === "number" ? data.took_ms : null);
     } catch (err) {
       setSearchError(
         err instanceof Error ? err.message : "Search failed"
@@ -292,23 +295,54 @@ export const KnowledgeView: React.FC = () => {
           <p className="text-xs text-[var(--status-danger)]">{searchError}</p>
         )}
 
+        {/* A search that matched nothing is a real answer, not an empty state
+            to hide -- otherwise the user cannot tell "nothing indexed this"
+            apart from "the request never ran". */}
+        {searchResults.length === 0 &&
+          !isSearching &&
+          !searchError &&
+          searchedQuery !== null && (
+          <div className="glass-panel p-6 text-center text-xs text-[var(--text-muted)]">
+            No matching passages in your indexed documents.
+          </div>
+        )}
+
         {searchResults.length > 0 && (
           <div className="space-y-2 mt-1">
+            <p className="text-[10px] text-[var(--text-faint)] font-mono">
+              {searchResults.length} passage{searchResults.length === 1 ? "" : "s"}
+              {searchTookMs !== null ? ` in ${searchTookMs}ms` : ""}
+            </p>
             {searchResults.map((r, idx) => (
               <div
-                key={idx}
+                key={`${r.filename ?? "source"}-${r.chunk_index ?? idx}`}
                 className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-xs space-y-1"
               >
                 <div className="flex items-center justify-between text-[11px] text-[var(--accent)] font-mono">
                   <span>
                     {r.filename ?? "source"} (Chunk {r.chunk_index ?? "?"})
                   </span>
-                  <span className="px-1.5 py-0.5 rounded bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--text-muted)]">
-                    Score: {r.score ?? "0.9+"}
-                  </span>
+                  {/* A missing score is rendered as such rather than invented:
+                      showing "0.9+" would read as a real measurement. */}
+                  {typeof r.score === "number" ? (
+                    <span className="px-1.5 py-0.5 rounded bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--text-muted)]">
+                      Score: {r.score.toFixed(3)}
+                    </span>
+                  ) : (
+                    <span
+                      className="px-1.5 py-0.5 rounded bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--text-faint)]"
+                      title="The backend did not return a relevance score for this passage"
+                    >
+                      Score: n/a
+                    </span>
+                  )}
                 </div>
                 <p className="text-[var(--text-secondary)] leading-relaxed text-[11px]">
-                  {r.content_snippet || r.snippet}
+                  {r.content_snippet || r.snippet || (
+                    <span className="italic text-[var(--text-faint)]">
+                      This passage had no text preview.
+                    </span>
+                  )}
                 </p>
               </div>
             ))}

@@ -9,6 +9,9 @@ import {
   fetchUsage,
   fetchKnowledgeFiles,
   sendHITLFeedback,
+  forkConversation,
+  sendMessageFeedback,
+  updateConversation,
 } from "@/lib/api"
 
 const API = "/api"
@@ -167,5 +170,98 @@ describe("api client", () => {
   it("posts HITL feedback", async () => {
     const res = await sendHITLFeedback({ threadId: "t-1", action: "approve" })
     expect(res.status).toBe("received")
+  })
+})
+
+/**
+ * The three endpoints that had no MSW handler until this round.
+ *
+ * Each of these is called from the app -- fork and feedback from the app page,
+ * transcription from ChatInput -- but with no mock MSW let the request fall
+ * through to a server that does not exist under jsdom. So each test here is
+ * also the assertion that the handler returns the shape the real endpoint
+ * does, not merely that the call resolves.
+ */
+describe("previously unmocked endpoints", () => {
+  it("forks a conversation and returns a new row, not the original", async () => {
+    const forked = await forkConversation("conv-100", "msg-2", "Branch A")
+
+    expect(forked.id).not.toBe("conv-100")
+    // The backend names the branch from the request, not a fixed fixture, so a
+    // test can tell a real response from a canned one.
+    expect(forked.title).toBe("Branch A")
+  })
+
+  it("forks with a default branch name when none is given", async () => {
+    const forked = await forkConversation("conv-100", "msg-2")
+    expect(forked.title).toBe("Forked Branch")
+  })
+
+  it("sends the fork point and echoes the recorded feedback back", async () => {
+    let sent: Record<string, unknown> | null = null
+    server.use(
+      http.post(
+        "/api/conversations/:id/messages/:messageId/feedback",
+        async ({ request, params }) => {
+          sent = (await request.json()) as Record<string, unknown>
+          return HttpResponse.json({
+            status: "success",
+            message_id: params.messageId,
+            feedback: sent.feedback,
+          })
+        },
+      ),
+    )
+
+    const res = await sendMessageFeedback("conv-100", "msg-2", "thumbs_down", "wrong")
+
+    expect(sent).toEqual({
+      feedback: "thumbs_down",
+      feedback_note: "wrong",
+    })
+    // The response identifies which message was recorded, so a UI can confirm
+    // the right row was updated.
+    expect(res).toEqual({
+      status: "success",
+      message_id: "msg-2",
+      feedback: "thumbs_down",
+    })
+  })
+
+  it("sends a null note when feedback carries no comment", async () => {
+    let sent: Record<string, unknown> | null = null
+    server.use(
+      http.post(
+        "/api/conversations/:id/messages/:messageId/feedback",
+        async ({ request }) => {
+          sent = (await request.json()) as Record<string, unknown>
+          return HttpResponse.json({ status: "success" })
+        },
+      ),
+    )
+
+    await sendMessageFeedback("conv-100", "msg-2", "thumbs_up")
+    expect(sent).toEqual({ feedback: "thumbs_up", feedback_note: null })
+  })
+
+  it("returns the transcript text for an uploaded recording", async () => {
+    const res = await fetch("/api/audio/transcribe", { method: "POST" })
+    const data = (await res.json()) as { text: string }
+    expect(data.text).toBe("How do I add a new conversation hook?")
+  })
+
+  it("reports a rename failure instead of resolving with a stale title", async () => {
+    // The PATCH mock echoes the patch, so a successful rename is observable.
+    const renamed = await updateConversation("conv-100", { title: "Renamed" })
+    expect(renamed.title).toBe("Renamed")
+
+    server.use(
+      http.patch("/api/conversations/:id", () =>
+        HttpResponse.json({ detail: "Conversation not found" }, { status: 404 }),
+      ),
+    )
+    await expect(
+      updateConversation("conv-404", { title: "Nope" }),
+    ).rejects.toThrow(/404/)
   })
 })

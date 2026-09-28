@@ -26,6 +26,7 @@ import {
   createConversation,
   deleteConversation,
   forkConversation,
+  updateConversation,
   uploadFile,
   sendMessageFeedback,
   createPlan,
@@ -395,6 +396,26 @@ export default function AppPage() {
     }
   };
 
+  const handleRenameConversation = async (id: string, title: string) => {
+    const previous = conversations.find((c) => c.id === id)?.title;
+    // Optimistic: the sidebar re-renders instantly and the server call
+    // follows. On failure the row snaps back to the title it had before.
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, title } : c)),
+    );
+    try {
+      await updateConversation(id, { title });
+    } catch (err) {
+      if (previous !== undefined) {
+        setConversations((prev) =>
+          prev.map((c) => (c.id === id ? { ...c, title: previous } : c)),
+        );
+      }
+      console.warn("Rename conversation failed:", err);
+      throw err;
+    }
+  };
+
   const handleForkConversation = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const currentMsgs = chat.messages;
@@ -480,20 +501,15 @@ export default function AppPage() {
     setPendingPlan(null);
   };
 
+  /**
+   * Saves artifact content, creating the row on a first save and appending a
+   * version once it already exists.
+   *
+   * The two cases must stay distinct: an unconditional createArtifact would
+   * POST to /artifacts and leave a second row for the same document rather
+   * than recording a new version of the existing one.
+   */
   const handleSaveArtifact = async (artifact: ArtifactItem) => {
-    // `version` is only present on an artifact the server has already stored.
-    //
-    // NOTE: as of writing this branch is unreachable from the UI. The only
-    // caller is ChatArea's Save button, which is handed an item built by
-    // extractArtifact() from the message id and never carries a version, and
-    // ArtifactCanvas has no edit-or-save affordance at all. So every save today
-    // is a first save.
-    //
-    // It is kept because it is the correct handling of the two cases and costs
-    // nothing: the moment a saved artifact can be edited, a single
-    // unconditional createArtifact would POST to /artifacts and leave a second
-    // row for the same document instead of recording a new version. Delete this
-    // branch only together with a decision to stop supporting versioning.
     const isPersisted = artifact.version !== undefined;
     try {
       const saved = isPersisted
@@ -523,6 +539,9 @@ export default function AppPage() {
       );
     } catch (err) {
       console.warn("Artifact save failed:", err);
+      // Rethrown so the canvas can keep the edit buffer and show the failure
+      // rather than closing the editor as if the save had worked.
+      throw err;
     }
   };
 
@@ -647,6 +666,7 @@ export default function AppPage() {
         onNewChat={handleNewChat}
         onDeleteConversation={handleDeleteConversation}
         onForkConversation={handleForkConversation}
+        onRenameConversation={handleRenameConversation}
         activeTab={effectiveTab}
         setActiveTab={setActiveTab}
         currentModel={currentModel}
@@ -723,6 +743,9 @@ export default function AppPage() {
                 onClose={() => setActiveArtifact(null)}
                 onSelectArtifact={(art) => setActiveArtifact(art)}
                 onDeleteArtifact={handleDeleteArtifact}
+                onSaveVersion={async (art, content) => {
+                  await handleSaveArtifact({ ...art, content });
+                }}
               />
             )}
 
