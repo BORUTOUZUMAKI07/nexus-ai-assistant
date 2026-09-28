@@ -407,8 +407,45 @@ export const handlers = [
     })
   ),
 
-  http.patch("/api/conversations/:id", () =>
-    HttpResponse.json(mockConversations[0])
+  http.patch("/api/conversations/:id", async ({ request, params }) => {
+    // Echo the patch back so a test can assert the rename actually persisted
+    // what it sent, instead of asserting against a static fixture.
+    const patch = (await request.json()) as Record<string, unknown>;
+    return HttpResponse.json({ ...mockConversations[0], ...patch });
+  }),
+
+  // Forks were previously unmocked, which made the sidebar's fork button
+  // untestable: MSW let the request fall through to a server that does not
+  // exist under jsdom. The shape mirrors the real endpoint, which returns a
+  // new conversation row.
+  http.post("/api/conversations/:id/fork", async ({ request, params }) => {
+    const body = (await request.json()) as {
+      fork_message_id?: string;
+      branch_name?: string;
+    };
+    return HttpResponse.json({
+      ...mockConversations[0],
+      id: `conv-forked-${params.id}`,
+      title: body.branch_name ?? "Forked Branch",
+      is_pinned: false,
+      // The fork starts at the branch point, so it carries less history.
+      token_count: 0,
+    });
+  }),
+
+  http.post(
+    "/api/conversations/:id/messages/:messageId/feedback",
+    async ({ request, params }) => {
+      const body = (await request.json()) as {
+        feedback?: string;
+        feedback_note?: string | null;
+      };
+      return HttpResponse.json({
+        status: "success",
+        message_id: params.messageId,
+        feedback: body.feedback,
+      });
+    }
   ),
 
   http.delete("/api/conversations/:id", () =>
@@ -442,6 +479,13 @@ export const handlers = [
   }),
 
   http.delete("/api/files/:id", () => HttpResponse.json(null, { status: 204 })),
+
+  // Transcription was unmocked, so the voice-input path could only ever be
+  // exercised by hitting a nonexistent server. The real endpoint returns a
+  // single `text` field.
+  http.post("/api/audio/transcribe", () =>
+    HttpResponse.json({ text: "How do I add a new conversation hook?" })
+  ),
 
   http.post("/api/files/rag/query", () =>
     HttpResponse.json({
