@@ -1,20 +1,21 @@
 """
-Refresh-token family revocation.
+Refresh-token rotation, race handling and family revocation.
 
-A refresh token is single-use, so presenting one twice is by definition a
-replay — either the token leaked, or two parties hold the same credential.
-Either way the app cannot tell the legitimate session from the attacker, so the
-only safe response is to cut *every* refresh token for that user and force a
-fresh sign-in. The same reasoning applies to a password reset: it is a
-credential change, so sessions minted under the old credential must not survive
-it.
+Presenting the same refresh token twice is ambiguous by nature: either it leaked,
+or two parties hold the same credential -- and the app cannot tell those apart
+at the moment of presentation. What it *can* do is bound the damage.
 
-These tests exercise the marker through the ``ICacheService`` seam (a fake,
-never a real Redis) and assert the two properties that matter:
+Three properties are covered here, all through the ``ICacheService`` seam (a
+fake, never a real Redis):
 
-  1. a replay revokes the whole family, not just the replayed token;
-  2. an unrelated, never-replayed token for the same user is also refused
-     afterwards — that is the whole point of "family" revocation.
+  1. a duplicate *inside* ``REFRESH_REUSE_GRACE_SECONDS`` is a race, not a
+     theft, and is answered with the tokens the first exchange already issued.
+     This is the two-tabs-expired-together case that used to log the user out of
+     every device they owned.
+  2. a duplicate *outside* the window is a replay, and refuses the exchange.
+  3. that refusal revokes the token's *family* -- every session descended from
+     one sign-in -- and nothing wider. A stolen token on one device must not end
+     the user's session on another.
 """
 import asyncio
 from datetime import timedelta
@@ -22,7 +23,11 @@ from uuid import uuid4
 
 import pytest
 from backend.app.core.exceptions import AuthenticationError
-from backend.app.core.security import create_access_token, create_refresh_token
+from backend.app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+)
 from backend.app.domain.user.models import User
 from backend.app.domain.user.schemas import TokenResponse
 from backend.app.services.auth_service import AuthService
@@ -32,8 +37,8 @@ from backend.tests.fakes import FakeSession
 class MemoryCache:
     """In-memory stand-in for the Redis-backed ``ICacheService``.
 
-    Only the three primitives AuthService.refresh uses are implemented, which
-    keeps the test honest about the interface surface the service depends on.
+    Only the primitives AuthService.refresh uses are implemented, which keeps
+    the test honest about the interface surface the service depends on.
     """
 
     def __init__(self) -> None:
@@ -54,6 +59,11 @@ class MemoryCache:
         self.store[key] = value
         self.sets.append((key, ttl_seconds))
         return True
+
+    async def delete(self, key: str) -> None:
+        """Not used by the service -- only to age a cache entry out of existence,
+        standing in for a grace window that has elapsed in real time."""
+        self.store.pop(key, None)
 
 
 def _await(coro):
@@ -102,56 +112,106 @@ def test_refresh_issues_rotated_pair(cache):
     assert result.refresh_expires_in == 30 * 86400
 
 
-def test_replayed_refresh_token_revokes_the_whole_family(cache):
-    """Replaying a token must lock out the user's *other* sessions too.
+def _forget_published_result(cache: MemoryCache, token: str) -> None:
+    """Age out the published exchange result, as a real grace window expiring.
 
-    Token B was never replayed — it is a perfectly legitimate session on another
-    device. It must still die, because the app cannot tell it apart from an
-    attacker's copy.
+    Without this a duplicate is always inside the window and is served the
+    winner's tokens, so the replay path is never reached.
+    """
+    _await(cache.delete(f"refresh:race:{decode_token(token)['jti']}"))
+
+
+def test_duplicate_inside_the_window_replays_the_first_result(cache):
+    """Two tabs expiring together must not log anyone out.
+
+    Both send the same cookie. The second is refused its own rotation and given
+    the first one's tokens instead -- so the two tabs hold *identical* tokens
+    rather than the second silently invalidating the first.
     """
     _fake, svc, user = _seeded_service()
-    token_a = create_refresh_token(subject=user.id)
-    token_b = create_refresh_token(subject=user.id)
+    token = create_refresh_token(subject=user.id, family_id="fam-race")
 
-    assert _await(svc.refresh(token_a))  # first use is fine
+    first = _await(svc.refresh(token))
+    second = _await(svc.refresh(token))
+
+    assert second.refresh_token == first.refresh_token
+    assert second.access_token == first.access_token
+
+
+def test_late_replay_revokes_the_whole_family(cache):
+    """A replay *outside* the window still kills the sessions it descends from.
+
+    The rotated token was never presented twice -- it is the continuation of the
+    stolen sign-in, so it has to die with it. Without this the "reuse detection"
+    claim would amount to little more than refusing one request.
+    """
+    _fake, svc, user = _seeded_service()
+    token = create_refresh_token(subject=user.id, family_id="fam-stolen")
+
+    rotated = _await(svc.refresh(token)).refresh_token
+    _forget_published_result(cache, token)
 
     with pytest.raises(AuthenticationError, match="already been used"):
-        _await(svc.refresh(token_a))  # replay
+        _await(svc.refresh(token))
 
-    # The collateral damage is the point: the innocent session dies too.
     with pytest.raises(AuthenticationError, match="revoked"):
-        _await(svc.refresh(token_b))
+        _await(svc.refresh(rotated))
+
+
+def test_late_replay_leaves_other_sign_ins_alone(cache):
+    """The blast radius is one sign-in, not the whole user.
+
+    This is the fix. Revoking per-user meant one replayed token on a laptop
+    logged the owner out of the phone they were reading on.
+    """
+    _fake, svc, user = _seeded_service()
+    stolen = create_refresh_token(subject=user.id, family_id="fam-laptop")
+    phone = create_refresh_token(subject=user.id, family_id="fam-phone")
+
+    _await(svc.refresh(stolen))
+    live_on_phone = _await(svc.refresh(phone)).refresh_token
+    _forget_published_result(cache, stolen)
+
+    with pytest.raises(AuthenticationError, match="already been used"):
+        _await(svc.refresh(stolen))
+
+    # Still usable, and still in its own family: revoking the laptop's sign-in
+    # did not reach across to the phone.
+    renewed = _await(svc.refresh(live_on_phone))
+    assert decode_token(renewed.refresh_token)["fam"] == "fam-phone"
 
 
 def test_revocation_marker_is_written_with_a_refresh_lifetime(cache):
     """The marker must expire with the token it invalidates, not outlive it."""
     _fake, svc, user = _seeded_service()
-    token = create_refresh_token(subject=user.id)
+    token = create_refresh_token(subject=user.id, family_id="fam-ttl")
     _await(svc.refresh(token))
+    _forget_published_result(cache, token)
     with pytest.raises(AuthenticationError):
         _await(svc.refresh(token))
 
-    marker = f"refresh:revoked:{user.id}"
+    # Scoped to the family, so it is the family that has to be marked.
+    marker = "refresh:revoked:fam-ttl"
     assert marker in cache.store
     assert (marker, 30 * 86400) in cache.sets
 
 
 def test_family_revocation_can_be_disabled(cache, monkeypatch):
-    """REFRESH_REVOKE_ON_REUSE=False restores per-token-only behaviour."""
+    """REFRESH_REVOKE_ON_REUSE=False refuses the replay but revokes nothing."""
     monkeypatch.setattr(
         "backend.app.services.auth_service.settings.REFRESH_REVOKE_ON_REUSE", False
     )
     _fake, svc, user = _seeded_service()
-    token_a = create_refresh_token(subject=user.id)
-    token_b = create_refresh_token(subject=user.id)
+    token = create_refresh_token(subject=user.id, family_id="fam-nocascade")
 
-    _await(svc.refresh(token_a))
+    rotated = _await(svc.refresh(token)).refresh_token
+    _forget_published_result(cache, token)
     with pytest.raises(AuthenticationError, match="already been used"):
-        _await(svc.refresh(token_a))
+        _await(svc.refresh(token))
 
-    # Sibling session survives when cascading is turned off.
-    assert _await(svc.refresh(token_b))
-    assert f"refresh:revoked:{user.id}" not in cache.store
+    # The family survives, so the continuation still works.
+    assert _await(svc.refresh(rotated)).refresh_token != rotated
+    assert "refresh:revoked:fam-nocascade" not in cache.store
 
 
 def test_password_reset_revokes_existing_sessions(cache):

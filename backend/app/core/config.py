@@ -55,13 +55,24 @@ class Settings(BaseSettings):
 
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=30)
-    # When a refresh token is presented twice (replay), revoke *every* refresh
-    # token for that user for the remainder of the refresh-token lifetime
-    # instead of only refusing the replayed one. Turns a silent token theft
-    # into a visible, recoverable event (the user must sign in again) and stops
-    # the attacker from riding a parallel session. Set False to keep the
-    # previous per-token-only behaviour.
+    # When a refresh token is presented twice *outside* the grace window below,
+    # revoke the token's whole family for the remainder of the refresh-token
+    # lifetime. Families are per sign-in, so a stolen web session no longer logs
+    # the user out of their phone and laptop too. Set False to keep per-token
+    # refusal only.
     REFRESH_REVOKE_ON_REUSE: bool = Field(default=True)
+
+    # Grace window, in seconds, for a duplicate exchange of one refresh token.
+    #
+    # Two tabs whose access tokens expire together both present the same cookie.
+    # The server cannot tell that apart from a replay, so without a window the
+    # loser of that race was treated as a thief and every session was revoked --
+    # users were logged out of everything by opening two tabs. Inside the window
+    # the duplicate is answered with the tokens the first exchange already
+    # issued, which leaks nothing (the caller already holds that exact token) and
+    # costs an attacker who races the owner a brief window to do the same. 0
+    # restores the strict behaviour.
+    REFRESH_REUSE_GRACE_SECONDS: int = Field(default=10)
 
     # ── OAuth / OIDC SSO (Authorization Code + PKCE) ─────────────────────────
     # Generic OpenID Connect client (Google, GitHub, Azure AD, Keycloak…).

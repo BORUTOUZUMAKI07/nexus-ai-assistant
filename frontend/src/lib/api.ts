@@ -212,24 +212,265 @@ function isAuthRoute(url: string): boolean {
 
 let refreshInFlight: Promise<boolean> | null = null;
 
+// ─── Cross-tab refresh coordination ───────────────────────────────────────────
+//
+// refreshInFlight above only serialises refreshes *within* one tab. Two tabs
+// whose access tokens expire together each fire their own refresh carrying the
+// same httpOnly cookie, and the server cannot distinguish that from a stolen
+// token being replayed -- so it revoked every session and the user was logged
+// out of everything just for opening a second tab.
+//
+// A BroadcastChannel elects one refresher per browser. The other tabs wait for
+// the result instead of calling the backend, which removes the race at the
+// source. The server-side grace window (REFRESH_REUSE_GRACE_SECONDS) covers the
+// cases this cannot: two devices, or a tab that dies mid-refresh.
+
+const REFRESH_CHANNEL = "nexus:auth-refresh";
+/** How long a follower waits for the leader to report success. */
+const REFRESH_WAIT_MS = 5000;
+/**
+ * How long a contender collects claims before declaring itself leader.
+ *
+ * This must be comfortably longer than ``REFRESH_BEAT_MS``, and that relation is
+ * the load-bearing invariant, not the absolute values. BroadcastChannel does not
+ * replay, so a tab that opens after the leader already claimed never sees that
+ * claim; it can only learn the lock is held by hearing a later heartbeat. If
+ * the election were shorter than the beat, a tab that arrived just after a beat
+ * would sit out the whole window in silence, conclude it won, and race the
+ * leader -- reintroducing the double refresh this exists to prevent. With the
+ * beat faster than the election, any tab that starts hears a heartbeat several
+ * times over before it has to decide.
+ *
+ * The cost is one extra heartbeat interval of latency on a refresh that happens
+ * roughly once an hour, in exchange for correctness.
+ */
+const REFRESH_ELECTION_MS = 150;
+/** How often the leader re-announces that it still holds the lock. */
+const REFRESH_BEAT_MS = 50;
+/** How long a leader may hold the claim before followers assume it died. */
+const REFRESH_LOCK_TTL_MS = 10_000;
+/**
+ * Identifies this tab for the lifetime of the document.
+ *
+ * It has two jobs: recognising the echo of our own messages, and being the base
+ * of the nonce that separates two claims made in the same millisecond. A
+ * collision between two tabs would make them each ignore the other's claim and
+ * both refresh, so this wants real entropy -- 52 bits from `Math.random` is
+ * plenty for two or three tabs in one browser, and the `claimSeq` suffix
+ * removes any repeat within this tab.
+ */
+const TAB_ID = Math.random().toString(36).slice(2);
+let claimSeq = 0;
+
+interface RefreshMessage {
+  /** "claim": I am contending. "done": the cookies are re-baked. */
+  type: "claim" | "done";
+  /** Unique per attempt, so a tab ignores the echo of its own message. */
+  nonce: string;
+  /**
+   * When this refresh round started (ms since epoch). Carried on every claim
+   * from the same round, heartbeats included, so it identifies the round rather
+   * than the message. This is what makes leadership stable: a tab that joins
+   * late sees the incumbent's *earlier* timestamp and stands down, whereas
+   * comparing nonces would let a latecomer with a smaller nonce outrank a
+   * leader that is already mid-exchange.
+   */
+  at: number;
+}
+
+/**
+ * The channel, tagged with the nonce this tab won (if any). A property beats
+ * threading a second return value through every step: the nonce is only needed
+ * when announcing the result, and the channel is the thing that carries it.
+ */
+type RefreshChannel = BroadcastChannel & { __nonce: string; __at: number };
+
+function nextNonce(): string {
+  claimSeq += 1;
+  return `${TAB_ID}:${claimSeq}`;
+}
+
+/**
+ * Open a channel for electing this round's refresher, or null if this
+ * environment cannot.
+ *
+ * Two separate failures are covered. During server rendering there is no browser
+ * to coordinate with -- and `BroadcastChannel` does exist as a Node global, so
+ * without the guard we would quietly open a channel to nobody and hold the event
+ * loop open with it. In the browser, the constructor can be missing or can
+ * refuse; the try/catch covers both, because an absent `BroadcastChannel` is just
+ * a `ReferenceError` like any other. Checking `in window` beforehand would be a
+ * second spelling of the same thing, and an untestable one.
+ */
+function openRefreshChannel(): RefreshChannel | null {
+  if (typeof window === "undefined") return null;
+  try {
+    // __nonce starts empty and is filled in by runElection; the leader is the
+    // only one that reads it back.
+    return Object.assign(new BroadcastChannel(REFRESH_CHANNEL), {
+      __nonce: "",
+      __at: 0,
+    }) as RefreshChannel;
+  } catch {
+    return null;
+  }
+}
+
 async function refreshAccessToken(): Promise<boolean> {
   if (!refreshInFlight) {
-    refreshInFlight = (async () => {
-      // No body needed: the route handler reads the refresh token from its
-      // httpOnly cookie. The browser attaches it automatically.
-      const res = await fetch(`${API_BASE}/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      if (!res.ok) return false;
-      const data = (await res.json().catch(() => null)) as { ok?: boolean } | null;
-      return Boolean(data?.ok);
-    })().finally(() => {
+    refreshInFlight = runRefresh().finally(() => {
       refreshInFlight = null;
     });
   }
   return refreshInFlight;
+}
+
+async function runRefresh(): Promise<boolean> {
+  const ch = openRefreshChannel();
+  let stopBeating: (() => void) | null = null;
+
+  if (ch) {
+    if (!(await runElection(ch))) {
+      // Another tab is the leader. Wait for it to report rather than guessing:
+      // claiming first is not the same as succeeding, and returning early would
+      // retry the original request against a token that is still expired.
+      const refreshed = await waitForPeerDone(ch);
+      ch.close();
+      return refreshed;
+    }
+    // We lead. Keep re-announcing until we are finished, so a tab that starts
+    // *after* us learns the lock is held instead of racing us.
+    stopBeating = startBeating(ch, ch.__nonce, ch.__at);
+  }
+
+  // No body needed: the route handler reads the refresh token from its
+  // httpOnly cookie. The browser attaches it automatically.
+  const res = await fetch(`${API_BASE}/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const ok = res.ok
+    ? Boolean(
+        ((await res.json().catch(() => null)) as { ok?: boolean } | null)?.ok,
+      )
+    : false;
+  stopBeating?.();
+  if (ch && ok) {
+    // Announce the result under *our* nonce. The tabs that stood down are
+    // waiting on this message, and a nonce they never sent themselves is
+    // unambiguous -- whereas a fixed "leader" tag would also match messages from
+    // a different refresh round that happened to overlap this one.
+    ch.postMessage({
+      type: "done",
+      nonce: ch.__nonce,
+      at: ch.__at,
+    } satisfies RefreshMessage);
+  }
+  ch?.close();
+  return ok;
+}
+
+/**
+ * Contend for the refresh lock. Returns true if this tab should do the
+ * exchange, false if a peer is already handling it.
+ *
+ * The tie-break is the important part, and getting it wrong is worse than not
+ * having it. Tabs waking together all broadcast a claim at the same moment and
+ * each sees the others', so the obvious rule -- "someone else claimed, so I
+ * stand down" -- makes *every* tab stand down and nobody refreshes at all,
+ * turning a race into a deadlock. So leadership is a total order: the earliest
+ * round wins, and the nonce only separates claims made in the same millisecond.
+ * Exactly one tab ever proceeds.
+ *
+ * A peer that is already mid-exchange needs no special case -- its round started
+ * earlier, so a tab joining now sees a smaller ``at`` and stands down.
+ */
+async function runElection(ch: RefreshChannel): Promise<boolean> {
+  const nonce = nextNonce();
+  // One timestamp per refresh round, reused on every heartbeat. It has to be
+  // captured once: a leader that stamped each beat afresh would look newer than
+  // a tab that joined after it, and that tab would refuse to defer to it.
+  const at = Date.now();
+  ch.__nonce = nonce;
+  ch.__at = at;
+  return new Promise<boolean>((resolve) => {
+    let beaten = false;
+    let settled = false;
+
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(electionTimer);
+      clearTimeout(lockTimer);
+      ch.removeEventListener("message", onMessage);
+      resolve(result);
+    };
+
+    function onMessage(event: MessageEvent) {
+      const msg = event.data as RefreshMessage | null;
+      if (!msg || msg.nonce === nonce) return;
+      if (msg.type === "done") {
+        // A leader already finished; nothing to contend for.
+        finish(false);
+        return;
+      }
+      // An *earlier* round outranks ours: that tab has been waiting longer, and
+      // may already be mid-exchange. A later one is a tab that started after us
+      // and will defer to us instead.
+      //
+      // This is why the ordering is by timestamp and not by nonce. A tab that
+      // joins late with a small nonce would otherwise outrank a leader already
+      // holding the lock, and both would refresh. Nonce only breaks ties within
+      // the same millisecond, which is what genuinely simultaneous claims look
+      // like, and a total order there means exactly one of them proceeds.
+      const older = msg.at < at || (msg.at === at && msg.nonce < nonce);
+      if (older) {
+        beaten = true;
+        finish(false);
+      }
+    }
+
+    const electionTimer = setTimeout(() => finish(!beaten), REFRESH_ELECTION_MS);
+    // If the leader dies between claiming and reporting, followers must not wait
+    // forever: past the lock TTL, take over.
+    const lockTimer = setTimeout(() => finish(!beaten), REFRESH_LOCK_TTL_MS);
+
+    ch.addEventListener("message", onMessage);
+    postClaim(ch, nonce, at);
+  });
+}
+
+function postClaim(ch: RefreshChannel, nonce: string, at: number) {
+  ch.postMessage({ type: "claim", nonce, at } satisfies RefreshMessage);
+}
+
+/**
+ * Re-announce leadership on a timer until stopped.
+ *
+ * BroadcastChannel does not replay, so a tab that opens after we claimed never
+ * sees that claim. Without the heartbeat it would time out its own election and
+ * race us, reintroducing the exact double-refresh this exists to prevent. The
+ * heartbeat also covers the leader's own channel being the only one open.
+ */
+function startBeating(ch: RefreshChannel, nonce: string, at: number): () => void {
+  const timer = setInterval(() => {
+    postClaim(ch, nonce, at);
+  }, REFRESH_BEAT_MS);
+  return () => clearInterval(timer);
+}
+
+/** Wait for the elected refresher to report that the cookies were re-baked. */
+function waitForPeerDone(ch: RefreshChannel): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), REFRESH_WAIT_MS);
+    ch.onmessage = (event: MessageEvent) => {
+      if ((event.data as RefreshMessage | null)?.type === "done") {
+        clearTimeout(timer);
+        resolve(true);
+      }
+    };
+  });
 }
 
 function notifySessionExpired(): void {
