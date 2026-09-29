@@ -149,7 +149,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }
             }}
             maxLength={200}
-            className="w-full bg-[var(--bg-surface)] border border-[var(--accent)] rounded px-1.5 py-0.5 text-xs text-white outline-none"
+            className="w-full bg-[var(--bg-surface)] border border-[var(--border-active)] rounded px-1.5 py-0.5 text-xs text-[var(--text-primary)] outline-none"
           />
         ) : (
           <span className="truncate">{c.title}</span>
@@ -174,7 +174,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 cancelRename();
               }}
               title="Cancel rename"
-              className="text-[var(--text-faint)] hover:text-white p-0.5"
+              className="text-[var(--text-faint)] hover:text-[var(--text-primary)] p-0.5"
             >
               <X className="w-3.5 h-3.5" />
             </button>

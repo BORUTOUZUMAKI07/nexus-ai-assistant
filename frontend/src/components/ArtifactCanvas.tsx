@@ -418,7 +418,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
             <button
               onClick={beginEdit}
               disabled={viewingVersion !== null}
-              className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-white hover:border-[var(--border-strong)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               // Stable accessible name; only the tooltip varies with state, so
               // the control does not appear to vanish while a past version is
               // being previewed.
@@ -608,7 +608,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
                         onClick={() => setViewingVersion(v)}
                         title={`View version ${v.version}`}
                         aria-label={`View version ${v.version}`}
-                        className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-white hover:border-[var(--border-strong)] transition-colors"
+                        className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors"
                       >
                         <Eye className="w-3 h-3" />
                         View
