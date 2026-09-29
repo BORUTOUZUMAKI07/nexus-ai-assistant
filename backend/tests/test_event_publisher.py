@@ -1,6 +1,6 @@
 """
 Unit tests for the EventPublisher seam — the cheap "socket" that keeps a full
-transactional outbox deferred (docs/hld-patterns-coverage.md row 6).
+transactional outbox deferred (see docs/architecture.md §Reliability).
 
 Verifies the swap-the-adapter contract: call sites depend on the interface;
 the Celery adapter routes events through the registry; dispatch is fail-open.

@@ -1,5 +1,5 @@
 """
-Automated Prompt-Optimization Loop (MD §6.15 → valid Opik/agent-opt pattern).
+Automated Prompt-Optimization Loop (Opik/agent-opt style pattern).
 
 One closed loop: propose K candidate rewrites of a prompt key, score the
 baseline + each candidate against a golden case set with an (injectable) judge,

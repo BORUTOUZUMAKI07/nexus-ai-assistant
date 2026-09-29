@@ -2,7 +2,7 @@
 PII Redaction Utilities.
 
 Regex-based scrubber for common personally identifiable information and
-high-value secrets (MD §8.6 Security & privacy — PII minimization/anonymization).
+high-value secrets (security/privacy: PII minimization and anonymization).
 Used by two consumers:
 
 * a structlog processor (``redact_event``) enabling log-hygiene redaction when

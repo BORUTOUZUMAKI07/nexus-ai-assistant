@@ -203,7 +203,8 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
 # Lightweight constraint-check that runs before the main routing decision.
 # Prevents instruction drift and detects policy/tool violations early so
 # the synthesizer never silently ignores them mid-conversation.
-# Based on Â§2.2 (Attentive Reasoning Queries) of AI_Engineering_Complete_Notes.
+# Pattern: Attentive Reasoning Query (ARQ) — a lightweight pre-routing
+# constraint-check that classifies each request before tool dispatch.
 _ARQ_PROMPT_TEMPLATE = """
 You are a constraint-checker for an AI assistant. Analyse the user request below
 and return a compact JSON object with EXACTLY these keys â€” no others:

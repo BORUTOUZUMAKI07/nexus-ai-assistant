@@ -1,5 +1,5 @@
 """
-Prompt Regression Gate (MD §9 + Appendix-F checklist pattern).
+Prompt Regression Gate (CI-style golden tests for prompts).
 
 Every candidate system-prompt / behavior change should prove it does not regress
 guardrail-critical behaviors before shipping — the prompt-level analog of CI

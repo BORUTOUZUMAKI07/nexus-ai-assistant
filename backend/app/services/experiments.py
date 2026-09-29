@@ -1,5 +1,5 @@
 """
-Deterministic Canary/Shadow Experiments (MD §6.6 safe-release pattern).
+Deterministic Canary/Shadow Experiments (safe-release pattern).
 
 User-bucket assignment for gradual, shadow-released prompt/model changes:
 

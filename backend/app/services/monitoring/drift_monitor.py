@@ -1,12 +1,12 @@
 """
 Drift Monitoring for an LLM Assistant.
 
-Adapts the ML-systems drift toolkit (MD §7.6 — sliding vs cumulative windows,
+Adapts the ML-systems drift toolkit (sliding vs cumulative windows,
 z-score alerting, PSI over categorical distributions) to *LLM-era* signals
-(MD §8.8 monitoring row): refusal rate, hallucination/faithfulness pass rate,
-error rate, latency, and cost per request.
+(refusal rate, hallucination/faithfulness pass rate,
+error rate, latency, and cost per request).
 
-Design rules from MD §7.6 applied here:
+Design rules applied here:
 * **Sliding windows** — never cumulative, which hides recent dips under old
   history. Compare a recent window against the immediately preceding baseline
   window of equal length.
@@ -155,7 +155,7 @@ def sliding_window_pairs(
     ``samples`` are dicts with a timestamp key and a value key; the recent
     window covers the last ``recent_seconds`` up to ``now_ts`` and the baseline
     window the ``baseline_seconds`` immediately before that. Equal-length
-    windows keep the comparison fair (MD §7.6).
+    windows keep the comparison fair.
     """
     if now_ts is None:
         now_ts = max((float(s.get(ts_key, 0.0)) for s in samples), default=0.0)

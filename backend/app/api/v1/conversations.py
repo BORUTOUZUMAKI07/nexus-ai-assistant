@@ -364,7 +364,7 @@ async def stream_conversation(
                             "tool_call_id": run_id,
                         })
                         yield f"data: {payload}\n\n"
-                        # AG-UI standardized alias (MD §6.13): live tool-progress
+                        # AG-UI standardized alias: live tool-progress
                         # events with the protocol's field names. New UIs can bind
                         # to TOOL_CALL_START; existing clients keep tool_call.
                         agui_payload = json.dumps({

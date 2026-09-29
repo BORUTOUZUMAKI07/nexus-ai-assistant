@@ -249,7 +249,7 @@ class Settings(BaseSettings):
     # ── PII Redaction ──────────────────────────────────────────────────────────
     # When True, a structlog processor scrubs emails, phone numbers, SSNs,
     # credit cards, IPs and bearer/secret tokens from every emitted log event
-    # (industry-grade log hygiene — MD §8.6 security/privacy checklist).
+    # (industry-grade log hygiene — PII/secrets scrubbing).
     PII_REDACTION_ENABLED: bool = Field(default=False)
     PII_REDACTION_REPLACEMENT: str = Field(default="[REDACTED]")
 
@@ -263,7 +263,7 @@ class Settings(BaseSettings):
     LANGFUSE_PUBLIC_KEY: str | None = Field(default=None)
     LANGFUSE_SECRET_KEY: str | None = Field(default=None)
 
-    # ── Response Caching (semantic-cost redaction, MD §8.5) ───────────────────
+    # ── Response Caching (semantic-cost redaction) ───────────────────────────
     # Exact-normalized-query response cache for the synchronous message path.
     # Keyed per user+model; stores the generated text + token/cost telemetry so
     # repeated identical questions skip the LLM round-trip. Fail-open.
@@ -271,7 +271,7 @@ class Settings(BaseSettings):
     RESPONSE_CACHE_TTL_SECONDS: int = Field(default=3600)
     RESPONSE_CACHE_MIN_LENGTH: int = Field(default=8, description="Minimum query length eligible for caching")
 
-    # ── Experiments / Canary-Shadow (MD §6.6 safe release) ────────────────────
+    # ── Experiments / Canary-Shadow (safe release) ───────────────────────────
     # Deterministic user-bucket assignment for shadow/gradual prompt release.
     # EXPERIMENTS_CONFIG_PATH may point at a YAML file describing experiments
     # and variant weights; when unset, experiments resolve to their default

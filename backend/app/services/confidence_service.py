@@ -1,5 +1,5 @@
 """
-Calibrated Confidence Gate (MD §5.9 → industry standard, validated).
+Calibrated Confidence Gate: a validated post-hoc confidence calibration.
 
 Composite confidence for a generated response: groundedness against retrieved
 citations (the dominant signal for RAG answers), retrieval coverage, and an

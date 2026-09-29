@@ -1,5 +1,5 @@
 """
-Response Cache (MD §8.5 cost & efficiency — caching predictions keyed by
+Response Cache (cost & efficiency — caching predictions keyed by
 input hash).
 
 Exact-normalized-query response cache for the synchronous chat path: repeated,

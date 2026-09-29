@@ -1,5 +1,5 @@
 """
-Domain models for Bandit Exploration rewards (MD §8.9 → industry ε-greedy).
+Domain models for Bandit Exploration rewards (industry-style ε-greedy).
 
 ``BanditReward`` is the persisted reward stream that backs the ε-greedy /
 contextual bandit selection: every thumbs-up/thumbs-down on a message is

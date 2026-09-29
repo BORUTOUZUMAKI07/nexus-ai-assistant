@@ -1,9 +1,9 @@
 """
 Event publishing seam (the "socket" for a future transactional outbox).
 
-The outbox pattern is deliberately deferred (see docs/hld-patterns-coverage.md
-row 6). This module is the cheap prep layer the audit recommended instead:
-a single ``EventPublisher`` interface with two pluggable adapters —
+The transactional-outbox pattern is deliberately deferred (see
+docs/architecture.md §Reliability). This module is the cheap prep layer kept
+instead: a single ``EventPublisher`` interface with two pluggable adapters —
 
   * ``CeleryPublisher``   — dispatch a domain event to a registered Celery task
                             (used today; at most one consumer per event).

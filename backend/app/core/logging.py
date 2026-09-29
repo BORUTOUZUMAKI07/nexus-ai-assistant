@@ -76,7 +76,7 @@ def setup_logging() -> None:
         structlog.processors.UnicodeDecoder(),
     ]
 
-    # Log-hygiene guard (MD §8.6): scrub PII/secrets from every event before
+    # Log-hygiene guard: scrub PII/secrets from every event before
     # rendering when enabled. Placed after exception formatting so tracebacks
     # are scrubbed too, and before the renderer so JSON output is clean.
     if settings.PII_REDACTION_ENABLED:

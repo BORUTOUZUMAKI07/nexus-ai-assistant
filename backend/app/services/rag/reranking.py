@@ -7,7 +7,8 @@ Also provides sentence-level salience filtering ("Sense & Expand") that
 scores individual sentences from retrieved parent chunks against the query
 vector via cosine similarity, keeping only the top-K most salient sentences.
 This prevents “lost-in-the-middle” attention degradation and reduces the
-synth prompt footprint by 60-80%.  Based on §4.11 of AI_Engineering_Complete_Notes.
+synth prompt footprint by 60-80% (Sentence-Level Salience / “Sense & Expand”
+sentence filtering).
 """
 import asyncio
 import re
@@ -55,7 +56,7 @@ def _rerank_sync(ranker: Any, request: Any, top_n: int, candidates: list[dict[st
     return reranked
 
 
-# ── Sentence-Level Salience Filter (§4.11 “Sense & Expand”) ───────────────────────
+# ── Sentence-Level Salience Filter (“Sense & Expand”) ─────────────────────────────
 
 def _cosine_sim_numpy(a: list[float], b: list[float]) -> float:
     """Fast cosine similarity between two equal-length vectors."""
