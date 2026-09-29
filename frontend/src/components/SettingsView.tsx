@@ -24,6 +24,7 @@ import {
   UserMemory,
   APIKey,
 } from "@/lib/api";
+import { AppearanceSettings } from "@/components/AppearanceSettings";
 
 const MODELS = [
   { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B" },
@@ -158,7 +159,7 @@ export const SettingsView: React.FC = () => {
         <p className="text-sm text-[var(--text-muted)]">{loadError}</p>
         <button
           onClick={load}
-          className="rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-white transition-colors"
+          className="rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
         >
           Retry
         </button>
@@ -179,8 +180,8 @@ export const SettingsView: React.FC = () => {
     <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight text-white flex items-center gap-2">
-            <Sliders className="w-5 h-5 text-[var(--accent)]" /> Settings
+          <h2 className="text-xl font-semibold tracking-tight text-[var(--text-primary)] flex items-center gap-2">
+            <Sliders className="w-5 h-5 text-[var(--accent-ink)]" /> Settings
           </h2>
           <p className="text-xs text-[var(--text-muted)] mt-1">
             Agent configuration, Bring-Your-Own-Key providers, and persistent
@@ -203,9 +204,12 @@ export const SettingsView: React.FC = () => {
         </button>
       </div>
 
+      {/* Appearance — client-side, applies instantly */}
+      <AppearanceSettings />
+
       {/* Agent configuration */}
       <div className="glass-panel p-6 space-y-4">
-        <h3 className="text-sm font-medium text-white border-b border-[var(--border-subtle)] pb-2">
+        <h3 className="text-sm font-medium text-[var(--text-primary)] border-b border-[var(--border-subtle)] pb-2">
           Agent configuration
         </h3>
 
@@ -283,8 +287,8 @@ export const SettingsView: React.FC = () => {
 
       {/* BYOK API keys */}
       <div className="glass-panel p-6 space-y-4">
-        <h3 className="text-sm font-medium text-white flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2">
-          <Key className="w-4 h-4 text-[var(--accent)]" /> Bring-Your-Own-Key
+        <h3 className="text-sm font-medium text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2">
+          <Key className="w-4 h-4 text-[var(--accent-ink)]" /> Bring-Your-Own-Key
           providers
         </h3>
         <p className="text-xs text-[var(--text-muted)]">
@@ -332,7 +336,7 @@ export const SettingsView: React.FC = () => {
                 className="flex items-center justify-between rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs"
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-mono text-[var(--accent)]">
+                  <span className="font-mono text-[var(--accent-ink)]">
                     {k.provider}
                   </span>
                   {k.label && (
@@ -362,10 +366,10 @@ export const SettingsView: React.FC = () => {
 
       {/* Persistent memories */}
       <div className="glass-panel p-6 space-y-4">
-        <h3 className="text-sm font-medium text-white flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2">
-          <Brain className="w-4 h-4 text-[var(--accent)]" /> Persistent memories
+        <h3 className="text-sm font-medium text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2">
+          <Brain className="w-4 h-4 text-[var(--accent-ink)]" /> Persistent memories
           {memories.length > 0 && (
-            <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent-hover)] border border-[var(--accent)]/30">
+            <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]/30">
               {memories.length} active
             </span>
           )}
@@ -395,7 +399,7 @@ export const SettingsView: React.FC = () => {
           <button
             onClick={handleAddMemory}
             disabled={memoryBusy || !memoryContent.trim()}
-            className="flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-secondary)] hover:text-white hover:border-[var(--border-strong)] disabled:opacity-40 transition-colors"
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] disabled:opacity-40 transition-colors"
           >
             {memoryBusy ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -424,7 +428,7 @@ export const SettingsView: React.FC = () => {
                   className={`px-2.5 py-1 rounded-full text-[10px] font-medium uppercase tracking-wide transition-colors ${
                     memoryFilter === cat
                       ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
-                      : "bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-white"
+                      : "bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                   }`}
                 >
                   {cat}
@@ -451,7 +455,7 @@ export const SettingsView: React.FC = () => {
                 className="p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] flex items-center justify-between text-xs"
               >
                 <div className="min-w-0">
-                  <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent-hover)] font-mono mr-2">
+                  <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent-ink)] font-mono mr-2">
                     {m.category}
                   </span>
                   <span className="text-[var(--text-secondary)]">{m.content}</span>

@@ -3,6 +3,12 @@
 import React, { useState } from "react";
 import { X, Lock, Mail, User, ArrowRight, Sparkles, Loader2 } from "lucide-react";
 import { registerUser, loginUser } from "@/lib/api";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -18,8 +24,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,30 +51,36 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 animate-in fade-in duration-200">
-      <div className="relative w-full max-w-md rounded-xl bg-[var(--bg-surface)] border border-[var(--border-strong)] p-6 shadow-float">
+    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent
+        // Sign-in is a deliberate flow: close via the X or Escape, never by a stray outside click.
+        onPointerDownOutside={(e) => e.preventDefault()}
+        className="border-[var(--border-strong)] bg-[var(--bg-surface)]"
+      >
         {/* Close Button */}
         <button
+          type="button"
           onClick={onClose}
-          className="absolute right-4 top-4 rounded-lg p-1.5 text-[var(--text-faint)] hover:bg-[var(--bg-main)] hover:text-[var(--text-secondary)] transition-colors"
+          aria-label="Close"
+          className="absolute right-4 top-4 rounded-lg p-1.5 text-[var(--text-faint)] hover:bg-[var(--bg-surface-tint)] hover:text-[var(--text-secondary)] transition-colors"
         >
           <X className="h-5 w-5" />
         </button>
 
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--accent)]">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--accent-ink)]">
             <Sparkles className="h-5 w-5" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold tracking-tight text-white">
+            <DialogTitle className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">
               {mode === "login" ? "Welcome back" : "Create your account"}
-            </h2>
-            <p className="text-xs text-[var(--text-muted)]">
+            </DialogTitle>
+            <DialogDescription className="text-xs text-[var(--text-muted)]">
               {mode === "login"
                 ? "Sign in to access your Nexus assistant"
                 : "Join Nexus for production AI workflows"}
-            </p>
+            </DialogDescription>
           </div>
         </div>
 
@@ -85,7 +95,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           {mode === "register" && (
             <>
               <div>
-                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Full Name</label>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5" htmlFor="auth-fullname">Full Name</label>
                 <div className="relative">
                   <User className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-faint)]" />
                   <input
@@ -93,13 +103,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                     required
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
+                    id="auth-fullname"
                     placeholder="Jane Doe"
                     className="w-full rounded-lg bg-[var(--bg-main)] border border-[var(--border-subtle)] pl-9 pr-4 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Username</label>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5" htmlFor="auth-username">Username</label>
                 <div className="relative">
                   <User className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-faint)]" />
                   <input
@@ -107,6 +118,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                     required
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
+                    id="auth-username"
                     placeholder="janedoe"
                     className="w-full rounded-lg bg-[var(--bg-main)] border border-[var(--border-subtle)] pl-9 pr-4 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
                   />
@@ -116,7 +128,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           )}
 
           <div>
-            <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Email address</label>
+            <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5" htmlFor="auth-email">Email address</label>
             <div className="relative">
               <Mail className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-faint)]" />
               <input
@@ -124,14 +136,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@example.com"
+                id="auth-email"
+                    placeholder="name@example.com"
                 className="w-full rounded-lg bg-[var(--bg-main)] border border-[var(--border-subtle)] pl-9 pr-4 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Password</label>
+            <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5" htmlFor="auth-password">Password</label>
             <div className="relative">
               <Lock className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-faint)]" />
               <input
@@ -139,7 +152,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
+                id="auth-password"
+                    placeholder="••••••••"
                 className="w-full rounded-lg bg-[var(--bg-main)] border border-[var(--border-subtle)] pl-9 pr-4 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
               />
             </div>
@@ -167,8 +181,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             <span>
               Don&apos;t have an account?{" "}
               <button
+                type="button"
                 onClick={() => setMode("register")}
-                className="font-medium text-[var(--accent-hover)] hover:text-[var(--accent)] hover:underline"
+                className="font-medium text-[var(--accent-ink)] hover:text-[var(--accent-ink)] hover:underline"
               >
                 Sign up
               </button>
@@ -177,15 +192,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             <span>
               Already have an account?{" "}
               <button
+                type="button"
                 onClick={() => setMode("login")}
-                className="font-medium text-[var(--accent-hover)] hover:text-[var(--accent)] hover:underline"
+                className="font-medium text-[var(--accent-ink)] hover:text-[var(--accent-ink)] hover:underline"
               >
                 Sign in
               </button>
             </span>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 };
