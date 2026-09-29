@@ -28,14 +28,14 @@ function BrandMark({ size = 32 }: { size?: number }) {
       }}
       aria-hidden="true"
     >
-      <Sparkles className="text-[var(--accent)]" size={size * 0.55} strokeWidth={2.2} />
+      <Sparkles className="text-[var(--accent-ink)]" size={size * 0.55} strokeWidth={2.2} />
     </span>
   );
 }
 
 function Navbar() {
   return (
-    <header className="fixed inset-x-0 top-0 z-50 border-b border-[var(--border-subtle)] bg-[rgba(8,9,10,0.85)] backdrop-blur-xl">
+    <header className="fixed inset-x-0 top-0 z-50 border-b border-[var(--border-subtle)] bg-[var(--bg-glass)] backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
         <a href="#top" className="flex items-center gap-3">
           <BrandMark size={30} />
@@ -147,7 +147,7 @@ function HeroMockup() {
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] px-2 py-1 text-[11px] text-[var(--text-secondary)]">
-                <Globe className="h-3 w-3 text-[var(--accent)]" /> 3 sources
+                <Globe className="h-3 w-3 text-[var(--accent-ink)]" /> 3 sources
               </span>
               <span className="inline-flex items-center gap-1 rounded-md bg-[var(--accent-violet)]/10 px-2 py-1 text-[11px] text-[var(--accent-violet)]">
                 [1] market-report-q3
@@ -247,7 +247,7 @@ const FEATURES = [
     icon: Globe,
     title: "Live web research",
     body: "Fresh answers backed by live web search — only when a question actually needs it, and always with cited sources.",
-    accent: "text-[var(--accent)]",
+    accent: "text-[var(--accent-ink)]",
   },
   {
     icon: FileText,
@@ -265,7 +265,7 @@ const FEATURES = [
     icon: Brain,
     title: "Verifiable reasoning",
     body: "Expandable thinking blocks expose the chain of thought behind every answer, so you can audit the logic, not just the result.",
-    accent: "text-[var(--accent-hover)]",
+    accent: "text-[var(--accent-ink)]",
   },
   {
     icon: ShieldCheck,
@@ -442,7 +442,7 @@ function Models() {
       <div className="mt-12 grid gap-4 sm:grid-cols-3">
         {MODELS.map((m) => (
           <div key={m.name} className="glass-card p-6 text-center">
-            <span className="inline-block rounded-full border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-1 text-[11.5px] font-medium uppercase tracking-wider text-[var(--accent-hover)]">
+            <span className="inline-block rounded-full border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-1 text-[11.5px] font-medium uppercase tracking-wider text-[var(--accent-ink)]">
               {m.provider}
             </span>
             <h3 className="mt-4 text-[18px] font-semibold text-[var(--text-primary)]">

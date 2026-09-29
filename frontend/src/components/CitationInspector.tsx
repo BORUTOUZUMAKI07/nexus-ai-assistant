@@ -30,14 +30,14 @@ export const CitationInspector: React.FC<CitationInspectorProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)]">
         <div className="flex items-center gap-2 min-w-0">
-          <BookOpen className="w-4 h-4 text-[var(--accent)] shrink-0" />
-          <h3 className="text-xs font-semibold text-white truncate">
+          <BookOpen className="w-4 h-4 text-[var(--accent-ink)] shrink-0" />
+          <h3 className="text-xs font-semibold text-[var(--text-primary)] truncate">
             Grounding Source
           </h3>
         </div>
         <button
           onClick={onClose}
-          className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-main)] transition-colors"
+          className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-main)] transition-colors"
           title="Close Inspector"
         >
           <X className="w-4 h-4" />
@@ -52,12 +52,12 @@ export const CitationInspector: React.FC<CitationInspectorProps> = ({
             <span className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)]">
               Document File
             </span>
-            <span className="flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] font-semibold border border-[var(--accent)]/20">
+            <span className="flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent-ink)] font-semibold border border-[var(--accent)]/20">
               <Sparkles className="w-2.5 h-2.5" />
               {matchPercent}% Match
             </span>
           </div>
-          <p className="font-medium text-white text-sm break-all">
+          <p className="font-medium text-[var(--text-primary)] text-sm break-all">
             {citation.filename}
           </p>
           <div className="text-[10px] font-mono text-[var(--text-muted)]">
@@ -71,7 +71,7 @@ export const CitationInspector: React.FC<CitationInspectorProps> = ({
             <span>Verbatim Extracted Chunk</span>
             <button
               onClick={handleCopy}
-              className="flex items-center gap-1 text-[10px] text-[var(--text-muted)] hover:text-white transition-colors"
+              className="flex items-center gap-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
             >
               {copied ? (
                 <>
@@ -93,7 +93,7 @@ export const CitationInspector: React.FC<CitationInspectorProps> = ({
 
         {/* Info Box */}
         <div className="p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)]/50 text-[11px] text-[var(--text-muted)] leading-normal flex items-start gap-2">
-          <ExternalLink className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 mt-0.5" />
+          <ExternalLink className="w-3.5 h-3.5 text-[var(--accent-ink)] shrink-0 mt-0.5" />
           <span>
             This chunk was semantically retrieved from Qdrant vector storage and verified by the LangGraph Evidence Gate to eliminate hallucinations.
           </span>

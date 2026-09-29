@@ -13,7 +13,9 @@ import {
   Sparkles,
   LogOut,
   GitFork,
+  Search,
 } from "lucide-react";
+import { MODELS } from "@/lib/models";
 
 export interface ConversationItem {
   id: string;
@@ -37,6 +39,8 @@ interface SidebarProps {
   onSignOut?: () => void;
   /** When false (the default) the Admin nav item is hidden entirely. */
   showAdmin?: boolean;
+  /** Opens the ⌘K command palette; the search trigger renders only when provided. */
+  onOpenCommandPalette?: () => void;
 }
 
 interface NavItem {
@@ -58,12 +62,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onChangeModel,
   onSignOut,
   showAdmin = false,
+  onOpenCommandPalette,
 }: SidebarProps) => {
-  const models = [
-    { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B", provider: "Groq (Fast)" },
-    { id: "deepseek-r1-distill-llama-70b", name: "DeepSeek R1", provider: "Reasoning" },
-    { id: "llama-3.1-8b-instant", name: "Llama 3.1 8B", provider: "Groq (Instant)" },
-  ];
+  const models = MODELS;
 
   const pinnedList = conversations.filter((c) => c.is_pinned);
   const recentList = conversations.filter((c) => !c.is_pinned);
@@ -83,8 +84,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       onClick={() => onSelectConversation(c.id)}
       className={`group flex items-center justify-between px-3 py-2 rounded-lg text-xs cursor-pointer transition-colors ${
         activeConversationId === c.id
-          ? "bg-[var(--accent-soft)] text-[var(--accent-hover)] border border-[var(--accent)]"
-          : "text-[var(--text-muted)] hover:bg-[var(--bg-surface)] hover:text-white border border-transparent"
+          ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
+          : "text-[var(--text-muted)] hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)] border border-transparent"
       }`}
     >
       <div className="flex items-center gap-2 truncate">
@@ -96,7 +97,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             onClick={(e) => onForkConversation(c.id, e)}
             title="Fork/Branch conversation"
-            className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent)] p-0.5 transition-opacity"
+            className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity"
           >
             <GitFork className="w-3.5 h-3.5" />
           </button>
@@ -118,10 +119,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-4 flex items-center justify-between border-b border-[var(--border-subtle)]">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center">
-            <Sparkles className="w-4 h-4 text-[var(--accent)]" />
+            <Sparkles className="w-4 h-4 text-[var(--accent-ink)]" />
           </div>
           <div>
-            <h1 className="font-semibold text-sm tracking-tight text-white">
+            <h1 className="font-semibold text-sm tracking-tight text-[var(--text-primary)]">
               Nexus AI
             </h1>
             <span className="text-[10px] text-[var(--text-faint)] font-medium tracking-wider uppercase">
@@ -140,12 +141,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
+      {/* Command palette trigger */}
+      {onOpenCommandPalette && (
+        <div className="px-3 pt-3">
+          <button
+            type="button"
+            onClick={onOpenCommandPalette}
+            aria-label="Search or run a command (Command or Control K)"
+            className="flex w-full items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-2 text-xs text-[var(--text-muted)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-secondary)]"
+          >
+            <Search className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Search or run a command</span>
+            <kbd className="ml-auto rounded border border-[var(--border-subtle)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-faint)]">
+              ⌘K
+            </kbd>
+          </button>
+        </div>
+      )}
+
       {/* Model Selector */}
       <div className="px-3 pt-3">
         <div className="p-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]">
           <div className="flex items-center justify-between mb-1.5 px-1">
             <span className="text-[11px] text-[var(--text-muted)] font-medium flex items-center gap-1.5">
-              <Cpu className="w-3 h-3 text-[var(--accent)]" /> Model
+              <Cpu className="w-3 h-3 text-[var(--accent-ink)]" /> Model
             </span>
           </div>
           <select
@@ -205,8 +224,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onClick={() => setActiveTab(tab)}
             className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors ${
               activeTab === tab
-                ? "bg-[var(--accent-soft)] text-[var(--accent-hover)] border border-[var(--accent)]"
-                : "text-[var(--text-muted)] hover:bg-[var(--bg-surface)] hover:text-white border border-transparent"
+                ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
+                : "text-[var(--text-muted)] hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)] border border-transparent"
             }`}
           >
             <Icon className="w-4 h-4" />

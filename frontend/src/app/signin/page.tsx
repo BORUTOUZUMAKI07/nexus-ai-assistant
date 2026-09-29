@@ -73,8 +73,8 @@ export default function SignInPage() {
       <div className="w-full max-w-md">
         <div className="mb-8 flex flex-col items-center text-center">
           <Link href="/" className="flex items-center gap-3">
-            <span className="grid h-10 w-10 place-items-center rounded-lg shadow-float" aria-hidden="true">
-              <Sparkles className="text-white" size={22} strokeWidth={2.2} />
+            <span className="grid h-10 w-10 place-items-center rounded-lg bg-[var(--accent)] shadow-float" aria-hidden="true">
+              <Sparkles className="text-[var(--accent-foreground)]" size={22} strokeWidth={2.2} />
             </span>
           </Link>
           <h1 className="mt-5 text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
@@ -186,7 +186,7 @@ export default function SignInPage() {
           type="button"
           onClick={handleSso}
           disabled={ssoLoading}
-          className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:border-[var(--accent)] hover:text-[var(--accent-ink)] disabled:opacity-50"
         >
           {ssoLoading ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -203,7 +203,7 @@ export default function SignInPage() {
               <button
                 type="button"
                 onClick={() => setMode("register")}
-                className="font-medium text-[var(--accent-hover)] hover:text-[var(--accent)] hover:underline"
+                className="font-medium text-[var(--accent-ink)] hover:text-[var(--accent-ink)] hover:underline"
               >
                 Sign up
               </button>
@@ -214,7 +214,7 @@ export default function SignInPage() {
               <button
                 type="button"
                 onClick={() => setMode("login")}
-                className="font-medium text-[var(--accent-hover)] hover:text-[var(--accent)] hover:underline"
+                className="font-medium text-[var(--accent-ink)] hover:text-[var(--accent-ink)] hover:underline"
               >
                 Sign in
               </button>
