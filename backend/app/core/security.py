@@ -126,8 +126,17 @@ def create_access_token(
     return jwt.encode(to_encode, _signing_key(), algorithm=_algorithm())
 
 
-def create_refresh_token(subject: str | UUID, expires_delta: timedelta | None = None) -> str:
-    """Creates a long-lived refresh token (default REFRESH_TOKEN_EXPIRE_DAYS)."""
+def create_refresh_token(
+    subject: str | UUID,
+    expires_delta: timedelta | None = None,
+    family_id: str | None = None,
+) -> str:
+    """Creates a long-lived refresh token (default REFRESH_TOKEN_EXPIRE_DAYS).
+
+    ``family_id`` groups every token descended from one sign-in. It is a claim
+    rather than a lookup so that reuse detection can revoke one leaked sign-in
+    without terminating the user's other sessions on other devices.
+    """
     if expires_delta:
         expire = datetime.now(UTC) + expires_delta
     else:
@@ -140,6 +149,8 @@ def create_refresh_token(subject: str | UUID, expires_delta: timedelta | None = 
         "jti": secrets.token_hex(16),
         "type": "refresh"
     }
+    if family_id:
+        to_encode["fam"] = family_id
     return jwt.encode(to_encode, _signing_key(), algorithm=_algorithm())
 
 

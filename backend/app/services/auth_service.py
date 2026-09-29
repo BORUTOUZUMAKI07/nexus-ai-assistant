@@ -3,6 +3,8 @@ Auth Application Service.
 Owns all authentication and user registration use cases (SRP).
 Route handlers depend on this abstraction, not on UserRepository directly (DIP).
 """
+import asyncio
+import json
 import secrets
 import time
 from datetime import timedelta
@@ -41,6 +43,14 @@ logger = structlog.get_logger(__name__)
 # that was replayed), this cascades: one replayed token locks out sibling
 # sessions too, which is what turns a silent theft into a detectable event.
 _REFRESH_REVOKED_PREFIX = "refresh:revoked:"
+
+# How long a duplicate refresh waits for the in-flight winner to publish its
+# tokens before concluding the replay was a theft, and how often it looks. The
+# wait is a sub-window of REFRESH_REUSE_GRACE_SECONDS on purpose: the winner has
+# one user lookup and one cache write left to do, so this is generous, but it
+# still stops a stolen token from parking a request open for the whole window.
+_REPLAY_PUBLISH_WAIT_SECONDS = 3.0
+_REPLAY_POLL_SECONDS = 0.05
 
 
 class AuthService:
@@ -134,13 +144,22 @@ class AuthService:
         logger.info("two_factor_verified", user_id=str(user_id))
         return await self._issue_token_pair(user)
 
-    async def _issue_token_pair(self, user: User) -> TokenResponse:
+    async def _issue_token_pair(
+        self, user: User, family_id: str | None = None
+    ) -> TokenResponse:
+        # A sign-in starts a new token family. A refresh carries the existing one
+        # forward, so every token descended from one sign-in shares a family id and
+        # a theft can be traced to the sign-in that leaked rather than to the user
+        # as a whole. See refresh() for why that matters.
+        family_id = family_id or secrets.token_hex(16)
         access_token = create_access_token(
             subject=user.id,
             expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
             additional_claims={"role": user.role, "email": user.email},
         )
-        refresh_token = create_refresh_token(subject=user.id)
+        refresh_token = create_refresh_token(
+            subject=user.id, family_id=family_id
+        )
         logger.info("user_logged_in", user_id=str(user.id))
         return TokenResponse(
             access_token=access_token,
@@ -306,6 +325,10 @@ class AuthService:
         # a token captured before the reset cannot outlive it. Otherwise an
         # attacker holding a refresh token keeps access for the full
         # REFRESH_TOKEN_EXPIRE_DAYS window even after the owner resets.
+        # No family id: a password reset must terminate *every* session the user
+        # has, on every device. Scoping this to one sign-in would leave tokens
+        # captured before the reset alive on the account's other sessions, which
+        # is exactly what this call exists to prevent.
         await self._revoke_refresh_family(user.id)
         logger.info("password_reset_completed", user_id=str(user_id))
         return user
@@ -321,10 +344,12 @@ class AuthService:
     async def refresh(self, refresh_token_str: str) -> TokenResponse:
         """Issue a new access token from a valid, single-use refresh token.
 
-        Presenting the same token twice is a replay. With
-        ``REFRESH_REVOKE_ON_REUSE`` on (the default) a replay revokes the user's
-        whole refresh-token family, so a captured token cannot be redeemed to
-        establish a session that quietly outlives the legitimate one.
+        Presenting the same token twice within ``REFRESH_REUSE_GRACE_SECONDS`` is
+        treated as a race rather than a replay: two tabs expiring together both
+        send the same cookie, and the caller is answered with the tokens the
+        first exchange already issued. Outside that window it is a replay, and
+        with ``REFRESH_REVOKE_ON_REUSE`` on (the default) it revokes the token's
+        family -- one sign-in, not the user's other devices.
         """
         payload = decode_token(refresh_token_str)
         if payload.get("type") != "refresh":
@@ -342,7 +367,9 @@ class AuthService:
         except (ValueError, TypeError):
             raise AuthenticationError("Invalid user ID in token.")
 
-        if await self._is_refresh_family_revoked(user_id):
+        family_id = str(payload.get("fam") or "")
+
+        if await self._is_refresh_family_revoked(user_id, family_id=family_id or None):
             raise AuthenticationError("Session has been revoked. Please sign in again.")
 
         # Single-use guard: mark this refresh token jti as consumed in Redis.
@@ -352,11 +379,43 @@ class AuthService:
             f"refresh:used:{jti}", "1", ttl_seconds=ttl_seconds
         )
         if not first_use:
-            # Replay of an already-redeemed token. Assume the token leaked and
-            # cut every refresh session this user holds; the next legitimate
-            # sign-in mints a fresh family.
+            # This jti was already redeemed. Two very different situations look
+            # identical here, and telling them apart is the whole problem:
+            #
+            #   * A race. The same cookie was sent twice within a second or two --
+            #     two tabs waking together, or a client retrying. The first
+            #     exchange already succeeded, so this one is redundant, not
+            #     hostile. Serving the identical response again is correct and
+            #     leaks nothing: the caller already holds this exact token.
+            #   * A replay. A captured token presented later to establish a
+            #     parallel session. That is theft and is treated as such.
+            #
+            # The window is what separates them. A genuine attacker racing the
+            # owner inside the window is a far smaller risk than logging honest
+            # users out of every device they own, which is what this did before.
+            # The winner may still be mid-exchange -- it only writes its result
+            # after the user lookup and signing. So losing the SETNX does not yet
+            # mean the exchange finished; _replay_response waits briefly for the
+            # in-flight winner to publish before we conclude anything.
+            replayed = await self._replay_response(jti)
+            if replayed is not None:
+                logger.info(
+                    "refresh_replay_within_grace_window",
+                    user_id=str(user_id),
+                    jti=jti,
+                )
+                return replayed
+
+            # Never published, or published too long ago to be that same
+            # exchange. Treat as theft.
+            logger.warning(
+                "refresh_token_reuse_detected",
+                user_id=str(user_id),
+                jti=jti,
+                has_family=bool(family_id),
+            )
             if settings.REFRESH_REVOKE_ON_REUSE:
-                await self._revoke_refresh_family(user_id)
+                await self._revoke_refresh_family(user_id, family_id=family_id or None)
             raise AuthenticationError("Refresh token has already been used.")
 
         user = await self._repo.get_by_id(user_id)
@@ -368,8 +427,10 @@ class AuthService:
             expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
             additional_claims={"role": user.role, "email": user.email},
         )
-        new_refresh = create_refresh_token(subject=user.id)
-        return TokenResponse(
+        new_refresh = create_refresh_token(
+            subject=user.id, family_id=family_id or None
+        )
+        response = TokenResponse(
             access_token=access_token,
             refresh_token=new_refresh,
             token_type="bearer",  # nosec B106
@@ -377,16 +438,117 @@ class AuthService:
             refresh_expires_in=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         )
 
-    async def _revoke_refresh_family(self, user_id: UUID) -> None:
-        """Revoke every refresh token for a user for the refresh-token lifetime.
+        # Publish the result so a racing duplicate of this very request can be
+        # answered with the same tokens instead of being treated as a theft.
+        # Only kept for the grace window, so a stolen token cannot lean on it
+        # later.
+        await self._store_replay_response(jti, response)
+        return response
+
+    async def _store_replay_response(
+        self, jti: str, response: TokenResponse
+    ) -> None:
+        """Cache a rotation result for the length of the grace window."""
+        window = settings.REFRESH_REUSE_GRACE_SECONDS
+        if window <= 0:
+            return
+        try:
+            await get_cache_service().set(
+                f"refresh:race:{jti}",
+                json.dumps(
+                    {
+                        "access_token": response.access_token,
+                        "refresh_token": response.refresh_token,
+                        "expires_in": response.expires_in,
+                        "refresh_expires_in": response.refresh_expires_in,
+                    }
+                ),
+                ttl_seconds=window,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            # A cache outage must not block a legitimate refresh. The cost is
+            # that a racing duplicate is refused instead of served, which is the
+            # behaviour that existed before the grace window existed at all.
+            logger.warning(
+                "refresh_race_cache_failed", jti=jti, error=type(exc).__name__
+            )
+
+    async def _replay_response(self, jti: str) -> TokenResponse | None:
+        """Return the tokens an earlier exchange of this ``jti`` produced, or None.
+
+        Losing the single-use guard does not tell us *when* the winning exchange
+        happened -- it may still be running. So this polls for a bounded moment
+        before giving up: the winner has only a user lookup and one cache write
+        to do, which is milliseconds, but a slow database must not turn the
+        duplicate into a logout. The bound is deliberately shorter than the grace
+        window so a real attacker replaying a stolen token cannot park a request
+        open for the full window and amplify load.
+
+        None means the caller must treat the replay as a theft. The ``jti`` is
+        unguessable and the entry is bound to that exact token, so this can only
+        ever be answered by a duplicate of the request that wrote it.
+        """
+        window = settings.REFRESH_REUSE_GRACE_SECONDS
+        if window <= 0:
+            return None
+        deadline = time.monotonic() + min(window, _REPLAY_PUBLISH_WAIT_SECONDS)
+        while True:
+            response = await self._read_replay_response(jti)
+            if response is not None:
+                return response
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(_REPLAY_POLL_SECONDS)
+
+    async def _read_replay_response(self, jti: str) -> TokenResponse | None:
+        """One non-blocking read of the published rotation result for ``jti``."""
+        try:
+            raw = await get_cache_service().get(f"refresh:race:{jti}")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "refresh_race_cache_failed", jti=jti, error=type(exc).__name__
+            )
+            return None
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            return TokenResponse(
+                access_token=data["access_token"],
+                refresh_token=data["refresh_token"],
+                token_type="bearer",  # nosec B106
+                expires_in=data["expires_in"],
+                refresh_expires_in=data["refresh_expires_in"],
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "refresh_race_cache_corrupt", jti=jti, error=type(exc).__name__
+            )
+            return None
+
+    async def _revoke_refresh_family(
+        self, user_id: UUID, family_id: str | None = None
+    ) -> None:
+        """Revoke a refresh-token family for the refresh-token lifetime.
+
+        With a ``family_id`` the blast radius is one sign-in: the sessions that
+        user opened on their phone and laptop survive a stolen token from the web
+        tab. Without one -- a token minted before families existed -- it falls
+        back to revoking every session for the user, which is the older, blunter
+        behaviour and the safe direction to err in.
 
         Best-effort: if the cache is unreachable the marker is simply not
         written, so the replayed token still hits its own single-use rejection
         but sibling sessions survive. Never raises.
         """
+        key = (
+            f"{_REFRESH_REVOKED_PREFIX}{family_id}"
+            if family_id
+            else f"{_REFRESH_REVOKED_PREFIX}{user_id}"
+        )
         try:
             await get_cache_service().set(
-                f"{_REFRESH_REVOKED_PREFIX}{user_id}",
+                key,
                 "1",
                 ttl_seconds=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
             )
@@ -394,15 +556,27 @@ class AuthService:
             logger.warning(
                 "refresh_family_revoke_failed",
                 user_id=str(user_id),
+                family_id=family_id or "user-wide",
                 error=type(exc).__name__,
             )
 
-    async def _is_refresh_family_revoked(self, user_id: UUID) -> bool:
-        """Whether this user's refresh family was revoked. Fails open."""
+    async def _is_refresh_family_revoked(
+        self, user_id: UUID, family_id: str | None = None
+    ) -> bool:
+        """Whether this refresh family was revoked. Fails open.
+
+        Checks the family key when there is one, and the older user-wide key
+        regardless, so a token that predates families still honours a revocation
+        that was issued against the user.
+        """
+        keys = [f"{_REFRESH_REVOKED_PREFIX}{user_id}"]
+        if family_id:
+            keys.insert(0, f"{_REFRESH_REVOKED_PREFIX}{family_id}")
         try:
-            return bool(
-                await get_cache_service().get(f"{_REFRESH_REVOKED_PREFIX}{user_id}")
-            )
+            for key in keys:
+                if await get_cache_service().get(key):
+                    return True
+            return False
         except Exception as exc:
             # Fail open: an offline cache must never lock every user out.
             logger.warning(

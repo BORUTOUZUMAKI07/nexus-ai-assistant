@@ -2,6 +2,7 @@
 import uuid
 
 import pytest
+from backend.app.core.security import decode_token
 from backend.app.domain.user.repository import UserRepository
 
 
@@ -165,7 +166,26 @@ async def test_refresh_invalid_token_401(client):
 
 
 @pytest.mark.asyncio
-async def test_refresh_token_is_single_use(client, redis_backend):
+async def test_refresh_token_rotation_and_reuse_detection(client, redis_backend):
+    """Refresh tokens rotate, and a *late* replay is treated as theft.
+
+    This test's contract deliberately changed when the grace window was added.
+    It used to assert that any second presentation of a token is refused, which
+    is what a two-tab race is indistinguishable from -- so a user who opened two
+    tabs and had them expire together was logged out of every device they owned.
+
+    The behaviour now is:
+
+      * inside ``REFRESH_REUSE_GRACE_SECONDS`` a duplicate is answered with the
+        tokens the first exchange already issued (not a second rotation), and
+      * outside it the replay is refused *and* revokes the family.
+
+    The window is a real, accepted weakening: an attacker who races the owner
+    inside the window gets a working session. It buys back the common case at
+    the cost of an unlikely one, and ``REFRESH_REUSE_GRACE_SECONDS = 0`` restores
+    strict single-use. The security property that must not regress is the
+    *revocation* below, which is why this test still asserts a dead family.
+    """
     email = f"reuse-{uuid.uuid4().hex[:8]}@example.com"
     password = "StrongPass123!"
     await client.post(
@@ -181,19 +201,44 @@ async def test_refresh_token_is_single_use(client, redis_backend):
         data={"username": email, "password": password},
     )
     refresh_token = login.json()["refresh_token"]
+    jti = decode_token(refresh_token)["jti"]
 
     first = await client.post(
         "/api/v1/auth/refresh",
         json={"refresh_token": refresh_token},
     )
     assert first.status_code == 200
+    rotated = first.json()["refresh_token"]
+    assert rotated != refresh_token, "refresh must rotate, or it is not single-use"
 
-    # Replaying the same refresh token must be refused (rotation + reuse guard).
+    # A duplicate inside the window is the two-tab race: same tokens, not a
+    # rival rotation that would silently invalidate the other tab.
+    duplicate = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["refresh_token"] == rotated
+
+    # Age the grace entry out so the replay is unambiguously late, rather than
+    # sleeping through the window.
+    await redis_backend.delete(f"refresh:race:{jti}")
+
+    # Past the window it is theft again: refused, and the family is killed.
     replay = await client.post(
         "/api/v1/auth/refresh",
         json={"refresh_token": refresh_token},
     )
     assert replay.status_code == 401
+    assert "already been used" in replay.json()["detail"].lower()
+
+    after = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": rotated},
+    )
+    assert after.status_code == 401, (
+        f"reuse detection must terminate the family, got {after.status_code}"
+    )
 
 
 @pytest.mark.asyncio
