@@ -80,6 +80,32 @@ services:
       timeout: 10s
       retries: 5
 
+  # ── Layer-2: OpenTelemetry Collector (observability transport agent) ──────
+  # Receives the app's OTLP logs on :4318, tail-samples, batches, and forwards
+  # to New Relic (Layer-3 sink) using NEW_RELIC_LICENSE_KEY. It also scrapes
+  # the app's /metrics — the app runs on the HOST in dev, so the agent reaches
+  # it via host.docker.internal (extra_hosts host-gateway). See
+  # docker/otel-collector-config.yaml for the full flow. Set before starting
+  # (PowerShell):  $env:NEW_RELIC_LICENSE_KEY = "xxxx"
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.121.0
+    container_name: nexus_otel_collector
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./docker/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY:-not-set}
+      - ENVIRONMENT=development
+      - METRICS_TOKEN=${METRICS_TOKEN:-}
+      - METRICS_SCRAPE_TARGET=${METRICS_SCRAPE_TARGET:-host.docker.internal:8000}
+    ports:
+      - "4317:4317"   # OTLP/gRPC (optional)
+      - "4318:4318"   # OTLP/HTTP — what the app pushes logs to
+      - "8888:8888"   # collector self-metrics
+      - "13133:13133" # /healthz
+
 volumes:
   postgres_data:
   redis_data:

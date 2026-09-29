@@ -17,7 +17,7 @@
 | **Redis** | Cache, rate-limiting, and Celery broker. Local `redis:7-alpine` in compose. `REDIS_URL=redis://localhost:6379/0` locally. |
 | **Object storage** | MinIO (S3-compatible) for uploads; local `minio/minio` in compose. |
 | **Async tasks** | Celery worker + beat (file indexing, eval dispatch). |
-| **Observability** | Zero-dependency Prometheus `/metrics`; optional Sentry + New Relic (OTLP bridge). |
+| **Observability** | Zero-dependency Prometheus `/metrics` (in-process truth) + OTLP logs → Layer-2 collector (`docker-compose` / `render.yaml`) → New Relic; LangSmith traces; Sentry errors. |
 
 CI/CD artifacts:
 - `.github/workflows/release.yml` — on git tags: `docker buildx` builds and
@@ -55,8 +55,11 @@ useful deployment:
 - Provider keys: `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`
   (BYOK users can supply their own too)
 - Optional: `SENTRY_DSN`, `NEW_RELIC_ENABLED=true` +
-  `NEW_RELIC_LICENSE_KEY` (requires `uv sync --extra observability` for the
-  OTLP extras), `MEM0_API_KEY`
+  `NEW_RELIC_OTLP_ENDPOINT` (OTLP log export to the Layer-2 collector; requires
+  `uv sync --extra observability` for the OTLP extras), `MEM0_API_KEY`
+- New Relic ingestion (free tier): deploy the collector from this repo's
+  `render.yaml` (or `docker compose up otel-collector` locally) and set its
+  `NEW_RELIC_LICENSE_KEY` secret — the app itself never holds an NR key
 - LangSmith traces: `LANGSMITH_API_KEY` + `LANGSMITH_TRACING=true` (LangGraph
   auto-instruments; free tier shows the orchestration graphs)
 
@@ -99,7 +102,10 @@ uv run celery -A backend.app.worker.celery_app beat --loglevel=info
 ```
 
 Health checks: `GET /health` (liveness), `GET /health/ready` (readiness).
-Metrics: `GET /metrics`.
+Metrics: `GET /metrics` (Prometheus text; bearer-guarded when `METRICS_TOKEN`
+is set — the Layer-2 collector sends it when scraping).
+Logs: exported over OTLP/HTTP to `NEW_RELIC_OTLP_ENDPOINT` when
+`NEW_RELIC_ENABLED=true`.
 
 ## 5. Frontend
 

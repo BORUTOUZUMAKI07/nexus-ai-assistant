@@ -38,7 +38,7 @@ _RECENT_ROWS = 25
 def observability_stack_status() -> dict[str, Any]:
     """Which collectors are wired and live (honest: enabled-but-uninstalled New Relic is reported)."""
     newrelic_installed = importlib.util.find_spec("opentelemetry") is not None
-    newrelic_configured = bool(settings.NEW_RELIC_LICENSE_KEY)
+    newrelic_configured = bool((settings.NEW_RELIC_OTLP_ENDPOINT or "").strip())
     return {
         "newrelic": {
             "enabled": bool(settings.NEW_RELIC_ENABLED),
@@ -49,8 +49,8 @@ def observability_stack_status() -> dict[str, Any]:
                 if settings.NEW_RELIC_ENABLED and newrelic_installed and newrelic_configured
                 else "inactive"
             ),
-            "activate": "pip install -e '.[observability]' && NEW_RELIC_ENABLED=true "
-                        "NEW_RELIC_LICENSE_KEY=...",
+            "activate": "NEW_RELIC_ENABLED=true NEW_RELIC_OTLP_ENDPOINT=http://localhost:4318 "
+                        "(run the Layer-2 collector from docker-compose — it owns the New Relic ingest key)",
         },
         "drift_monitoring": {"enabled": True, "endpoint": "/api/v1/admin/monitoring/drift"},
         "audit_logs": True,

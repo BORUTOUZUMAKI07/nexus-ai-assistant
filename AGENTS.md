@@ -236,8 +236,15 @@ Sensible defaults exist for everything; `.env` overrides. Highlights:
 - `SHARE_DEFAULT_TTL_SECONDS` — default public-share expiry.
 - `JWT_ALGORITHM=HS256`, refresh tokens, `oauth2_scheme` tokenUrl=auth/login.
 - `REDIS_URL=redis://localhost:6379/0` (local Redis from docker-compose).
-- `SENTRY_DSN`, `NEW_RELIC_ENABLED`/`NEW_RELIC_LICENSE_KEY` (optional OTLP
-  metrics bridge), `MEM0_API_KEY`.
+- `SENTRY_DSN`, `NEW_RELIC_ENABLED` + `NEW_RELIC_OTLP_ENDPOINT` (optional OTLP
+  log export to the Layer-2 collector — see `docker/otel-collector-config.yaml`),
+  `MEM0_API_KEY`.
+- The New Relic ingest key lives on the **collector**, never the app
+  (`NEW_RELIC_LICENSE_KEY` in docker-compose/render.yaml; the app holds no
+  vendor credentials). `/metrics` stays the in-process source of truth
+  (scraped by the collector); traces are LangSmith's job; the old
+  `services/observability/newrelic.py` bridge was retired to avoid
+  double-counting metrics (app scrape + OTLP push).
 - Model routing: LiteLLM router (see `backend/app/services/llm/` + a routing
   config file); the live-evаl judge also uses LiteLLM (needs
   `OPENROUTER_API_KEY`).

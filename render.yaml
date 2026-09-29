@@ -1,0 +1,33 @@
+# Render Blueprint — Layer-2 OpenTelemetry Collector (free tier).
+#
+# One free web service that receives the app's OTLP logs and scraped /metrics
+# and forwards them to New Relic (Layer-3 sink). The app itself stays where it
+# deploys today (backend service / Docker) — only the collector goes here.
+#
+# Render forwards public HTTPS :443 to $PORT, so the OTLP/HTTP receiver must
+# listen on 4318 (see docker/otel-collector-config.yaml, which also documents
+# the optional basicauth lock-down for this public endpoint).
+#
+# No Render health check: the agent's /healthz lives on :13133, which Render
+# can't reach through the single public port.
+services:
+  - type: web
+    name: nexus-otel-collector
+    runtime: docker
+    region: oregon
+    plan: free
+    rootDir: docker
+    dockerfilePath: otel-collector.Dockerfile
+    envVars:
+      - key: NEW_RELIC_LICENSE_KEY
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: METRICS_TOKEN
+        sync: false
+      # The app's public URL for /metrics scraping. Set to your deployed
+      # backend URL, e.g. https://nexus-backend.onrender.com
+      - key: METRICS_SCRAPE_TARGET
+        value: "https://nexus-backend.onrender.com"
+      - key: PORT
+        value: "4318"
