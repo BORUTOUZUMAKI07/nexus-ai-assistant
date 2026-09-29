@@ -102,12 +102,15 @@ const THOUGHT_STAGES = ["Planning", "Searching", "Analysing", "Synthesising"];
 /** Live elapsed seconds counter – starts when mounted, stops when stopped=true */
 const LiveTimer: React.FC<{ stopped?: boolean }> = ({ stopped }) => {
   const [seconds, setSeconds] = useState(0);
-  const startRef = useRef(Date.now());
+  // Ref holds the impure Date.now() read; set in an effect, never inline in
+  // the render body, so the render function itself stays pure.
+  const startRef = useRef<number | null>(null);
 
   useEffect(() => {
+    if (startRef.current === null) startRef.current = Date.now();
     if (stopped) return;
     const id = setInterval(() => {
-      setSeconds(Math.floor((Date.now() - startRef.current) / 1000));
+      setSeconds(Math.floor((Date.now() - (startRef.current ?? Date.now())) / 1000));
     }, 250);
     return () => clearInterval(id);
   }, [stopped]);
@@ -137,10 +140,10 @@ const ThoughtDrawer: React.FC<{
         onClick={() => setOpen((p) => !p)}
         className="w-full flex items-center justify-between px-3 py-2 text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
       >
-        <span className="flex items-center gap-2 font-mono text-[11px] text-[var(--accent)] font-medium">
-          <Sparkles className={`w-3.5 h-3.5 text-[var(--accent)] ${isStreaming ? "animate-pulse" : ""}`} />
+        <span className="flex items-center gap-2 font-mono text-[11px] text-[var(--accent-ink)] font-medium">
+          <Sparkles className={`w-3.5 h-3.5 text-[var(--accent-ink)] ${isStreaming ? "animate-pulse" : ""}`} />
           <span>Thought process</span>
-          <span className="px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[10px] text-[var(--accent-hover)] font-sans font-semibold">
+          <span className="px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[10px] text-[var(--accent-ink)] font-sans font-semibold">
             {isStreaming ? THOUGHT_STAGES[stageIndex] : "Complete"}
           </span>
         </span>
@@ -160,8 +163,8 @@ const ThoughtDrawer: React.FC<{
                 key={stage}
                 className={`px-1.5 py-0.5 rounded ${
                   idx <= stageIndex
-                    ? "bg-[var(--accent-soft)] text-[var(--accent-hover)]"
-                    : "bg-white/5 text-[var(--text-faint)]"
+                    ? "bg-[var(--accent-soft)] text-[var(--accent-ink)]"
+                    : "bg-[var(--bg-surface-tint)] text-[var(--text-faint)]"
                 }`}
               >
                 {idx + 1}. {stage}
@@ -219,15 +222,15 @@ const PlanReviewCard: React.FC<{
   return (
     <div className="max-w-3xl mx-auto rounded-xl border-2 border-[var(--accent)]/50 bg-[var(--bg-surface)] p-4 shadow-lg">
       <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="flex items-center gap-2 text-sm font-semibold text-white">
-          <ListChecks className="w-4 h-4 text-[var(--accent)] shrink-0" />
+        <div className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
+          <ListChecks className="w-4 h-4 text-[var(--accent-ink)] shrink-0" />
           Proposed Plan
         </div>
-        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/30 uppercase font-semibold">
+        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]/30 uppercase font-semibold">
           Plan mode
         </span>
       </div>
-      <h4 className="text-sm font-semibold text-white mb-1">{plan.title}</h4>
+      <h4 className="text-sm font-semibold text-[var(--text-primary)] mb-1">{plan.title}</h4>
       {plan.summary && (
         <p className="text-xs text-[var(--text-secondary)] leading-relaxed mb-3">
           {plan.summary}
@@ -236,7 +239,7 @@ const PlanReviewCard: React.FC<{
       <ol className="space-y-1.5 mb-3">
         {plan.steps.map((step, idx) => (
           <li key={idx} className="flex items-start gap-2 text-xs text-[var(--text-primary)]">
-            <span className="shrink-0 w-4.5 h-4.5 mt-0.5 rounded bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--accent)] text-[10px] font-mono font-semibold flex items-center justify-center">
+            <span className="shrink-0 w-4.5 h-4.5 mt-0.5 rounded bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--accent-ink)] text-[10px] font-mono font-semibold flex items-center justify-center">
               {idx + 1}
             </span>
             <span className="flex-1 leading-relaxed">{step}</span>
@@ -255,7 +258,7 @@ const PlanReviewCard: React.FC<{
         <button
           onClick={() => run(onReject, "reject")}
           disabled={busy}
-          className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-white hover:border-[var(--status-danger)] transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--status-danger)] transition-colors disabled:opacity-50"
         >
           <XCircle className="w-3.5 h-3.5" />
           Reject
@@ -284,9 +287,9 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
   };
 
   return (
-    <div className="my-3 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[#0b0d0f] font-mono text-xs">
+    <div className="my-3 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--code-block-bg)] dark-island font-mono text-xs">
       <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-surface-elevated)] border-b border-[var(--border-subtle)] text-[11px] text-[var(--text-muted)]">
-        <span className="font-semibold uppercase tracking-wider text-[var(--accent)]">
+        <span className="font-semibold uppercase tracking-wider text-[var(--accent-ink)]">
           {language || "code"}
         </span>
         <button
@@ -326,10 +329,10 @@ const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
   };
 
   return (
-    <div className="my-3 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[#0b0d0f]">
+    <div className="my-3 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--code-block-bg)] dark-island">
       <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-surface-elevated)] border-b border-[var(--border-subtle)] text-[11px] text-[var(--text-muted)]">
-        <span className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-[var(--accent)] font-mono">
-          <GitBranch className="w-3.5 h-3.5 text-[var(--accent)]" />
+        <span className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-[var(--accent-ink)] font-mono">
+          <GitBranch className="w-3.5 h-3.5 text-[var(--accent-ink)]" />
           Mermaid Diagram
         </span>
         <button
@@ -381,7 +384,7 @@ const TableBlock: React.FC<{ rows: string[][] }> = ({ rows }) => {
             <tr
               key={rIdx}
               className={`hover:bg-[var(--bg-surface-elevated)]/50 transition-colors ${
-                rIdx % 2 === 1 ? "bg-white/[0.015]" : ""
+                rIdx % 2 === 1 ? "bg-[var(--bg-surface-tint)]/40" : ""
               }`}
             >
               {row.map((cell, cIdx) => (
@@ -419,7 +422,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
 
         // Detect and group Markdown tables
         const rawLines = part.split("\n");
-        const blocks: Array<{ type: "lines" | "table"; content: any }> = [];
+        const blocks: Array<{ type: "lines"; content: string } | { type: "table"; content: string[][] }> = [];
         let currentTableRows: string[][] = [];
 
         for (let i = 0; i < rawLines.length; i++) {
@@ -459,7 +462,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
               // H1 / Title
               if (trimmed.startsWith("# ")) {
                 return (
-                  <h1 key={bIdx} className="text-lg font-bold text-white mt-3 mb-1.5">
+                  <h1 key={bIdx} className="text-lg font-bold text-[var(--text-primary)] mt-3 mb-1.5">
                     {trimmed.replace(/^#\s+/, "")}
                   </h1>
                 );
@@ -468,7 +471,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
               // H2
               if (trimmed.startsWith("## ")) {
                 return (
-                  <h2 key={bIdx} className="text-base font-semibold text-white mt-3 mb-1.5 flex items-center gap-1.5">
+                  <h2 key={bIdx} className="text-base font-semibold text-[var(--text-primary)] mt-3 mb-1.5 flex items-center gap-1.5">
                     {trimmed.replace(/^##\s+/, "")}
                   </h2>
                 );
@@ -500,7 +503,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
                 const itemText = trimmed.replace(/^[-*]\s+/, "");
                 return (
                   <div key={bIdx} className="flex items-start gap-2 my-1 text-sm">
-                    <span className="text-[var(--accent)] font-bold mt-1 text-xs">•</span>
+                    <span className="text-[var(--accent-ink)] font-bold mt-1 text-xs">•</span>
                     <span className="flex-1">{formatInline(itemText)}</span>
                   </div>
                 );
@@ -511,7 +514,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
               if (numMatch) {
                 return (
                   <div key={bIdx} className="flex items-start gap-2 my-1 text-sm">
-                    <span className="font-mono text-xs text-[var(--accent)] font-semibold min-w-4 mt-0.5">
+                    <span className="font-mono text-xs text-[var(--accent-ink)] font-semibold min-w-4 mt-0.5">
                       {numMatch[1]}.
                     </span>
                     <span className="flex-1">{formatInline(numMatch[2])}</span>
@@ -547,7 +550,7 @@ function formatInline(text: string): React.ReactNode {
       return (
         <code
           key={i}
-          className="px-1.5 py-0.5 rounded bg-white/10 text-[var(--accent)] font-mono text-[12px] border border-white/5"
+          className="px-1.5 py-0.5 rounded bg-[var(--bg-surface-tint)] text-[var(--accent-ink)] font-mono text-[12px] border border-[var(--border-subtle)]"
         >
           {token.slice(1, -1)}
         </code>
@@ -555,7 +558,7 @@ function formatInline(text: string): React.ReactNode {
     }
     if (token.startsWith("**") && token.endsWith("**") && token.length > 4) {
       return (
-        <strong key={i} className="font-semibold text-white">
+        <strong key={i} className="font-semibold text-[var(--text-primary)]">
           {token.slice(2, -2)}
         </strong>
       );
@@ -652,9 +655,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {messages.length === 0 && (
         <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto py-24 space-y-4">
           <div className="w-12 h-12 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] flex items-center justify-center">
-            <Sparkles className="w-6 h-6 text-[var(--accent)]" />
+            <Sparkles className="w-6 h-6 text-[var(--accent-ink)]" />
           </div>
-          <h2 className="text-xl font-semibold tracking-tight text-white">
+          <h2 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">
             How can Nexus help you today?
           </h2>
           <p className="text-sm text-[var(--text-muted)] leading-relaxed">
@@ -676,7 +679,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           {onRetry && (
             <button
               onClick={onRetry}
-              className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-white hover:border-[var(--border-strong)] transition-colors whitespace-nowrap"
+              className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors whitespace-nowrap"
             >
               <RotateCw className="w-3.5 h-3.5" />
               Retry
@@ -689,7 +692,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {pendingHITL && !resolved && (
         <div className="max-w-3xl mx-auto rounded-xl border-2 border-[var(--status-warning)]/40 bg-[var(--bg-surface)] p-4.5 shadow-lg">
           <div className="flex items-center justify-between gap-2 mb-2">
-            <div className="flex items-center gap-2 text-sm font-semibold text-white">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
               <ShieldAlert className="w-4.5 h-4.5 text-[var(--status-warning)] shrink-0" />
               Human Approval Required (Harness Layer 3)
             </div>
@@ -703,8 +706,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
           {pendingHITL.tool_name && (
             <div className="mb-3 p-2.5 rounded-lg bg-[var(--bg-main)] border border-[var(--border-subtle)] font-mono text-[11px]">
-              <span className="text-[var(--accent)] font-semibold">Tool: </span>
-              <span className="text-white">{pendingHITL.tool_name}</span>
+              <span className="text-[var(--accent-ink)] font-semibold">Tool: </span>
+              <span className="text-[var(--text-primary)]">{pendingHITL.tool_name}</span>
             </div>
           )}
 
@@ -721,7 +724,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <button
                   onClick={() => resolve("modify", { note: hitlNote })}
                   disabled={resolving}
-                  className="flex items-center gap-1.5 rounded-lg border border-[var(--accent)] px-3 py-1.5 text-xs text-[var(--accent-hover)] hover:bg-[var(--accent-soft)] transition-colors disabled:opacity-50 font-medium"
+                  className="flex items-center gap-1.5 rounded-lg border border-[var(--accent)] px-3 py-1.5 text-xs text-[var(--accent-ink)] hover:bg-[var(--accent-soft)] transition-colors disabled:opacity-50 font-medium"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
                   Approve with note
@@ -748,7 +751,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <button
                 onClick={() => resolve("reject")}
                 disabled={resolving}
-                className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-white hover:border-[var(--status-danger)] transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--status-danger)] transition-colors disabled:opacity-50"
               >
                 <XCircle className="w-3.5 h-3.5" />
                 Reject
@@ -791,7 +794,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           >
             {/* Assistant Avatar */}
             {!isUser && (
-              <div className="w-8 h-8 rounded-lg bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center text-white shrink-0 mt-1">
+              <div className="w-8 h-8 rounded-lg bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center text-[var(--text-primary)] shrink-0 mt-1">
                 <Bot className="w-4 h-4 text-[var(--text-secondary)]" />
               </div>
             )}
@@ -811,9 +814,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               {artifact && onOpenArtifact && (
                 <div className="w-full p-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] flex items-center justify-between gap-3 hover:border-[var(--accent)]/50 transition-colors">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <FileCode className="w-4 h-4 text-[var(--accent)] shrink-0" />
+                    <FileCode className="w-4 h-4 text-[var(--accent-ink)] shrink-0" />
                     <div className="min-w-0">
-                      <div className="text-xs font-semibold text-white truncate">
+                      <div className="text-xs font-semibold text-[var(--text-primary)] truncate">
                         {artifact.title}
                       </div>
                       <span className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)]">
@@ -825,7 +828,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     {onSaveArtifact && (
                       <button
                         onClick={() => onSaveArtifact(artifact)}
-                        className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)]/50 transition-all"
+                        className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent-ink)] hover:border-[var(--accent)]/50 transition-all"
                         title="Save artifact (persisted + versioned)"
                       >
                         <Save className="w-3 h-3" />
@@ -834,7 +837,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     )}
                     <button
                       onClick={() => onOpenArtifact(artifact)}
-                      className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)] transition-all"
+                      className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-[var(--accent-soft)] text-[var(--accent-ink)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)] transition-all"
                     >
                       Open in Canvas
                       <ExternalLink className="w-3 h-3" />
@@ -880,7 +883,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         key={idx}
                         className="rounded-lg p-2.5 text-xs border border-[var(--border-subtle)] bg-[var(--bg-main)]"
                       >
-                        <div className="flex items-center justify-between text-[var(--accent)] font-mono text-[11px] mb-1">
+                        <div className="flex items-center justify-between text-[var(--accent-ink)] font-mono text-[11px] mb-1">
                           <span className="flex items-center gap-1">
                             <Terminal className="w-3 h-3" /> {t.name}
                           </span>
@@ -901,7 +904,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 {/* Grounding Footnote Citations */}
                 {msg.citations && msg.citations.length > 0 && (
                   <div className="mt-3 pt-2 border-t border-[var(--border-subtle)]">
-                    <div className="text-[10px] uppercase font-mono tracking-wider text-[var(--accent)] flex items-center gap-1 mb-1.5 font-semibold">
+                    <div className="text-[10px] uppercase font-mono tracking-wider text-[var(--accent-ink)] flex items-center gap-1 mb-1.5 font-semibold">
                       <BookOpen className="w-3 h-3" /> Grounding sources
                     </div>
                     <div className="flex flex-wrap gap-1.5">
@@ -909,10 +912,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         <button
                           key={idx}
                           onClick={() => onSelectCitation?.(c)}
-                          className="px-2 py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] text-[10px] flex items-center gap-1.5 hover:border-[var(--accent)] hover:text-white transition-colors cursor-pointer"
+                          className="px-2 py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] text-[10px] flex items-center gap-1.5 hover:border-[var(--accent)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
                           title="Inspect source"
                         >
-                          <span className="text-[var(--accent)] font-semibold">[{idx + 1}]</span>
+                          <span className="text-[var(--accent-ink)] font-semibold">[{idx + 1}]</span>
                           <span className="truncate max-w-[120px]">{c.filename}</span>
                           <span className="text-[9px] font-mono text-[var(--text-muted)] bg-[var(--bg-surface-elevated)] px-1 rounded">
                             {Math.round(c.score * 100)}%
@@ -929,7 +932,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <div className="flex items-center gap-2 text-[var(--text-muted)] text-xs px-1">
                   <button
                     onClick={() => handleCopy(msg.id, msg.content)}
-                    className="hover:text-white p-1 rounded transition-colors"
+                    className="hover:text-[var(--text-primary)] p-1 rounded transition-colors"
                     title="Copy response"
                   >
                     {copiedId === msg.id ? <Check className="w-3.5 h-3.5 text-[var(--status-success)]" /> : <Copy className="w-3.5 h-3.5" />}
@@ -939,8 +942,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     onClick={() => handleTTS(msg.id, msg.content)}
                     className={`p-1 rounded transition-colors ${
                       speakingId === msg.id
-                        ? "text-[var(--accent)] animate-pulse"
-                        : "hover:text-white"
+                        ? "text-[var(--accent-ink)] animate-pulse"
+                        : "hover:text-[var(--text-primary)]"
                     }`}
                     title={speakingId === msg.id ? "Stop speaking" : "Read aloud (TTS)"}
                   >
@@ -990,7 +993,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {/* Pulsing indicator when loading and no streaming message yet */}
       {isLoading && lastAssistantIdx === -1 && (
         <div className="max-w-3xl mx-auto flex items-center gap-2 text-xs text-[var(--text-muted)] font-mono px-4 py-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] animate-pulse">
-          <Sparkles className="w-3.5 h-3.5 text-[var(--accent)] animate-spin" />
+          <Sparkles className="w-3.5 h-3.5 text-[var(--accent-ink)] animate-spin" />
           <span>Nexus is working…</span>
         </div>
       )}

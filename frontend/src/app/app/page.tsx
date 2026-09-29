@@ -18,6 +18,7 @@ import { UsageView } from "@/components/UsageView";
 import { SettingsView } from "@/components/SettingsView";
 import { AdminView } from "@/components/AdminView";
 import { AuthModal } from "@/components/AuthModal";
+import { CommandPalette } from "@/components/CommandPalette";
 import {
   fetchConversations,
   fetchConversation,
@@ -101,6 +102,7 @@ export default function AppPage() {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"chat" | "files" | "usage" | "settings" | "admin">("chat");
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [currentModel, setCurrentModel] = useState("llama-3.3-70b-versatile");
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -538,7 +540,7 @@ export default function AppPage() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-main)] text-white">
+    <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-main)] text-[var(--text-primary)]">
       {/* Sidebar Navigation */}
       <Sidebar
         conversations={conversations}
@@ -551,6 +553,20 @@ export default function AppPage() {
         setActiveTab={setActiveTab}
         currentModel={currentModel}
         onChangeModel={setCurrentModel}
+        onSignOut={handleSignOut}
+        showAdmin={isAdmin}
+        onOpenCommandPalette={() => setPaletteOpen(true)}
+      />
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        conversations={conversations}
+        onSelectConversation={handleSelectConversation}
+        onNewChat={handleNewChat}
+        setActiveTab={setActiveTab}
+        onChangeModel={setCurrentModel}
+        currentModel={currentModel}
         onSignOut={handleSignOut}
         showAdmin={isAdmin}
       />

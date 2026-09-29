@@ -1,80 +1,191 @@
 @import "tailwindcss";
 
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-destructive: var(--status-danger);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-inter), Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
 /*
  * Nexus AI — Refero Styles Specification (Linear & Cursor inspired)
- * Built on Void (#08090a), Carbon (#0f1011), Obsidian (#161718),
- * hairline Graphite (#23252a) borders, Paper (#ffffff) type, and
- * the iconic Electric Acid Lime (#e4f222) primary action accent.
+ * Two surfaces of the same brand: Paper (light, default) and Void (dark).
+ * Both keep hairline borders, the Electric Acid Lime accent, and the
+ * cyan/violet/emerald accent swaps — only the base surface/text scale flips.
+ * Switch with data-theme="light|dark" and data-accent="lime|cyan|violet|emerald" on <html>.
  */
 :root {
-  /* Surfaces */
-  --bg-main: #08090a; /* Void */
-  --bg-surface: #0f1011; /* Carbon */
-  --bg-surface-elevated: #161718; /* Obsidian */
-  --bg-surface-tint: #23252a; /* Slate / Interactive */
+  color-scheme: light;
+
+  /* Surfaces — Paper */
+  --bg-main: #fafaf9; /* Paper floor — soft, not stark white */
+  --bg-surface: #ffffff; /* Card */
+  --bg-surface-elevated: #ffffff; /* Modal/popover — elevation via shadow, not tone */
+  --bg-surface-tint: #f0f0ee; /* Hover / active fill */
+  --bg-glass: rgba(255, 255, 255, 0.85);
+  --bg-glass-hover: rgba(255, 255, 255, 0.95);
+
+  /* Hairline Borders */
+  --border-subtle: #e7e7e4;
+  --border-strong: #d3d3cf;
+  --border-active: #6b7a00;
+
+  /* Typography — Ink */
+  --text-primary: #16171a; /* Ink — near-black, not pure black */
+  --text-secondary: #4b4d54;
+  --text-muted: #82858c;
+  --text-faint: #a8aab0;
+
+  /* Primary Action: Electric Acid Lime, tuned for white instead of void */
+  --accent: #d7e600; /* fill — still unmistakably lime, less harsh on paper */
+  --accent-foreground: #16171a;
+  --accent-hover: #c2cf00;
+  --accent-soft: rgba(190, 208, 0, 0.12);
+  --accent-glow: rgba(190, 208, 0, 0.25);
+  --accent-ink: #6b7a00; /* lime for text/icons/links — passes AA on white */
+
+  /* Supporting Chromatic Accents — deepened just enough for AA text on white */
+  --accent-pulse-green: #16a34a;
+  --accent-violet: #6366f1;
+  --accent-cyan: #0891b2;
+  --accent-lavender: #7c3aed;
+
+  /* Status Colors */
+  --status-success: #16a34a;
+  --status-danger: #dc2626;
+
+  --status-warning: #d97706;
+
+  /* Brand Mark & Hero Atmosphere */
+  --grad-brand: linear-gradient(135deg, #7d8f00 0%, #0891b2 55%, #6366f1 100%);
+  --grad-hero-floor: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(215, 230, 0, 0.12), rgba(99, 102, 241, 0.06) 50%, transparent 80%);
+
+  /* Theme-aware helpers — differ between Paper and Void, everything else
+     above (borders, surfaces) is referenced directly by component CSS. */
+  --inline-code-bg: rgba(22, 23, 26, 0.06);
+  --grid-line: rgba(22, 23, 26, 0.045);
+  --shadow-float-color: rgba(22, 23, 26, 0.16);
+  --code-block-bg: #0b0d0f; /* code blocks stay terminal-dark in both themes, deliberately */
+  --btn-shadow: 0 1px 2px rgba(22, 23, 26, 0.14), 0 0 0 1px rgba(107, 122, 0, 0.28);
+  --btn-shadow-hover: 0 3px 8px rgba(22, 23, 26, 0.16), 0 0 0 1px rgba(107, 122, 0, 0.4);
+
+  /* shadcn/Radix bridge — every primitive (Dialog, DropdownMenu, Popover,
+     Command) reads these instead of the bg-/text- names above, so
+     the brand tokens above stay the single source of truth. */
+  --background: var(--bg-main);
+  --foreground: var(--text-primary);
+  --card: var(--bg-surface);
+  --card-foreground: var(--text-primary);
+  --popover: var(--bg-surface-elevated);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-foreground);
+  --muted: var(--bg-surface-tint);
+  --muted-foreground: var(--text-muted);
+  --border: var(--border-subtle);
+  --input: var(--border-subtle);
+  --ring: var(--accent);
+  --radius: 0.625rem;
+}
+
+/* Dark — the original Void Refero theme, preserved and selectable */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-main: #08090a;
+  --bg-surface: #0f1011;
+  --bg-surface-elevated: #161718;
+  --bg-surface-tint: #23252a;
   --bg-glass: rgba(15, 16, 17, 0.85);
   --bg-glass-hover: rgba(22, 23, 24, 0.95);
 
-  /* Hairline Borders */
-  --border-subtle: #23252a; /* Graphite hairline */
-  --border-strong: #383b3f; /* Smoke hairline */
+  --border-subtle: #23252a;
+  --border-strong: #383b3f;
   --border-active: #e4f222;
 
-  /* Typography */
-  --text-primary: #ffffff; /* Paper */
-  --text-secondary: #d0d6e0; /* Mist */
-  --text-muted: #8a8f98; /* Fog */
-  --text-faint: #62666d; /* Ash */
+  --text-primary: #ffffff;
+  --text-secondary: #d0d6e0;
+  --text-muted: #8a8f98;
+  --text-faint: #62666d;
 
-  /* Primary Action: Electric Acid Lime (Refero / Linear flagship) */
   --accent: #e4f222;
   --accent-foreground: #08090a;
   --accent-hover: #f0fc44;
   --accent-soft: rgba(228, 242, 34, 0.12);
   --accent-glow: rgba(228, 242, 34, 0.3);
+  --accent-ink: #e4f222;
 
-  /* Supporting Chromatic Accents */
   --accent-pulse-green: #27a644;
-  --accent-violet: #6366f1; /* Iris Violet */
-  --accent-cyan: #02b8cc; /* Signal Teal */
+  --accent-violet: #6366f1;
+  --accent-cyan: #02b8cc;
   --accent-lavender: #8b5cf6;
 
-  /* Status Colors */
   --status-success: #27a644;
   --status-danger: #eb5757;
   --status-warning: #f59e0b;
 
-  /* Brand Mark & Hero Atmosphere */
   --grad-brand: linear-gradient(135deg, #e4f222 0%, #02b8cc 50%, #6366f1 100%);
   --grad-hero-floor: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(228, 242, 34, 0.15), rgba(99, 102, 241, 0.08) 50%, transparent 80%);
+
+  --inline-code-bg: rgba(255, 255, 255, 0.06);
+  --grid-line: rgba(255, 255, 255, 0.035);
+  --shadow-float-color: rgba(0, 0, 0, 0.6);
+  --btn-shadow: 0 0 20px var(--accent-glow);
+  --btn-shadow-hover: 0 0 28px var(--accent-glow);
 }
 
-/* Optional themes switchable by user */
-[data-theme="cyan"] {
+/* Optional accent swaps — layer on top of either Paper or Void via data-accent,
+   since they only touch --accent-*, never the base surface/text scale. */
+[data-accent="cyan"] {
   --accent: #02b8cc;
   --accent-foreground: #08090a;
   --accent-hover: #38d6e8;
   --accent-soft: rgba(2, 184, 204, 0.15);
   --accent-glow: rgba(2, 184, 204, 0.35);
   --border-active: #02b8cc;
+  --accent-ink: #0e7490;
 }
 
-[data-theme="violet"] {
+[data-accent="violet"] {
   --accent: #6366f1;
   --accent-foreground: #ffffff;
   --accent-hover: #818cf8;
   --accent-soft: rgba(99, 102, 241, 0.15);
   --accent-glow: rgba(99, 102, 241, 0.35);
   --border-active: #6366f1;
+  --accent-ink: #4338ca;
 }
 
-[data-theme="emerald"] {
+[data-accent="emerald"] {
   --accent: #10b981;
   --accent-foreground: #ffffff;
   --accent-hover: #34d399;
   --accent-soft: rgba(16, 185, 129, 0.15);
   --accent-glow: rgba(16, 185, 129, 0.35);
   --border-active: #10b981;
+  --accent-ink: #047857;
+}
+
+/* On Void the bright accent is already legible as text — ink == accent. */
+[data-theme="dark"][data-accent="cyan"],
+[data-theme="dark"][data-accent="violet"],
+[data-theme="dark"][data-accent="emerald"] {
+  --accent-ink: var(--accent);
 }
 
 * {
@@ -116,7 +227,7 @@ body {
 
 /* Focus rings */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 
@@ -178,7 +289,7 @@ body {
 /* The only real drop shadow in the system — reserved for floating chrome */
 .shadow-float {
   box-shadow:
-    rgba(0, 0, 0, 0.6) 0 4px 32px 0,
+    var(--shadow-float-color) 0 4px 32px 0,
     0 0 0 1px var(--border-subtle);
 }
 
@@ -195,7 +306,7 @@ body {
 }
 
 .prose-nexus pre {
-  background: #0b0d0f;
+  background: var(--code-block-bg);
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   padding: 1rem;
@@ -206,16 +317,21 @@ body {
 }
 
 .prose-nexus code {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--inline-code-bg);
   padding: 0.15rem 0.35rem;
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.88em;
 }
 
+.prose-nexus pre {
+  color: #d0d6e0;
+}
+
 .prose-nexus pre code {
   background: transparent;
   padding: 0;
+  color: inherit;
 }
 
 .prose-nexus ul,
@@ -229,7 +345,7 @@ body {
 }
 
 .prose-nexus a {
-  color: var(--accent-hover);
+  color: var(--accent-ink);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -239,8 +355,8 @@ body {
 /* Fine dot grid used behind hero / CTA sections */
 .landing-grid {
   background-image:
-    linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   background-size: 56px 56px;
   -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 40%, transparent 100%);
   mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 40%, transparent 100%);
@@ -330,7 +446,7 @@ body {
   width: 0.55em;
   height: 1.05em;
   margin-left: 2px;
-  background: var(--accent);
+  background: var(--accent-ink);
   vertical-align: text-bottom;
   animation: caret-blink 1s steps(1) infinite;
 }
@@ -353,7 +469,7 @@ body {
   width: 3px;
   height: 3px;
   border-radius: 9999px;
-  background: var(--accent);
+  background: var(--accent-ink);
   animation: stream-dot 1.4s ease-in-out infinite;
 }
 .stream-dot:nth-child(2) {
@@ -369,14 +485,14 @@ body {
   color: var(--accent-foreground);
   font-weight: 600;
   border-radius: 9999px;
-  box-shadow: 0 0 20px var(--accent-glow);
+  box-shadow: var(--btn-shadow);
   transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .btn-electric:hover {
   background-color: var(--accent-hover);
   transform: translateY(-1px);
-  box-shadow: 0 0 28px var(--accent-glow);
+  box-shadow: var(--btn-shadow-hover);
 }
 
 .btn-ghost-pill {
@@ -403,4 +519,41 @@ body {
   padding: 0.35rem 0.85rem;
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+/* Dark island — a terminal-style surface that stays Void in every theme.
+   Re-declares the base tokens locally so every child utility that reads
+   var(--text-*) / var(--border-*) / var(--accent-ink) resolves correctly
+   without per-element overrides. */
+.dark-island {
+  --bg-main: #08090a;
+  --bg-surface: #0f1011;
+  --bg-surface-elevated: #161718;
+  --bg-surface-tint: #23252a;
+  --border-subtle: #23252a;
+  --border-strong: #383b3f;
+  --text-primary: #ffffff;
+  --text-secondary: #d0d6e0;
+  --text-muted: #8a8f98;
+  --text-faint: #62666d;
+  --accent-ink: var(--accent);
+  color: var(--text-primary);
+}
+
+/* Overlay / dialog / palette entrances — answer a user action, so they stay;
+   fully disabled under prefers-reduced-motion. */
+@keyframes nx-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes nx-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.nx-overlay { animation: nx-fade 140ms ease-out; }
+.nx-dialog,
+.nx-palette { animation: nx-pop 170ms cubic-bezier(0.16, 1, 0.3, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .nx-overlay,
+  .nx-dialog,
+  .nx-palette { animation: none; }
 }

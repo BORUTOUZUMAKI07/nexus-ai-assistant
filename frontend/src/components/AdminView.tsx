@@ -245,7 +245,7 @@ export const AdminView: React.FC = () => {
       onClick={() => setActiveTab(tab)}
       className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
         activeTab === tab
-          ? "bg-[var(--accent-soft)] text-[var(--accent-hover)] border border-[var(--accent)]"
+          ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
           : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] border border-transparent"
       }`}
     >
@@ -259,11 +259,11 @@ export const AdminView: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between border-b border-[var(--border-subtle)] pb-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] text-[var(--accent)]">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] text-[var(--accent-ink)]">
             <ShieldCheck className="h-4 w-4" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight text-white">
+            <h1 className="text-lg font-semibold tracking-tight text-[var(--text-primary)]">
               Admin
             </h1>
             <p className="text-xs text-[var(--text-muted)]">
@@ -274,7 +274,7 @@ export const AdminView: React.FC = () => {
 
         <button
           onClick={fetchAdminData}
-          className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-white hover:border-[var(--border-strong)] transition-colors"
+          className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           Refresh
@@ -300,7 +300,7 @@ export const AdminView: React.FC = () => {
           </div>
           <button
             onClick={fetchAdminData}
-            className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 py-1 text-xs text-[var(--text-secondary)] hover:text-white transition-colors whitespace-nowrap"
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 py-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors whitespace-nowrap"
           >
             <RefreshCw className="h-3 w-3" />
             Retry
@@ -336,7 +336,7 @@ export const AdminView: React.FC = () => {
               <tbody className="divide-y divide-[var(--border-subtle)] text-[var(--text-secondary)]">
                 {users.map((u) => (
                   <tr key={u.id} className="hover:bg-[var(--bg-main)] transition-colors">
-                    <td className="p-3.5 font-medium text-white">
+                    <td className="p-3.5 font-medium text-[var(--text-primary)]">
                       {u.full_name || u.username}
                     </td>
                     <td className="p-3.5 text-[var(--text-muted)]">{u.email}</td>
@@ -358,7 +358,7 @@ export const AdminView: React.FC = () => {
                     <td className="p-3.5 text-right">
                       <button
                         onClick={() => toggleUser(u.id)}
-                        className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--border-strong)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)] hover:text-white transition-colors"
+                        className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--border-strong)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
                       >
                         {u.is_active ? "Disable" : "Enable"}
                       </button>
@@ -402,7 +402,7 @@ export const AdminView: React.FC = () => {
               >
                 <div className="flex items-center gap-3 mb-3">
                   <Icon className="h-5 w-5 text-[var(--text-muted)]" />
-                  <h3 className="text-sm font-medium text-white">{label}</h3>
+                  <h3 className="text-sm font-medium text-[var(--text-primary)]">{label}</h3>
                 </div>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)]">
                   <span className="h-2 w-2 rounded-full bg-[var(--status-success)]" />
@@ -414,7 +414,7 @@ export const AdminView: React.FC = () => {
 
           {/* External Observability & Telemetry Dashboards */}
           <div className="col-span-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 mt-2">
-            <h3 className="text-sm font-medium text-white mb-1">External Observability & Telemetry</h3>
+            <h3 className="text-sm font-medium text-[var(--text-primary)] mb-1">External Observability & Telemetry</h3>
             <p className="text-xs text-[var(--text-muted)] mb-4">
               Access real-time LLM trace monitoring, token latency analytics, and crash reporting dashboards.
             </p>
@@ -423,29 +423,29 @@ export const AdminView: React.FC = () => {
                 href="https://us.helicone.ai"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center justify-between p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--accent)] text-xs text-[var(--text-secondary)] hover:text-white transition-colors group"
+                className="flex items-center justify-between p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--accent)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors group"
               >
                 <div>
-                  <div className="font-semibold text-white group-hover:text-[var(--accent)] transition-colors">
+                  <div className="font-semibold text-[var(--text-primary)] group-hover:text-[var(--accent-ink)] transition-colors">
                     Helicone AI Observability
                   </div>
                   <div className="text-[11px] text-[var(--text-muted)]">Live LLM request tracing & cost metrics</div>
                 </div>
-                <ExternalLink className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--accent)] shrink-0" />
+                <ExternalLink className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--accent-ink)] shrink-0" />
               </a>
               <a
                 href="https://sentry.io"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center justify-between p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--accent)] text-xs text-[var(--text-secondary)] hover:text-white transition-colors group"
+                className="flex items-center justify-between p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--accent)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors group"
               >
                 <div>
-                  <div className="font-semibold text-white group-hover:text-[var(--accent)] transition-colors">
+                  <div className="font-semibold text-[var(--text-primary)] group-hover:text-[var(--accent-ink)] transition-colors">
                     Sentry Error Tracking
                   </div>
                   <div className="text-[11px] text-[var(--text-muted)]">Backend exception monitoring & APM traces</div>
                 </div>
-                <ExternalLink className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--accent)] shrink-0" />
+                <ExternalLink className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--accent-ink)] shrink-0" />
               </a>
             </div>
           </div>
@@ -473,7 +473,7 @@ export const AdminView: React.FC = () => {
               <tbody className="divide-y divide-[var(--border-subtle)] text-[var(--text-secondary)] font-mono text-[11px]">
                 {auditLogs.map((log) => (
                   <tr key={log.id} className="hover:bg-[var(--bg-main)] transition-colors">
-                    <td className="p-3.5 font-medium text-white">{log.action}</td>
+                    <td className="p-3.5 font-medium text-[var(--text-primary)]">{log.action}</td>
                     <td className="p-3.5 text-[var(--text-muted)]">{log.resource_type}</td>
                     <td className="p-3.5 text-[var(--text-muted)]">
                       {log.ip_address || "internal"}
@@ -500,8 +500,8 @@ export const AdminView: React.FC = () => {
         <div className="space-y-4">
           {/* Create policy */}
           <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-            <h3 className="text-sm font-medium text-white mb-1 flex items-center gap-2">
-              <Plus className="h-4 w-4 text-[var(--accent)]" />
+            <h3 className="text-sm font-medium text-[var(--text-primary)] mb-1 flex items-center gap-2">
+              <Plus className="h-4 w-4 text-[var(--accent-ink)]" />
               New hook policy
             </h3>
             <p className="text-xs text-[var(--text-muted)] mb-4">
@@ -509,27 +509,27 @@ export const AdminView: React.FC = () => {
               <span className="text-[var(--text-secondary)]">block</span> rejects the call,{" "}
               <span className="text-[var(--text-secondary)]">redact</span> strips a field,{" "}
               <span className="text-[var(--text-secondary)]">log</span> records the event only.
-              Tool names support <code className="font-mono text-[var(--accent)]">*</code> wildcards.
+              Tool names support <code className="font-mono text-[var(--accent-ink)]">*</code> wildcards.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <input
                 value={hookForm.name}
                 onChange={(e) => setHookForm({ ...hookForm, name: e.target.value })}
                 placeholder="Name (e.g. Block shell exec)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
               />
               <input
                 value={hookForm.tool_name}
                 onChange={(e) => setHookForm({ ...hookForm, tool_name: e.target.value })}
                 placeholder="Tool (e.g. run_shell, *)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
               />
               <select
                 value={hookForm.event}
                 onChange={(e) =>
                   setHookForm({ ...hookForm, event: e.target.value as "pre_tool" | "post_tool" })
                 }
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-white focus:outline-none focus:border-[var(--accent)] transition-colors"
+                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
               >
                 <option value="pre_tool">pre_tool</option>
                 <option value="post_tool">post_tool</option>
@@ -539,7 +539,7 @@ export const AdminView: React.FC = () => {
                 onChange={(e) =>
                   setHookForm({ ...hookForm, action: e.target.value as "block" | "redact" | "log" })
                 }
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-white focus:outline-none focus:border-[var(--accent)] transition-colors"
+                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
               >
                 <option value="block">block</option>
                 <option value="redact">redact</option>
@@ -551,7 +551,7 @@ export const AdminView: React.FC = () => {
                   setHookForm({ ...hookForm, field: e.target.value || null })
                 }
                 placeholder="Field to redact (redact only)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
               />
               <input
                 value={hookForm.org_id ?? ""}
@@ -559,7 +559,7 @@ export const AdminView: React.FC = () => {
                   setHookForm({ ...hookForm, org_id: e.target.value || null })
                 }
                 placeholder="Org id (empty = global)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
               />
               <input
                 value={hookForm.message ?? ""}
@@ -567,7 +567,7 @@ export const AdminView: React.FC = () => {
                   setHookForm({ ...hookForm, message: e.target.value || null })
                 }
                 placeholder="Message (optional)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
               />
               <button
                 onClick={submitHook}
@@ -606,8 +606,8 @@ export const AdminView: React.FC = () => {
                 <tbody className="divide-y divide-[var(--border-subtle)] text-[var(--text-secondary)]">
                   {hooks.map((h) => (
                     <tr key={h.id} className="hover:bg-[var(--bg-main)] transition-colors">
-                      <td className="p-3.5 font-medium text-white">{h.name}</td>
-                      <td className="p-3.5 font-mono text-[var(--accent)]">{h.tool_name}</td>
+                      <td className="p-3.5 font-medium text-[var(--text-primary)]">{h.name}</td>
+                      <td className="p-3.5 font-mono text-[var(--accent-ink)]">{h.tool_name}</td>
                       <td className="p-3.5 text-[var(--text-muted)]">{h.event}</td>
                       <td className="p-3.5">
                         <span
@@ -689,17 +689,17 @@ export const AdminView: React.FC = () => {
               <>
                 <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
                   <div className="text-[11px] text-[var(--text-muted)] mb-1">Requests</div>
-                  <div className="text-lg font-semibold text-white">{sliceReport.overall.requests}</div>
+                  <div className="text-lg font-semibold text-[var(--text-primary)]">{sliceReport.overall.requests}</div>
                 </div>
                 <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
                   <div className="text-[11px] text-[var(--text-muted)] mb-1">Error rate</div>
-                  <div className="text-lg font-semibold text-white">
+                  <div className="text-lg font-semibold text-[var(--text-primary)]">
                     {(sliceReport.overall.error_rate * 100).toFixed(1)}%
                   </div>
                 </div>
                 <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
                   <div className="text-[11px] text-[var(--text-muted)] mb-1">Helpful rate</div>
-                  <div className="text-lg font-semibold text-white">
+                  <div className="text-lg font-semibold text-[var(--text-primary)]">
                     {sliceReport.overall.helpful_rate === null
                       ? "—"
                       : `${(sliceReport.overall.helpful_rate * 100).toFixed(1)}%`}
@@ -707,7 +707,7 @@ export const AdminView: React.FC = () => {
                 </div>
                 <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
                   <div className="text-[11px] text-[var(--text-muted)] mb-1">Avg latency</div>
-                  <div className="text-lg font-semibold text-white">
+                  <div className="text-lg font-semibold text-[var(--text-primary)]">
                     {sliceReport.overall.avg_latency_ms.toFixed(0)}ms
                   </div>
                 </div>
@@ -736,8 +736,8 @@ export const AdminView: React.FC = () => {
           <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
               <div className="p-4 border-b lg:border-b-0 lg:border-r border-[var(--border-subtle)]">
-                <h3 className="text-sm font-medium text-white mb-1 flex items-center gap-2">
-                  <BarChart3 className="h-4 w-4 text-[var(--accent)]" />
+                <h3 className="text-sm font-medium text-[var(--text-primary)] mb-1 flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4 text-[var(--accent-ink)]" />
                   Per-model/provider slices
                 </h3>
                 <p className="text-[11px] text-[var(--text-muted)] mb-3">
@@ -755,7 +755,7 @@ export const AdminView: React.FC = () => {
                         className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] p-3"
                       >
                         <div className="flex items-center justify-between gap-2 mb-1">
-                          <span className="font-mono text-xs text-white">
+                          <span className="font-mono text-xs text-[var(--text-primary)]">
                             {s.model} / {s.provider}
                           </span>
                           <span className="text-[10px] text-[var(--text-muted)]">
@@ -793,8 +793,8 @@ export const AdminView: React.FC = () => {
               </div>
 
               <div className="p-4">
-                <h3 className="text-sm font-medium text-white mb-1 flex items-center gap-2">
-                  <ShieldCheck className="h-4 w-4 text-[var(--accent)]" />
+                <h3 className="text-sm font-medium text-[var(--text-primary)] mb-1 flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-[var(--accent-ink)]" />
                   Fairness parity
                 </h3>
                 <p className="text-[11px] text-[var(--text-muted)] mb-3">
@@ -809,7 +809,7 @@ export const AdminView: React.FC = () => {
                     {fairnessReport.evaluator_parity.map((row) => (
                       <div key={row.group} className="flex items-center justify-between text-xs">
                         <span className="text-[var(--text-secondary)] font-mono">{row.group}</span>
-                        <span className="text-white">
+                        <span className="text-[var(--text-primary)]">
                           {(row.pass_rate * 100).toFixed(0)}%
                           <span className="text-[var(--text-muted)] ml-1.5">
                             ({row.count} evals)
@@ -822,7 +822,7 @@ export const AdminView: React.FC = () => {
                       {fairnessReport.provider_error_parity.map((row) => (
                         <div key={row.provider} className="flex items-center justify-between text-xs">
                           <span className="text-[var(--text-secondary)]">{row.provider}</span>
-                          <span className={row.flagged ? "text-[var(--status-warning)]" : "text-white"}>
+                          <span className={row.flagged ? "text-[var(--status-warning)]" : "text-[var(--text-primary)]"}>
                             {(row.error_rate * 100).toFixed(1)}%
                             {row.flagged ? " ⚠" : ""}
                           </span>
@@ -840,8 +840,8 @@ export const AdminView: React.FC = () => {
 
           {banditStatus && (
             <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-              <h3 className="text-sm font-medium text-white mb-2 flex items-center gap-2">
-                <Activity className="h-4 w-4 text-[var(--accent)]" />
+              <h3 className="text-sm font-medium text-[var(--text-primary)] mb-2 flex items-center gap-2">
+                <Activity className="h-4 w-4 text-[var(--accent-ink)]" />
                 Bandit experiments ({banditStatus.exploration}, ε={banditStatus.epsilon})
               </h3>
               {banditStatus.stats.length === 0 ? (
@@ -862,9 +862,9 @@ export const AdminView: React.FC = () => {
                     {banditStatus.stats.map((row) => (
                       <tr key={`${row.experiment}/${row.variant}`}>
                         <td className="py-2 text-[var(--text-secondary)]">{row.experiment}</td>
-                        <td className="py-2 font-mono text-white">{row.variant}</td>
+                        <td className="py-2 font-mono text-[var(--text-primary)]">{row.variant}</td>
                         <td className="py-2 text-[var(--text-muted)]">{row.reward_count}</td>
-                        <td className="py-2 text-right font-mono text-white">
+                        <td className="py-2 text-right font-mono text-[var(--text-primary)]">
                           {(row.mean_reward * 100).toFixed(1)}%
                         </td>
                       </tr>
@@ -881,8 +881,8 @@ export const AdminView: React.FC = () => {
       {!loading && activeTab === "optimization" && (
         <div className="space-y-4">
           <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-            <h3 className="text-sm font-medium text-white mb-1 flex items-center gap-2">
-              <Wand2 className="h-4 w-4 text-[var(--accent)]" />
+            <h3 className="text-sm font-medium text-[var(--text-primary)] mb-1 flex items-center gap-2">
+              <Wand2 className="h-4 w-4 text-[var(--accent-ink)]" />
               Run an optimization loop
             </h3>
             <p className="text-xs text-[var(--text-muted)] mb-4">
@@ -894,14 +894,14 @@ export const AdminView: React.FC = () => {
                 value={optForm.prompt_key}
                 onChange={(e) => setOptForm({ ...optForm, prompt_key: e.target.value })}
                 placeholder="Prompt key (e.g. chat_system_prompt)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
               />
               <input
                 value={optForm.candidate_count}
                 onChange={(e) => setOptForm({ ...optForm, candidate_count: e.target.value })}
                 placeholder="Candidates (1-6, default 4)"
                 inputMode="numeric"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
               />
               <button
                 onClick={runOptimization}
@@ -921,7 +921,7 @@ export const AdminView: React.FC = () => {
               onChange={(e) => setOptForm({ ...optForm, baseline_prompt: e.target.value })}
               placeholder="Current system prompt (baseline to beat)"
               rows={2}
-              className="mt-3 w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+              className="mt-3 w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
             />
             <div className="mt-3">
               <div className="text-[11px] text-[var(--text-muted)] mb-1">
@@ -932,14 +932,14 @@ export const AdminView: React.FC = () => {
                 value={optForm.cases}
                 onChange={(e) => setOptForm({ ...optForm, cases: e.target.value })}
                 rows={3}
-                className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs font-mono text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
               />
             </div>
           </div>
 
           <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
             <div className="p-4 border-b border-[var(--border-subtle)]">
-              <h3 className="text-sm font-medium text-white">Optimization evidence trail</h3>
+              <h3 className="text-sm font-medium text-[var(--text-primary)]">Optimization evidence trail</h3>
               <p className="text-[11px] text-[var(--text-muted)]">
                 Every persisted run: accepted variant, scores, and whether it was promoted.
               </p>
@@ -964,7 +964,7 @@ export const AdminView: React.FC = () => {
                 <tbody className="divide-y divide-[var(--border-subtle)] text-[var(--text-secondary)]">
                   {optRuns.map((run) => (
                     <tr key={run.id} className="hover:bg-[var(--bg-main)] transition-colors">
-                      <td className="p-3.5 font-mono text-[var(--accent)]">{run.prompt_key}</td>
+                      <td className="p-3.5 font-mono text-[var(--accent-ink)]">{run.prompt_key}</td>
                       <td className="p-3.5">
                         <span
                           className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[10px] font-medium ${
@@ -980,7 +980,7 @@ export const AdminView: React.FC = () => {
                       </td>
                       <td className="p-3.5 text-[var(--text-muted)]">{run.candidate_count}</td>
                       <td className="p-3.5 font-mono">{run.baseline_score.toFixed(3)}</td>
-                      <td className="p-3.5 font-mono text-white">{run.best_score.toFixed(3)}</td>
+                      <td className="p-3.5 font-mono text-[var(--text-primary)]">{run.best_score.toFixed(3)}</td>
                       <td className="p-3.5">
                         {run.promoted ? (
                           <span className="inline-flex items-center gap-1 text-[var(--status-success)]">
@@ -1013,8 +1013,8 @@ export const AdminView: React.FC = () => {
           {auditReport && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-                <h3 className="text-sm font-medium text-white mb-3 flex items-center gap-2">
-                  <ShieldCheck className="h-4 w-4 text-[var(--accent)]" />
+                <h3 className="text-sm font-medium text-[var(--text-primary)] mb-3 flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-[var(--accent-ink)]" />
                   System controls
                 </h3>
                 <dl className="space-y-2 text-xs">
@@ -1032,7 +1032,7 @@ export const AdminView: React.FC = () => {
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-[var(--text-muted)]">Rate limit</dt>
-                    <dd className="text-white">{auditReport.controls.rate_limit_per_minute}/min</dd>
+                    <dd className="text-[var(--text-primary)]">{auditReport.controls.rate_limit_per_minute}/min</dd>
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-[var(--text-muted)]">2FA enforced</dt>
@@ -1042,7 +1042,7 @@ export const AdminView: React.FC = () => {
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-[var(--text-muted)]">Blocking hooks</dt>
-                    <dd className="text-white">
+                    <dd className="text-[var(--text-primary)]">
                       {auditReport.lifecycle_hooks.enabled} enabled /{" "}
                       {auditReport.lifecycle_hooks.block_policies} block
                     </dd>
@@ -1051,8 +1051,8 @@ export const AdminView: React.FC = () => {
               </div>
 
               <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-                <h3 className="text-sm font-medium text-white mb-3 flex items-center gap-2">
-                  <ExternalLink className="h-4 w-4 text-[var(--accent)]" />
+                <h3 className="text-sm font-medium text-[var(--text-primary)] mb-3 flex items-center gap-2">
+                  <ExternalLink className="h-4 w-4 text-[var(--accent-ink)]" />
                   Model & prompt provenance
                 </h3>
                 {auditReport.model_provenance.length === 0 ? (
@@ -1063,7 +1063,7 @@ export const AdminView: React.FC = () => {
                   <div className="space-y-2">
                     {auditReport.model_provenance.map((m) => (
                       <div key={m.model} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] p-2.5 text-xs">
-                        <div className="font-mono text-white">{m.model}</div>
+                        <div className="font-mono text-[var(--text-primary)]">{m.model}</div>
                         <div className="text-[var(--text-muted)] text-[11px]">
                           {m.requests} requests · {m.providers.join(", ")}
                           {m.experiment_variants_seen.length > 0 &&
@@ -1075,19 +1075,19 @@ export const AdminView: React.FC = () => {
                 )}
                 <div className="mt-3 text-xs text-[var(--text-secondary)]">
                   Prompt versions:{" "}
-                  <span className="text-white font-mono">{auditReport.prompt_provenance.version_count}</span>
+                  <span className="text-[var(--text-primary)] font-mono">{auditReport.prompt_provenance.version_count}</span>
                 </div>
               </div>
 
               <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-                <h3 className="text-sm font-medium text-white mb-3 flex items-center gap-2">
-                  <ScrollText className="h-4 w-4 text-[var(--accent)]" />
+                <h3 className="text-sm font-medium text-[var(--text-primary)] mb-3 flex items-center gap-2">
+                  <ScrollText className="h-4 w-4 text-[var(--accent-ink)]" />
                   Red team & GDPR
                 </h3>
                 <div className="text-xs space-y-2">
                   <div className="flex justify-between">
                     <span className="text-[var(--text-muted)]">Defense rate</span>
-                    <span className="text-white font-mono">
+                    <span className="text-[var(--text-primary)] font-mono">
                       {auditReport.red_team.defense_rate !== undefined
                         ? `${(auditReport.red_team.defense_rate * 100).toFixed(0)}%`
                         : auditReport.red_team.note ?? "—"}
@@ -1095,15 +1095,15 @@ export const AdminView: React.FC = () => {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[var(--text-muted)]">Runs</span>
-                    <span className="text-white">{auditReport.red_team.run_count}</span>
+                    <span className="text-[var(--text-primary)]">{auditReport.red_team.run_count}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[var(--text-muted)]">GDPR exports</span>
-                    <span className="text-white font-mono">{auditReport.gdpr.gdpr_export}</span>
+                    <span className="text-[var(--text-primary)] font-mono">{auditReport.gdpr.gdpr_export}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[var(--text-muted)]">GDPR erasures</span>
-                    <span className="text-white font-mono">{auditReport.gdpr.gdpr_erasure}</span>
+                    <span className="text-[var(--text-primary)] font-mono">{auditReport.gdpr.gdpr_erasure}</span>
                   </div>
                 </div>
                 <div className="mt-3 pt-3 border-t border-[var(--border-subtle)]">
@@ -1117,7 +1117,7 @@ export const AdminView: React.FC = () => {
                         <span className="text-[var(--text-secondary)]">
                           {run.created_at ? new Date(run.created_at).toLocaleDateString() : "—"}
                         </span>
-                        <span className="font-mono text-white">
+                        <span className="font-mono text-[var(--text-primary)]">
                           {(run.defense_rate * 100).toFixed(0)}% ({run.blocked_probes}/{run.total_probes})
                         </span>
                       </div>
@@ -1130,12 +1130,12 @@ export const AdminView: React.FC = () => {
 
           {auditReport && (
             <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-              <h3 className="text-sm font-medium text-white mb-2 flex items-center gap-2">
-                <ScrollText className="h-4 w-4 text-[var(--accent)]" />
+              <h3 className="text-sm font-medium text-[var(--text-primary)] mb-2 flex items-center gap-2">
+                <ScrollText className="h-4 w-4 text-[var(--accent-ink)]" />
                 EU AI Act classification
               </h3>
               <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                <span className="text-white font-medium">{auditReport.eu_ai_act.classification}</span>
+                <span className="text-[var(--text-primary)] font-medium">{auditReport.eu_ai_act.classification}</span>
                 {" — "}
                 {auditReport.eu_ai_act.high_risk_articles}.
               </p>

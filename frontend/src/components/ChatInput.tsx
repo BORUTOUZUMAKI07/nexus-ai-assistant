@@ -348,7 +348,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
         <div className="absolute inset-0 z-50 m-1 rounded-2xl border-2 border-dashed border-[var(--accent)] bg-[var(--accent-soft)] flex items-center justify-center pointer-events-none">
           <div className="text-center">
             <span className="text-2xl">📂</span>
-            <p className="text-sm font-semibold text-[var(--accent)] mt-1">Drop files or images here</p>
+            <p className="text-sm font-semibold text-[var(--accent-ink)] mt-1">Drop files or images here</p>
           </div>
         </div>
       )}
@@ -364,7 +364,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
             />
             <button
               onClick={() => { setImageDataUrl(null); setImageName(""); }}
-              className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-white"
+              className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
               title="Remove image"
             >
               <X className="w-3 h-3" />
@@ -380,11 +380,11 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                 key={idx}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-xs text-[var(--text-secondary)]"
               >
-                <FileText className="w-3.5 h-3.5 text-[var(--accent)]" />
+                <FileText className="w-3.5 h-3.5 text-[var(--accent-ink)]" />
                 <span className="truncate max-w-[140px]">{file.name}</span>
                 <button
                   onClick={() => removeAttachment(idx)}
-                  className="hover:text-white p-0.5"
+                  className="hover:text-[var(--text-primary)] p-0.5"
                   title="Remove attachment"
                 >
                   <X className="w-3 h-3" />
@@ -407,13 +407,13 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                 onMouseDown={(e) => { e.preventDefault(); applySlashCommand(cmd); }}
                 className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors ${
                   idx === selectedSlashIdx
-                    ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                    ? "bg-[var(--accent-soft)] text-[var(--accent-ink)]"
                     : "hover:bg-[var(--bg-surface)] text-[var(--text-secondary)]"
                 }`}
               >
                 <span className="text-lg leading-none">{cmd.icon}</span>
                 <div>
-                  <div className="text-xs font-semibold text-white">{cmd.command} <span className="text-[var(--text-muted)] font-normal">{cmd.label}</span></div>
+                  <div className="text-xs font-semibold text-[var(--text-primary)]">{cmd.command} <span className="text-[var(--text-muted)] font-normal">{cmd.label}</span></div>
                   <div className="text-[10px] text-[var(--text-faint)]">{cmd.desc}</div>
                 </div>
               </button>
@@ -464,7 +464,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-surface)] transition-colors"
+              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] transition-colors"
               title="Attach document or code"
             >
               <Paperclip className="w-4 h-4" />
@@ -482,8 +482,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
               onClick={() => imageInputRef.current?.click()}
               className={`p-1.5 rounded-lg transition-colors ${
                 imageDataUrl
-                  ? "text-[var(--accent)] bg-[var(--accent-soft)]"
-                  : "text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-surface)]"
+                  ? "text-[var(--accent-ink)] bg-[var(--accent-soft)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)]"
               }`}
               title="Attach image for vision analysis"
             >
@@ -499,7 +499,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                   ? "text-[var(--status-danger)] bg-[var(--status-danger)]/10 animate-pulse"
                   : isTranscribing
                   ? "text-[var(--text-faint)] cursor-not-allowed"
-                  : "text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-surface)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)]"
               }`}
               title={
                 isRecording
@@ -523,8 +523,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
               }
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                 agentMode === "deep"
-                  ? "bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/40"
-                  : "text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-surface)] border border-transparent"
+                  ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]/40"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] border border-transparent"
               }`}
               title={
                 agentMode === "deep"
@@ -534,7 +534,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
             >
               {agentMode === "deep" ? (
                 <>
-                  <Sparkles className="w-3.5 h-3.5 text-[var(--accent)]" />
+                  <Sparkles className="w-3.5 h-3.5 text-[var(--accent-ink)]" />
                   <span>Deep Agent</span>
                 </>
               ) : (
@@ -550,8 +550,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
               onClick={() => setEnableWeb(!enableWeb)}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                 enableWeb
-                  ? "bg-[var(--accent-soft)] text-[var(--accent-hover)] border border-[var(--accent)]"
-                  : "text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-surface)] border border-transparent"
+                  ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] border border-transparent"
               }`}
               title="Live web search"
             >
@@ -564,8 +564,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
               onClick={() => setEnableCode(!enableCode)}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                 enableCode
-                  ? "bg-[var(--accent-soft)] text-[var(--accent-hover)] border border-[var(--accent)]"
-                  : "text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-surface)] border border-transparent"
+                  ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] border border-transparent"
               }`}
               title="Code interpreter sandbox"
             >
@@ -578,8 +578,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
               onClick={() => setPlanMode(!planMode)}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                 planMode
-                  ? "bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]"
-                  : "text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-surface)] border border-transparent"
+                  ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] border border-transparent"
               }`}
               title={
                 planMode
@@ -598,8 +598,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                 onClick={() => setShowPrompts(!showPrompts)}
                 className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                   showPrompts
-                    ? "bg-[var(--accent-soft)] text-[var(--accent-hover)] border border-[var(--accent)]"
-                    : "text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-surface)] border border-transparent"
+                    ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
+                    : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] border border-transparent"
                 }`}
                 title="Select from prompt library"
               >
@@ -625,7 +625,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                       }}
                       className="w-full text-left p-2 rounded-lg hover:bg-[var(--bg-surface)] transition-colors group"
                     >
-                      <div className="text-xs font-medium text-white group-hover:text-[var(--accent)]">
+                      <div className="text-xs font-medium text-[var(--text-primary)] group-hover:text-[var(--accent-ink)]">
                         {tpl.title}
                       </div>
                       <div className="text-[10px] text-[var(--text-muted)] truncate">
