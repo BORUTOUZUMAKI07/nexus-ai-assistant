@@ -6,9 +6,10 @@ import { TriangleAlert } from "lucide-react";
  * Shared fallback UI for the App Router `error.tsx` boundaries.
  *
  * Renders inside the root layout, so it can use the theme tokens from
- * globals.css (Void background, glass-card surface, Electric Acid Lime accent).
- * `digest` is the route-error identifier Next generates for server-log
- * correlation; it is shown as muted monospace copy and never its message.
+ * globals.css (Paper floor in light, Void floor in dark, glass-card surface,
+ * accent-aware icon). `digest` is the route-error identifier Next generates
+ * for server-log correlation; it is shown as muted monospace copy and never
+ * its message.
  */
 export function AppErrorState({
   title = "Something went wrong",

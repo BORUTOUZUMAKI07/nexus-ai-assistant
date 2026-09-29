@@ -177,6 +177,13 @@ Frontend facts verified:
   `POST /api/v1/conversations/{id}/messages/stream`.
 - **`npx next typegen` is required before `tsc --noEmit`** — `LayoutProps` /
   `PageProps` are generated globals. CI does `npx next typegen` first.
+- **Design system is "Refero" — Paper (light, default) + Void (dark) + 4
+  accents, never the old black-only look.** Tokens live in
+  `frontend/src/app/globals.css` (`:root` Paper, `[data-theme="dark"]` Void,
+  `[data-accent]` swaps), driven by `frontend/src/lib/theme.ts` and the
+  pre-paint `THEME_INIT_SCRIPT`; persisted in `localStorage` (`nexus-theme` /
+  `nexus-accent`), deliberately **not** from backend `UserSettings.theme`.
+  Full contract + hard rules: `docs/frontend-design.md`.
 
 ### Keyboard shortcuts (verified from source — the ONLY ones that exist)
 
@@ -362,6 +369,7 @@ Windows shell gotchas (learned the hard way):
 | API endpoints | live FastAPI `app.openapi()` (97 paths, 114 ops) — regenerate `docs/api-reference.md` from it |
 | Tables | `backend/app/domain/**/models.py` (35) |
 | Keyboard shortcuts | `frontend/src/components/{CommandPalette,ArtifactCanvas,ChatInput}.tsx` |
+| Frontend design system | `frontend/src/app/globals.css` + `frontend/src/lib/theme.ts` + `docs/frontend-design.md` |
 | Alerts/SLOs/runbooks | `docs/alerting/alert-rules.yml` ↔ `docs/slo.md` ↔ `docs/runbooks/` |
 | Versions | `backend/pyproject.toml`, `frontend/package.json` |
 | CI behavior | `.github/workflows/*.yml` |
