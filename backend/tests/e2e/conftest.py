@@ -89,6 +89,34 @@ def _stub_tool_gateway(monkeypatch):
     monkeypatch.setattr(tool_gateway, "execute_tool", _execute)
 
 
+@pytest.fixture(autouse=True)
+def _stub_auth_rate_limits(monkeypatch):
+    """Neutralize the per-IP auth throttle for the live tier.
+
+    Every request in this tier arrives from the one shared socket
+    (127.0.0.1), so all eight tests that register a user share a single
+    ``auth:register:{ip}`` bucket — the register limit of 5/min makes the
+    suite throttle *itself* with 429s halfway through, regardless of how fast
+    or slow the run is. The throttle is a production anti-brute-force control
+    already covered by the unit tier (tests/test_rate_limit.py patches
+    ``check_rate_limit`` directly); here it only gets in the way of the honest
+    network + server + DB lifecycle this tier exists to exercise.
+
+    ``_check_and_enforce`` is looked up by name inside the already-constructed
+    ``Depends`` dependency at call time, and ``_enforce_auth_rate_limit`` is
+    the router's own module-level helper, so re-pointing these two module
+    attributes cuts both throttling seams off.
+    """
+    from backend.app.api.v1 import auth as auth_mod
+    from backend.app.infrastructure.resilience import rate_limit as rl_mod
+
+    async def _allow(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(rl_mod, "_check_and_enforce", _allow)
+    monkeypatch.setattr(auth_mod, "_enforce_auth_rate_limit", _allow)
+
+
 @pytest.fixture(scope="session")
 def live_server(redis_backend):
     """Start the app on a live socket once per session; stop it afterwards.

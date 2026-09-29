@@ -87,7 +87,9 @@ def create_access_token(
     subject: str | UUID,
     role: str | None = None,
     expires_delta: timedelta | None = None,
-    token_type: str = "access",
+    # Bandit reads a default on a "password"-ish parameter name as a hardcoded
+    # credential. This is the JWT `type` claim, never a secret.
+    token_type: str = "access",  # nosec B107
     additional_claims: dict[str, Any] | None = None,
 ) -> str:
     """Creates a short-lived access token (default ACCESS_TOKEN_EXPIRE_MINUTES).

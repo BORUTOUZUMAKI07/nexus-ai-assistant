@@ -14,10 +14,10 @@ name: CI
 #
 # The live LLM-judge gates — prompt-regression, arena pairwise judgment,
 # conversational compliance and RAG faithfulness — are a separate,
-# credential-gated job: they only execute when the RUN_LLM_EVAL_GATES secret is
-# explicitly exported, so contributors without model credentials never see a
-# false red, while release pipelines that set it get the real "CI stopped for
-# prompts + evaluator output" checks.
+# credential-gated job: they only execute when the RUN_LLM_EVAL_GATES repository
+# *variable* is "1" (job-level `if: vars.…`), so contributors without model
+# credentials never see a false red, while release pipelines that set it get the
+# real "CI stopped for prompts + evaluator output" checks.
 on:
   push:
     branches: [main]
@@ -27,10 +27,20 @@ env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
 
+# A newer push to the same branch makes the in-flight run obsolete. Without this
+# every push queues another full suite behind the previous one, so a burst of
+# commits reports stale results long after the tree stopped changing.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Unit suite + regression gate
     runs-on: ubuntu-latest
+    # A hung test must fail the run rather than sit until the 6h platform cap:
+    # a red at 25 minutes is actionable, a timeout is not.
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: backend
@@ -49,12 +59,18 @@ jobs:
         # -m "not e2e" matches the project's pytest defaults.
         env:
           ENVIRONMENT: development
+          # The integration tier boots real Postgres/Redis testcontainers and
+          # only cleans them up in pytest_sessionfinish, which an interrupt
+          # skips. Leaving Ryuk on means an aborted run leaks a container and
+          # holds the runner's Docker disk; disabling it defers cleanup to the
+          # runner's own teardown instead.
+          TESTCONTAINERS_RYUK_DISABLED: "true"
         run: uv run pytest -m "not e2e"
 
-      - name: Lint (informational)
-        # The repo carries pre-existing ruff debt, so lint never hard-fails a
-        # PR; typecheck + security jobs below are the hard gates.
-        continue-on-error: true
+      - name: Lint (ruff)
+        # Hard gate. This was informational while the tree carried ruff debt;
+        # app/ and tests/ are clean now, so a regression should fail the build
+        # rather than print a warning nobody reads.
         run: uv run ruff check app tests
 
   typecheck:
@@ -77,13 +93,26 @@ jobs:
         shell: bash
         run: |
           # mypy_targets.txt is repo-root-relative (backend/app/...) with '#'
-          # comment lines; strip the prefix so paths resolve from ./backend.
-          mapfile -t TARGETS < <(grep -v '^#' scripts/mypy_targets.txt | sed 's|^backend/||')
+          # comment lines and possible trailing whitespace/CR from editors.
+          # Strip comments, blank lines, \r, then the backend/ prefix so paths
+          # resolve from ./backend. Guard the empty case so a mis-edited
+          # allowlist fails loudly instead of passing because nothing ran.
+          mapfile -t TARGETS < <( \
+            grep -v '^[[:space:]]*#' scripts/mypy_targets.txt \
+            | sed 's/\r$//' \
+            | grep -v '^[[:space:]]*$' \
+            | sed 's|^backend/||' \
+          )
+          if [ ${#TARGETS[@]} -eq 0 ]; then
+            echo "::error::mypy_targets.txt yielded no targets -- the allowlist is empty or unreadable"
+            exit 1
+          fi
           uv run mypy --follow-imports=silent "${TARGETS[@]}"
 
   frontend:
     name: Frontend typecheck + lint + tests + build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
@@ -97,13 +126,18 @@ jobs:
           cache-dependency-path: ./frontend/package-lock.json
 
       - name: Install frontend deps
+        # --legacy-peer-deps is required: the tree mixes React 19 with peer
+        # ranges that have not caught up, and plain `npm ci` fails the install
+        # rather than warning.
         run: npm ci --legacy-peer-deps
 
       - name: Typecheck (tsc)
         run: npx tsc --noEmit
 
       - name: Lint
-        run: npm run lint
+        # `eslint` with no path lints nothing in eslint 9 and exits 0, so this
+        # step was a no-op that reported success unconditionally. Pass the tree.
+        run: npx eslint src scripts
 
       - name: Unit suite (vitest)
         run: npm run test
@@ -114,6 +148,7 @@ jobs:
   security:
     name: Security scans (bandit + pip-audit + npm audit)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: backend
@@ -153,12 +188,22 @@ jobs:
   live-llm-eval-gates:
     name: Live LLM-judge gates (prompt-regression + arena + conversational + RAG)
     runs-on: ubuntu-latest
-    # Deliberately env-guarded: these jobs need live model credentials. Set the
-    # RUN_LLM_EVAL_GATES repository secret to "1" to arm them on releases.
-    # GROQ_API_KEY drives the prompt-regression gate (via the app's own LLM
-    # client); the arena/conversational/RAG gates are free-tier deterministic
-    # heuristics and need no key at all — both modes enforce the report contract.
-    if: env.RUN_LLM_EVAL_GATES == '1'
+    # Deliberately guarded: these jobs need live model credentials.
+    #
+    # This has to read `vars`, not `env`. A job-level `if:` may only use the
+    # github/inputs/needs/vars contexts -- `env` is not available there, and
+    # referencing it does not merely skip the job, it invalidates the whole
+    # workflow file, so every other job silently stops running too. Set the
+    # RUN_LLM_EVAL_GATES repository *variable* to "1" to arm this job.
+    #
+    # OPENROUTER_API_KEY drives the prompt-regression gate's genuine LLM
+    # judge. Every model in the app's LiteLLM Router (litellm_client.py
+    # model_list) is an OpenRouter deployment keyed by
+    # settings.OPENROUTER_API_KEY — the free-tier arena/conversational/RAG
+    # evaluators in test_live_eval_gates.py are deterministic heuristics and
+    # need no key at all. (GROQ_API_KEY is only used for audio transcription,
+    # so it must NOT be the secret wired here.)
+    if: vars.RUN_LLM_EVAL_GATES == '1'
     defaults:
       run:
         working-directory: backend
@@ -172,5 +217,8 @@ jobs:
       - name: Run live LLM-judge gates
         env:
           RUN_LLM_EVAL_GATES: "1"
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # The prompt-regression judge calls ai_client.completion, which the
+          # Router maps to an OpenRouter free model keyed by this secret (see
+          # litellm_client.py model_list). GROQ_API_KEY would be a no-op here.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: uv run pytest tests/test_prompt_regression_gate.py tests/test_live_eval_gates.py

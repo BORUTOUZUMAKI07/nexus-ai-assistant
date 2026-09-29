@@ -6,9 +6,10 @@ With RUN_LLM_EVAL_GATES=1 this runs the app's evaluation report contract as a
 release gate alongside the prompt-regression gate
 (test_prompt_regression_gate.py). The arena/conversational/RAG evaluators are
 free-tier deterministic heuristics (DeepEval was removed — see pyproject.toml),
-so no judge key is required: GROQ_API_KEY only feeds the prompt-regression
-gate's genuine LLM judge via the app's own client. These gates turn a release
-red only on broken wiring or contract violations (missing metrics,
+so no judge key is required: OPENROUTER_API_KEY only feeds the prompt-regression
+gate's genuine LLM judge via the app's own client (every model in
+litellm_client.py's Router is an OpenRouter deployment). These gates turn a
+release red only on broken wiring or contract violations (missing metrics,
 out-of-range scores, unparseable reports) — never on credential absence.
 
 Deliberately skipped by default; the heuristics are unit-tested in
