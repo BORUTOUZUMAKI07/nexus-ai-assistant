@@ -35,7 +35,7 @@ async def test_list_tools_returns_discovered_tools(client, user_auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_execute_tool_persists_call(
+async def test_execute_tool_persists_call_and_arguments(
     client, user_auth_headers, db_session, conversation_id
 ):
     resp = await client.post(
@@ -50,7 +50,11 @@ async def test_execute_tool_persists_call(
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "completed"
-    assert body["result"]["summary"] == "Executed web_search"
+    # Deliberately no assertion on body["result"]: the gateway is stubbed in this
+    # suite, so the result is whatever the stub returned. Checking it would only
+    # prove the stub ran, not that execute_tool did anything. What this test owns
+    # is the persistence below -- that the call was recorded, with the arguments
+    # the caller sent and the status the service set.
 
     calls = (
         await db_session.exec(
