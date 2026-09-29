@@ -245,6 +245,9 @@ Sensible defaults exist for everything; `.env` overrides. Highlights:
   (scraped by the collector); traces are LangSmith's job; the old
   `services/observability/newrelic.py` bridge was retired to avoid
   double-counting metrics (app scrape + OTLP push).
+- Bringing New Relic live is a **pending ops task** — see
+  `docs/observability-deployment.md` (collector deploy → secrets → app env →
+  optional `METRICS_TOKEN` guard). Code is done and on `main`; do not re-do it.
 - Model routing: LiteLLM router (see `backend/app/services/llm/` + a routing
   config file); the live-evаl judge also uses LiteLLM (needs
   `OPENROUTER_API_KEY`).
