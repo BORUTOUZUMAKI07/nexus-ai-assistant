@@ -16,6 +16,8 @@ SQLModel/PostgreSQL schema. Python 3.11+ (CI uses 3.12).
 - **Config**: pydantic-settings (`backend/app/core/config.py`), `.env` via
   `backend/.env.example`
 - **Logging**: structlog; **metrics**: zero-dependency Prometheus `/metrics`
+  (in-process source of truth); structured **logs** export over OTLP/HTTP to
+  the Layer-2 collector → New Relic when `NEW_RELIC_ENABLED=true`
 - **Tests**: pytest (unit + integration + e2e), Testcontainers for DB-backed tests
 
 ## Quick start

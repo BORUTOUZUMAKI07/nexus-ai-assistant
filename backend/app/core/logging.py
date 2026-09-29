@@ -138,6 +138,17 @@ def setup_logging() -> None:
     ):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
+    # Layer-1 → Layer-2: when NEW_RELIC_ENABLED, forward every rendered line to
+    # the OpenTelemetry collector over OTLP/HTTP (it owns the New Relic key).
+    # Fail-open — an unconfigured or broken export must never break logging.
+    if settings.NEW_RELIC_ENABLED:
+        try:
+            from backend.app.services.observability.logs import setup_otlp_log_handler
+
+            setup_otlp_log_handler(log_level)
+        except Exception as exc:  # noqa: BLE001 - fail-open seam
+            logger.warning("otlp_log_handler_setup_failed", error_type=type(exc).__name__)
+
 
 # Root application logger instance
 logger = structlog.get_logger("nexus")

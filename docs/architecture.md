@@ -162,6 +162,12 @@ Checkpointing uses `AsyncPostgresSaver` + `InMemoryStore`, with full
 - Zero-dependency Prometheus `/metrics` endpoint renders the in-process
   `MetricsCollector` (families `nexus_requests_total`, `nexus_errors_total`,
   `nexus_latency_seconds`, `nexus_latency_avg_seconds`).
+- 3-layer vendor funnel (all free-tier): the app keeps `/metrics` as local
+  truth and exports structured logs over OTLP/HTTP; the **Layer-2 collector**
+  (`docker/otel-collector-config.yaml`, compose service + Render blueprint in
+  `render.yaml`) tail-samples, batches, scrapes `/metrics`, and forwards to
+  **New Relic** (Layer 3), which owns the ingest key. LangSmith covers AI
+  traces; Sentry covers errors.
 - SLOs, alerting rules, and runbooks are kept in sync across
   [`docs/slo.md`](slo.md), [`docs/alerting/alert-rules.yml`](alerting/alert-rules.yml),
   and [`docs/runbooks/`](runbooks/README.md).

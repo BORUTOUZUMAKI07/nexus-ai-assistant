@@ -116,11 +116,11 @@ dev = [
 
 [project.optional-dependencies]
 observability = [
-    # Optional New Relic OTLP metrics bridge (hosted dashboards/alerts on the
-    # free tier). The app runs fine without it — NEW_RELIC_ENABLED gates the
-    # exporter and all opentelemetry imports are lazy (see
-    # services/observability/newrelic.py). No new CVEs: opentelemetry-sdk and
-    # the OTLP HTTP exporter are the same maintained line the ecosystem uses.
+    # Optional Layer-1 → Layer-2 log transport (OTLP/HTTP to the collector that
+    # owns the New Relic key). The app runs fine without it — NEW_RELIC_ENABLED
+    # gates the export and all opentelemetry imports are lazy (see
+    # services/observability/logs.py). No new CVEs: opentelemetry-sdk and the
+    # OTLP HTTP exporter are the same maintained line the ecosystem uses.
     "opentelemetry-sdk>=1.26.0",
     "opentelemetry-exporter-otlp-proto-http>=1.26.0",
 ]

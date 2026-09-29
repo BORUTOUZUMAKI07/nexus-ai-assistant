@@ -252,22 +252,24 @@ class Settings(BaseSettings):
     PII_REDACTION_ENABLED: bool = Field(default=False)
     PII_REDACTION_REPLACEMENT: str = Field(default="[REDACTED]")
 
-    # ── Observability: New Relic (optional, env-gated OTLP bridge) ──────────
-    # Mirrors the in-process MetricsCollector into New Relic's OTLP HTTP
-    # endpoint when enabled and a license key is configured. The in-process
-    # collector stays the source of truth (and /metrics keeps working); NR is a
-    # hosted sink for dashboards/alerting. No-op when disabled, keys missing, or
-    # the opentelemetry extras are not installed.
+    # ── Observability: New Relic via Layer-2 collector (OTLP logs) ───────────
+    # The app exports structured logs over OTLP/HTTP to the OpenTelemetry
+    # collector (docker-compose "otel-collector" service, or the Render web
+    # service in render.yaml). The collector owns the NEW_RELIC_LICENSE_KEY and
+    # forwards everything on — the app never holds vendor credentials. /metrics
+    # stays the in-process source of truth (the collector scrapes it); traces
+    # remain LangSmith's job. No-op when disabled, the endpoint is unset, or
+    # the [observability] extras are not installed.
     NEW_RELIC_ENABLED: bool = Field(default=False)
-    NEW_RELIC_LICENSE_KEY: str | None = Field(
-        default=None, description="New Relic ingest license key (OTLP via HTTP)"
-    )
     NEW_RELIC_OTLP_ENDPOINT: str = Field(
-        default="https://otlp.nr-data.net",
-        description="New Relic OTLP/HTTP endpoint base URL (US region default)",
+        default="http://localhost:4318",
+        description=(
+            "Layer-2 collector OTLP/HTTP base URL (local collector default; "
+            "set to the Render collector URL in production)"
+        ),
     )
     NEW_RELIC_EXPORT_INTERVAL_SECONDS: int = Field(
-        default=30, description="How often to flush in-process metrics to New Relic"
+        default=30, description="How often to flush the OTLP log batch to the collector (seconds)"
     )
 
     # ── Response Caching (semantic-cost redaction) ───────────────────────────
