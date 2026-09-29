@@ -27,7 +27,7 @@ const StatCard: React.FC<StatCardProps> = ({ icon, label, value, hint }) => (
       {icon}
       <span>{label}</span>
     </div>
-    <div className="text-xl font-semibold text-white font-mono tracking-tight">
+    <div className="text-xl font-semibold text-[var(--text-primary)] font-mono tracking-tight">
       {value}
     </div>
     {hint && <div className="text-[10px] text-[var(--text-faint)]">{hint}</div>}
@@ -64,8 +64,8 @@ export const UsageView: React.FC = () => {
     <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight text-white flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-[var(--accent)]" /> Usage
+          <h2 className="text-xl font-semibold tracking-tight text-[var(--text-primary)] flex items-center gap-2">
+            <BarChart3 className="w-5 h-5 text-[var(--accent-ink)]" /> Usage
           </h2>
           <p className="text-xs text-[var(--text-muted)] mt-1">
             Token consumption and cost across your sessions.
@@ -74,7 +74,7 @@ export const UsageView: React.FC = () => {
         <button
           onClick={load}
           disabled={isLoading}
-          className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-white hover:border-[var(--border-strong)] transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors disabled:opacity-50"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} />
           Refresh
@@ -100,7 +100,7 @@ export const UsageView: React.FC = () => {
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <StatCard
-              icon={<Zap className="w-3.5 h-3.5 text-[var(--accent)]" />}
+              icon={<Zap className="w-3.5 h-3.5 text-[var(--accent-ink)]" />}
               label="Total tokens"
               value={stats.total_tokens.toLocaleString("en-US")}
             />

@@ -407,7 +407,7 @@ export const handlers = [
     })
   ),
 
-  http.patch("/api/conversations/:id", async ({ request, params }) => {
+  http.patch("/api/conversations/:id", async ({ request }) => {
     // Echo the patch back so a test can assert the rename actually persisted
     // what it sent, instead of asserting against a static fixture.
     const patch = (await request.json()) as Record<string, unknown>;

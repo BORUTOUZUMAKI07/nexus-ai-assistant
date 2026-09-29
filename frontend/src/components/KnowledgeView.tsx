@@ -134,8 +134,8 @@ export const KnowledgeView: React.FC = () => {
     <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto space-y-8">
       {/* Header */}
       <div>
-        <h2 className="text-xl font-semibold tracking-tight text-white flex items-center gap-2">
-          <Database className="w-5 h-5 text-[var(--accent)]" /> Knowledge base
+        <h2 className="text-xl font-semibold tracking-tight text-[var(--text-primary)] flex items-center gap-2">
+          <Database className="w-5 h-5 text-[var(--accent-ink)]" /> Knowledge base
         </h2>
         <p className="text-xs text-[var(--text-muted)] mt-1">
           Documents indexed for semantic hybrid search.
@@ -152,7 +152,7 @@ export const KnowledgeView: React.FC = () => {
           accept=".pdf,.md,.txt,.json,.csv,.py,.js,.ts"
         />
         <Upload className="w-8 h-8 text-[var(--text-muted)] mx-auto mb-3" />
-        <h3 className="text-sm font-medium text-white mb-1">
+        <h3 className="text-sm font-medium text-[var(--text-primary)] mb-1">
           Upload a document
         </h3>
         <p className="text-xs text-[var(--text-muted)] mb-4">
@@ -198,7 +198,7 @@ export const KnowledgeView: React.FC = () => {
               <span>{loadError}</span>
               <button
                 onClick={load}
-                className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 py-1 text-[var(--text-secondary)] hover:text-white transition-colors"
+                className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 py-1 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
               >
                 <RefreshCw className="w-3 h-3" />
                 Retry
@@ -231,7 +231,7 @@ export const KnowledgeView: React.FC = () => {
                   <div className="flex items-center gap-3">
                     {f.status === "pending" || f.status === "processing" ? (
                       <span
-                        className="flex items-center gap-1 text-[var(--accent)] text-[10px] bg-[var(--bg-main)] px-2 py-0.5 rounded-md font-mono border border-[var(--border-subtle)]"
+                        className="flex items-center gap-1 text-[var(--accent-ink)] text-[10px] bg-[var(--bg-main)] px-2 py-0.5 rounded-md font-mono border border-[var(--border-subtle)]"
                         title="Document is still being indexed in the background"
                       >
                         <Loader2 className="w-3 h-3 animate-spin" /> Indexing…
@@ -318,7 +318,7 @@ export const KnowledgeView: React.FC = () => {
                 key={`${r.filename ?? "source"}-${r.chunk_index ?? idx}`}
                 className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-xs space-y-1"
               >
-                <div className="flex items-center justify-between text-[11px] text-[var(--accent)] font-mono">
+                <div className="flex items-center justify-between text-[11px] text-[var(--accent-ink)] font-mono">
                   <span>
                     {r.filename ?? "source"} (Chunk {r.chunk_index ?? "?"})
                   </span>

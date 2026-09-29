@@ -68,7 +68,6 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   // Version history for the active artifact, loaded on demand. null = not
   // loaded / not applicable; [] = loaded and genuinely has no history.
   const [versions, setVersions] = useState<ArtifactVersionItem[] | null>(null);
-  const [versionsLoading, setVersionsLoading] = useState(false);
   // When set, the code view shows this past version instead of the live one.
   const [viewingVersion, setViewingVersion] = useState<ArtifactVersionItem | null>(null);
   // Edit buffer. `isEditing` gates the textarea; `draft` holds the unsaved text
@@ -123,23 +122,48 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   // Use artifacts array if provided (multi-file mode), or single artifact
   const allArtifacts = artifacts && artifacts.length > 0 ? artifacts : artifact ? [artifact] : [];
   const activeArtifact = artifact;
+  // Identity of the open artifact, for detecting a switch. Keyed on the fields
+  // that make two rows genuinely different documents -- the content itself is
+  // deliberately excluded, since it changes as the user types.
+  const artifactKey = activeArtifact
+    ? `${activeArtifact.id ?? "transient"}:${activeArtifact.version ?? "new"}`
+    : "none";
 
-  // Reset per-artifact state and load history when the open artifact changes.
-  // Only persisted artifacts have history; a transient canvas item has no id
-  // on the server, so requesting it would just 404.
-  useEffect(() => {
+  // Reset per-artifact state when the open artifact changes.
+  //
+  // Done during render rather than in an effect: an effect runs *after* the
+  // canvas has already painted the new artifact holding the previous one's
+  // draft and version list, which shows as a flash of the wrong content. React
+  // re-renders immediately without committing when state is adjusted this way,
+  // so the user only ever sees the new artifact's own state.
+  //
+  // Switching artifacts must abandon any unsaved edit, or the next artifact
+  // would open showing the previous one's draft.
+  const [renderedArtifactKey, setRenderedArtifactKey] = useState(artifactKey);
+  if (artifactKey !== renderedArtifactKey) {
+    setRenderedArtifactKey(artifactKey);
     setViewingVersion(null);
     setVersions(null);
-    // Switching artifacts must abandon any unsaved edit, or the next artifact
-    // would open showing the previous one's draft.
     setIsEditing(false);
     setDraft("");
     setSaveError(null);
     setSavedVersion(null);
+  }
+
+  // Load version history for the open artifact. Only persisted artifacts have
+  // history; a transient canvas item has no id on the server, so requesting it
+  // would just 404.
+  // `activeArtifact` itself is a fresh object literal on every parent render, so
+  // it cannot be a dependency -- the artifact's identity is carried by
+  // `artifactKey`, which changes only when the open document really changes.
+  useEffect(() => {
     if (!activeArtifact || activeArtifact.version === undefined) return;
 
     let cancelled = false;
-    setVersionsLoading(true);
+    // The spinner is driven off `versions` being unset rather than a separate
+    // boolean set here: a setState before the fetch would be a synchronous
+    // state write in an effect, and the render-time reset above already leaves
+    // `versions` null for a freshly opened artifact.
     fetchArtifact(activeArtifact.id)
       .then((detail) => {
         if (cancelled) return;
@@ -149,46 +173,26 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
         // Version history is supplementary — failing to load it must not break
         // the canvas itself.
         if (!cancelled) setVersions([]);
-      })
-      .finally(() => {
-        if (!cancelled) setVersionsLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [activeArtifact?.id, activeArtifact?.version]);
-
-  if (!activeArtifact) return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see the note above
+  }, [artifactKey]);
 
   // The content actually shown: a selected past version, or the live one.
-  const displayContent = viewingVersion ? viewingVersion.content : activeArtifact.content;
-  const displayTitle = viewingVersion ? `${activeArtifact.title} (v${viewingVersion.version})` : activeArtifact.title;
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(displayContent);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const displayContent = viewingVersion
+    ? viewingVersion.content
+    : (activeArtifact?.content ?? "");
+  const displayTitle = viewingVersion
+    ? `${activeArtifact?.title} (v${viewingVersion.version})`
+    : activeArtifact?.title;
 
   /** Only a persisted artifact can take a new version, and only if a saver exists. */
   const canEdit = Boolean(onSaveVersion) && activeArtifact?.version !== undefined;
 
-  const beginEdit = () => {
-    // Seed the buffer from the live content, never from a past version: saving
-    // "v2" must not silently overwrite the current file with v1's text.
-    setDraft(activeArtifact.content);
-    setSaveError(null);
-    setIsEditing(true);
-  };
-
-  const cancelEdit = () => {
-    setIsEditing(false);
-    setDraft("");
-    setSaveError(null);
-  };
-
   const handleSave = async () => {
-    if (!canEdit || !onSaveVersion || saving) return;
+    if (!activeArtifact || !canEdit || !onSaveVersion || saving) return;
     const next = draft;
     // Saving identical text would burn a version number and a history row for
     // no change. The backend snapshots the old content, so this is not free.
@@ -218,10 +222,37 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   // Publish the current edit state to the once-bound keydown listener. Kept in
   // an effect (rather than assigned during render) so the refs are only written
   // once the render is committed.
+  //
+  // This hook has to sit above the `!activeArtifact` early return below: the
+  // canvas is mounted with no artifact and handed one a render later, and a
+  // hook that only ran on the second of those renders would change the hook
+  // count between them.
   React.useEffect(() => {
     isEditingRef.current = isEditing;
     handleSaveRef.current = handleSave;
   });
+
+  if (!activeArtifact) return null;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(displayContent);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const beginEdit = () => {
+    // Seed the buffer from the live content, never from a past version: saving
+    // "v2" must not silently overwrite the current file with v1's text.
+    setDraft(activeArtifact.content);
+    setSaveError(null);
+    setIsEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setDraft("");
+    setSaveError(null);
+  };
 
   const handleDownload = () => {
     const extMap: Record<string, string> = {
@@ -280,11 +311,11 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
               onClick={() => onSelectArtifact?.(art)}
               className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-mono whitespace-nowrap border-r border-[var(--border-subtle)] transition-colors shrink-0 ${
                 art.id === activeArtifact.id
-                  ? "bg-[var(--bg-surface-elevated)] text-white border-b-2 border-b-[var(--accent)] -mb-px"
-                  : "text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-surface)]"
+                  ? "bg-[var(--bg-surface-elevated)] text-[var(--text-primary)] border-b-2 border-b-[var(--accent)] -mb-px"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)]"
               }`}
             >
-              <FileCode className="w-3 h-3 shrink-0 text-[var(--accent)]" />
+              <FileCode className="w-3 h-3 shrink-0 text-[var(--accent-ink)]" />
               {art.title}
             </button>
           ))}
@@ -295,10 +326,10 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)]">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-7 h-7 rounded-lg bg-[var(--bg-main)] border border-[var(--border-subtle)] flex items-center justify-center shrink-0">
-            <FileCode className="w-3.5 h-3.5 text-[var(--accent)]" />
+            <FileCode className="w-3.5 h-3.5 text-[var(--accent-ink)]" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-xs font-semibold text-white truncate">
+            <h3 className="text-xs font-semibold text-[var(--text-primary)] truncate">
               {displayTitle}
             </h3>
             <span className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
@@ -307,7 +338,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
                 <span
                   className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${
                     activeArtifact.isActiveVersion
-                      ? "bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent)]/40"
+                      ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border-[var(--accent)]/40"
                       : "bg-[var(--bg-main)] text-[var(--text-muted)] border-[var(--border-subtle)]"
                   }`}
                   title={
@@ -331,8 +362,8 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
               onClick={() => setViewTab("code")}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                 viewTab === "code"
-                  ? "bg-[var(--bg-surface-elevated)] text-white"
-                  : "text-[var(--text-muted)] hover:text-white"
+                  ? "bg-[var(--bg-surface-elevated)] text-[var(--text-primary)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
               }`}
             >
               <Code2 className="w-3 h-3" />
@@ -342,8 +373,8 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
               onClick={() => setViewTab("preview")}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                 viewTab === "preview"
-                  ? "bg-[var(--bg-surface-elevated)] text-white"
-                  : "text-[var(--text-muted)] hover:text-white"
+                  ? "bg-[var(--bg-surface-elevated)] text-[var(--text-primary)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
               }`}
             >
               <Eye className="w-3 h-3" />
@@ -353,7 +384,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
 
           <button
             onClick={handleCopy}
-            className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-white hover:border-[var(--border-strong)] transition-colors"
+            className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors"
             title="Copy Code"
           >
             {copied ? (
@@ -365,7 +396,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
 
           <button
             onClick={handleDownload}
-            className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-white hover:border-[var(--border-strong)] transition-colors"
+            className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors"
             title="Download File"
           >
             <Download className="w-3.5 h-3.5" />
@@ -373,7 +404,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
 
           <button
             onClick={() => setIsFullscreen(!isFullscreen)}
-            className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-white hover:border-[var(--border-strong)] transition-colors"
+            className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors"
             title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
           >
             {isFullscreen ? (
@@ -418,7 +449,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-muted)] hover:text-white hover:border-[var(--border-strong)] transition-colors"
+            className="p-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors"
             title="Close Canvas"
           >
             <X className="w-3.5 h-3.5" />
@@ -532,13 +563,15 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
           <summary className="flex cursor-pointer items-center gap-1.5 px-3 py-1.5 text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)] select-none hover:text-[var(--text-secondary)]">
             <History className="w-3 h-3" />
             <span>Version history</span>
-            {versionsLoading && <span className="normal-case tracking-normal">loading…</span>}
-            {!versionsLoading && versions !== null && (
+            {versions === null && (
+              <span className="normal-case tracking-normal">loading…</span>
+            )}
+            {versions !== null && (
               <span className="normal-case tracking-normal">({versions.length})</span>
             )}
           </summary>
 
-          {!versionsLoading && versions !== null && versions.length > 0 && (
+          {versions !== null && versions.length > 0 && (
             <ul className="max-h-40 overflow-y-auto border-t border-[var(--border-subtle)]">
               {versions
                 .slice()
@@ -565,7 +598,9 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
                         })}
                       </span>
                       {v.title && v.title !== activeArtifact.title && (
-                        <span className="ml-2 text-[var(--text-faint)] truncate">"{v.title}"</span>
+                        <span className="ml-2 text-[var(--text-faint)] truncate">
+                          &quot;{v.title}&quot;
+                        </span>
                       )}
                     </span>
                     {v.version !== activeArtifact.version && (
@@ -584,7 +619,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
             </ul>
           )}
 
-          {!versionsLoading && versions !== null && versions.length === 0 && (
+          {versions !== null && versions.length === 0 && (
             <p className="px-3 py-2 border-t border-[var(--border-subtle)] text-[11px] text-[var(--text-faint)]">
               No earlier versions recorded.
             </p>
@@ -609,7 +644,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
           )}
           <button
             onClick={() => { setShowSearch(false); setSearchQuery(""); }}
-            className="p-0.5 text-[var(--text-muted)] hover:text-white transition-colors"
+            className="p-0.5 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -631,7 +666,9 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
               ))}
             </div>
             <textarea
-              // eslint-disable-next-line jsx-a11y/no-autofocus
+              // Autofocus is deliberate: the textarea only exists once the user
+              // has asked to edit, so there is nothing for it to steal focus
+              // from.
               autoFocus
               aria-label={`Edit ${activeArtifact.title}`}
               value={draft}
@@ -660,7 +697,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
                     key={i}
                     className={isMatch ? "bg-[var(--accent-soft)] rounded" : ""}
                   >
-                    <code className={isMatch ? "text-[var(--accent)]" : "text-[var(--text-secondary)]"}
+                    <code className={isMatch ? "text-[var(--accent-ink)]" : "text-[var(--text-secondary)]"}
                     >{line}</code>
                     {"\n"}
                   </div>
