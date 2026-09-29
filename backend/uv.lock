@@ -3090,26 +3090,6 @@ wheels = [
 ]
 
 [[package]]
-name = "langfuse"
-version = "4.15.6"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "backoff" },
-    { name = "httpx" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-sdk" },
-    { name = "packaging" },
-    { name = "pydantic" },
-    { name = "typing-extensions" },
-    { name = "wrapt" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/4a/19/59253a357d77147e8cd3ad97817519e158af5d3336654656c92c2fc922f1/langfuse-4.15.6.tar.gz", hash = "sha256:af80ed1199e57c2641c9f228066bf9dc324657c06ce6e68660118fa46b237e35", size = 392968, upload-time = "2026-09-24T13:32:47.032Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1a/c5/927a01c47c0adf53832c6e5e35951e3d4998072ef955f3bb8e87e6d10517/langfuse-4.15.6-py3-none-any.whl", hash = "sha256:2364d5f17342301a8651ef166abb5bb260aaadd94d1ac72aa30c298b3a395d85", size = 706806, upload-time = "2026-09-24T13:32:48.577Z" },
-]
-
-[[package]]
 name = "langgraph"
 version = "1.2.11"
 source = { registry = "https://pypi.org/simple" }
@@ -4122,7 +4102,8 @@ dependencies = [
 
 [package.optional-dependencies]
 observability = [
-    { name = "langfuse" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
 ]
 
 [package.dev-dependencies]
@@ -4166,13 +4147,14 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "instructor", specifier = ">=1.3.0" },
     { name = "langchain-core", specifier = ">=0.2.0" },
-    { name = "langfuse", marker = "extra == 'observability'", specifier = ">=2.0.0" },
     { name = "langgraph", specifier = ">=0.2.0" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=2.0.0" },
     { name = "litellm", specifier = ">=1.40.0" },
     { name = "mem0ai", specifier = ">=0.1.0" },
     { name = "msgspec", specifier = ">=0.18.0" },
     { name = "openai", specifier = ">=1.30.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'observability'", specifier = ">=1.26.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.26.0" },
     { name = "passlib", extras = ["bcrypt", "argon2"], specifier = ">=1.7.4" },
     { name = "pillow", specifier = ">=10.4.0" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.1.0" },

@@ -177,7 +177,6 @@ class Settings(BaseSettings):
     E2B_API_KEY: str | None = None
     TAVILY_API_KEY: str | None = None
     FIRECRAWL_API_KEY: str | None = None
-    HELICONE_API_KEY: str | None = None
     MEM0_API_KEY: str | None = None
     MEMORY_EXTRACTION_MODEL: str = Field(default="groq/llama-3.1-8b-instant")
 
@@ -253,15 +252,23 @@ class Settings(BaseSettings):
     PII_REDACTION_ENABLED: bool = Field(default=False)
     PII_REDACTION_REPLACEMENT: str = Field(default="[REDACTED]")
 
-    # ── Observability: Langfuse (optional, env-gated) ─────────────────────────
-    # Wires the LiteLLM success/failure callbacks into Langfuse when enabled so
-    # every completion/stream is traceable with token+cost accounting (the #1
-    # industry expectation for agent products). No-op when disabled or when the
-    # langfuse package is not installed.
-    LANGFUSE_ENABLED: bool = Field(default=False)
-    LANGFUSE_HOST: str | None = Field(default=None, description="Langfuse base URL (defaults to https://cloud.langfuse.com)")
-    LANGFUSE_PUBLIC_KEY: str | None = Field(default=None)
-    LANGFUSE_SECRET_KEY: str | None = Field(default=None)
+    # ── Observability: New Relic (optional, env-gated OTLP bridge) ──────────
+    # Mirrors the in-process MetricsCollector into New Relic's OTLP HTTP
+    # endpoint when enabled and a license key is configured. The in-process
+    # collector stays the source of truth (and /metrics keeps working); NR is a
+    # hosted sink for dashboards/alerting. No-op when disabled, keys missing, or
+    # the opentelemetry extras are not installed.
+    NEW_RELIC_ENABLED: bool = Field(default=False)
+    NEW_RELIC_LICENSE_KEY: str | None = Field(
+        default=None, description="New Relic ingest license key (OTLP via HTTP)"
+    )
+    NEW_RELIC_OTLP_ENDPOINT: str = Field(
+        default="https://otlp.nr-data.net",
+        description="New Relic OTLP/HTTP endpoint base URL (US region default)",
+    )
+    NEW_RELIC_EXPORT_INTERVAL_SECONDS: int = Field(
+        default=30, description="How often to flush in-process metrics to New Relic"
+    )
 
     # ── Response Caching (semantic-cost redaction) ───────────────────────────
     # Exact-normalized-query response cache for the synchronous message path.

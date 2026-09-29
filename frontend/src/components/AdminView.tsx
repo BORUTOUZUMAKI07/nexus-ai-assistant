@@ -420,16 +420,16 @@ export const AdminView: React.FC = () => {
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <a
-                href="https://us.helicone.ai"
+                href="https://one.newrelic.com"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center justify-between p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--accent)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors group"
               >
                 <div>
                   <div className="font-semibold text-[var(--text-primary)] group-hover:text-[var(--accent-ink)] transition-colors">
-                    Helicone AI Observability
+                    New Relic Observability
                   </div>
-                  <div className="text-[11px] text-[var(--text-muted)]">Live LLM request tracing & cost metrics</div>
+                  <div className="text-[11px] text-[var(--text-muted)]">Hosted LLM/API metrics & dashboards (OTLP bridge)</div>
                 </div>
                 <ExternalLink className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--accent-ink)] shrink-0" />
               </a>

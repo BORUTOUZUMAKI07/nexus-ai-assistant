@@ -30,6 +30,7 @@ from backend.app.infrastructure.resilience.rate_limit import (
 )
 from backend.app.infrastructure.vector.qdrant_client import vector_db
 from backend.app.mcp.server import mcp
+from backend.app.services.observability.newrelic import start_new_relic_export
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -58,6 +59,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     and graceful shutdown of connections and pools.
     """
     logger.info("nexus_ai_starting_up", version="1.0.0", env=settings.ENVIRONMENT)
+
+    # Started by 4c below (inside lifespan_graph); guarded so the shutdown path
+    # never references an undefined name even if startup fails mid-way.
+    new_relic_shutdown = None
 
     # 1. Initialize Database Tables
     try:
@@ -93,12 +98,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             logger.warning("hook_registry_startup_load_failed", error=str(exc))
 
+        # 4c. New Relic OTLP bridge (env-gated; no-op when disabled/unkeyed or
+        #     when the [observability] extras are not installed). The in-process
+        #     collector stays authoritative — NR is a hosted sink only.
+        new_relic_shutdown = start_new_relic_export()
+        if new_relic_shutdown is not None:
+            logger.info("newrelic_bridge_wired_at_startup")
+
         logger.info("langgraph_postgres_checkpointer_ready")
 
         yield  # ← App serves requests here
 
     # Graceful Shutdown (outside lifespan_graph context — pool already closed)
     logger.info("nexus_ai_shutting_down")
+    if new_relic_shutdown is not None:
+        new_relic_shutdown()
     await close_db()
     await redis_client.close()
 
