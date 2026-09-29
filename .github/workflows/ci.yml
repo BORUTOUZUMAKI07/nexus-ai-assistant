@@ -131,6 +131,15 @@ jobs:
         # rather than warning.
         run: npm ci --legacy-peer-deps
 
+      - name: Generate route types (for tsc)
+        # Next.js's LayoutProps/PageProps/params helpers are *generated*
+        # globals (see next/dist/docs/01-app/.../03-layouts-and-pages.md) —
+        # `next dev`/`next build` write them into .next/types. On a pristine
+        # checkout there is no .next yet, so a bare `tsc --noEmit` fails with
+        # "Cannot find name 'LayoutProps'" (TS2304). typegen was introduced in
+        # Next 15.5 precisely to make CI type-checking possible pre-build.
+        run: npx next typegen
+
       - name: Typecheck (tsc)
         run: npx tsc --noEmit
 
