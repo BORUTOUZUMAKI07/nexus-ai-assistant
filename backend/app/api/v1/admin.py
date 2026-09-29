@@ -151,7 +151,7 @@ async def get_observability_status(
     """
     Single admin surface for the observability stack: which
     collectors are wired, which are live, plus the latest drift + cost rollups.
-    Honest signal — an enabled-but-uninstalled Langfuse is reported as such.
+    Honest signal — an enabled-but-uninstalled New Relic bridge is reported as such.
     """
     drift: dict[str, Any] = {}
     try:

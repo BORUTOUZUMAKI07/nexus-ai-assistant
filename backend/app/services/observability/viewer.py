@@ -5,7 +5,7 @@ Closes the "no trace/cost/drift viewer" gap: a self-contained HTML dashboard
 served by the admin API that renders the observability stack status, cost
 rollups, usage telemetry, the drift report and the evaluation scorecard —
 straight from the local tables (usage_logs, cost_logs, evaluation_logs) with no
-Langfuse, no JS framework, no CDN and no new dependencies.
+JS framework, no CDN and no new dependencies.
 
 Every query here uses plain ``select(Model)`` statements so the data gatherer
 is exercisable against the shared in-memory FakeSession in unit tests.
@@ -36,23 +36,21 @@ _RECENT_ROWS = 25
 
 
 def observability_stack_status() -> dict[str, Any]:
-    """Which collectors are wired and live (honest: enabled-but-uninstalled Langfuse is reported)."""
-    langfuse_installed = importlib.util.find_spec("langfuse") is not None
-    langfuse_configured = bool(
-        settings.LANGFUSE_PUBLIC_KEY and settings.LANGFUSE_SECRET_KEY
-    )
+    """Which collectors are wired and live (honest: enabled-but-uninstalled New Relic is reported)."""
+    newrelic_installed = importlib.util.find_spec("opentelemetry") is not None
+    newrelic_configured = bool(settings.NEW_RELIC_LICENSE_KEY)
     return {
-        "langfuse": {
-            "enabled": bool(settings.LANGFUSE_ENABLED),
-            "configured": langfuse_configured,
-            "package_installed": langfuse_installed,
+        "newrelic": {
+            "enabled": bool(settings.NEW_RELIC_ENABLED),
+            "configured": newrelic_configured,
+            "package_installed": newrelic_installed,
             "status": (
                 "live"
-                if settings.LANGFUSE_ENABLED and langfuse_installed and langfuse_configured
+                if settings.NEW_RELIC_ENABLED and newrelic_installed and newrelic_configured
                 else "inactive"
             ),
-            "activate": "pip install -e '.[observability]' && LANGFUSE_ENABLED=true "
-                        "LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=...",
+            "activate": "pip install -e '.[observability]' && NEW_RELIC_ENABLED=true "
+                        "NEW_RELIC_LICENSE_KEY=...",
         },
         "drift_monitoring": {"enabled": True, "endpoint": "/api/v1/admin/monitoring/drift"},
         "audit_logs": True,
@@ -360,7 +358,7 @@ def _eval_metric_rows(data: dict[str, Any]) -> str:
 def render_viewer_html(data: dict[str, Any]) -> str:
     """Server-render the full dashboard — pure Python string assembly, no deps."""
     stack = data["stack"]
-    langfuse = stack["langfuse"]
+    newrelic = stack["newrelic"]
     usage = data["usage"]
     latency = usage.get("latency")
     drift = data["drift"]
@@ -388,8 +386,8 @@ def render_viewer_html(data: dict[str, Any]) -> str:
         else '<div class="banner banner-ok">✓ No drift detected in the latest vs baseline windows.</div>'
     )
 
-    status = langfuse.get("status", "inactive")
-    lf_badge = "ok" if status == "live" else "warn"
+    status = newrelic.get("status", "inactive")
+    nr_badge = "ok" if status == "live" else "warn"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -445,14 +443,14 @@ def render_viewer_html(data: dict[str, Any]) -> str:
   <section>
     <h2>Stack status</h2>
     <div class="grid2">
-      <div class="kpi"><span>Langfuse traces</span><b class="badge {lf_badge}">{_esc(status)}</b></div>
+      <div class="kpi"><span>New Relic bridge</span><b class="badge {nr_badge}">{_esc(status)}</b></div>
       <div class="kpi"><span>Drift monitoring</span><b>{'on' if stack['drift_monitoring'].get('enabled') else 'off'}</b></div>
       <div class="kpi"><span>Audit logs</span><b>{'on' if stack['audit_logs'] else 'off'}</b></div>
       <div class="kpi"><span>PII redaction</span><b>{'on' if (stack['pii_redaction'].get('enabled')) else 'off'}</b></div>
       <div class="kpi"><span>In-process metrics</span><b>{'on' if stack['metrics_collector'] else 'off'}</b></div>
     </div>
-    <p class="muted" style="margin-top:10px">Langfuse activation: <code>{_esc(langfuse.get('activate'))}</code>
-    (enabled={str(langfuse.get('enabled')).lower()}, package installed={str(langfuse.get('package_installed')).lower()}).</p>
+    <p class="muted" style="margin-top:10px">New Relic activation: <code>{_esc(newrelic.get('activate'))}</code>
+    (enabled={str(newrelic.get('enabled')).lower()}, package installed={str(newrelic.get('package_installed')).lower()}).</p>
   </section>
 
   <section>

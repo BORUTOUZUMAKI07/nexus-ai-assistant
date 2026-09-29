@@ -236,7 +236,8 @@ Sensible defaults exist for everything; `.env` overrides. Highlights:
 - `SHARE_DEFAULT_TTL_SECONDS` — default public-share expiry.
 - `JWT_ALGORITHM=HS256`, refresh tokens, `oauth2_scheme` tokenUrl=auth/login.
 - `REDIS_URL=redis://localhost:6379/0` (local Redis from docker-compose).
-- `SENTRY_DSN`, `LANGFUSE_ENABLED` (optional observability), `MEM0_API_KEY`.
+- `SENTRY_DSN`, `NEW_RELIC_ENABLED`/`NEW_RELIC_LICENSE_KEY` (optional OTLP
+  metrics bridge), `MEM0_API_KEY`.
 - Model routing: LiteLLM router (see `backend/app/services/llm/` + a routing
   config file); the live-evаl judge also uses LiteLLM (needs
   `OPENROUTER_API_KEY`).

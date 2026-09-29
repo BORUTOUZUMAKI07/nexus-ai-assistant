@@ -116,9 +116,13 @@ dev = [
 
 [project.optional-dependencies]
 observability = [
-    # Optional Langfuse trace/cost observability (industry standard). The
-    # application runs fine without it — LANGFUSE_ENABLED gates the callback.
-    "langfuse>=2.0.0",
+    # Optional New Relic OTLP metrics bridge (hosted dashboards/alerts on the
+    # free tier). The app runs fine without it — NEW_RELIC_ENABLED gates the
+    # exporter and all opentelemetry imports are lazy (see
+    # services/observability/newrelic.py). No new CVEs: opentelemetry-sdk and
+    # the OTLP HTTP exporter are the same maintained line the ecosystem uses.
+    "opentelemetry-sdk>=1.26.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.26.0",
 ]
 
 [build-system]

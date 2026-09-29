@@ -110,11 +110,11 @@ setup: ## First-time project setup
 	cd backend && $(UV) sync
 	@echo "Installing frontend dependencies..."
 	cd frontend && $(NPM) install
-	@echo "Copying .env.example to .env..."
-	@if not exist ".env" (copy ".env.example" ".env" && echo ".env created - please fill in your API keys!")
+	@echo "Copying backend/.env.example to backend/.env..."
+	@if not exist "backend\.env" (copy "backend\.env.example" "backend\.env" && echo ".env created - please fill in your API keys!")
 	@echo ""
 	@echo "Setup complete! Next steps:"
-	@echo "  1. Edit .env with your API keys"
+	@echo "  1. Edit backend/.env with your API keys"
 	@echo "  2. Run: make infra     (start Docker services)"
 	@echo "  3. Run: make migrate   (create database tables)"
 	@echo "  4. Run: make backend   (start API server)"

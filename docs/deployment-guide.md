@@ -17,7 +17,7 @@
 | **Redis** | Cache, rate-limiting, and Celery broker. Local `redis:7-alpine` in compose. `REDIS_URL=redis://localhost:6379/0` locally. |
 | **Object storage** | MinIO (S3-compatible) for uploads; local `minio/minio` in compose. |
 | **Async tasks** | Celery worker + beat (file indexing, eval dispatch). |
-| **Observability** | Zero-dependency Prometheus `/metrics`; optional Sentry + Langfuse. |
+| **Observability** | Zero-dependency Prometheus `/metrics`; optional Sentry + New Relic (OTLP bridge). |
 
 CI/CD artifacts:
 - `.github/workflows/release.yml` — on git tags: `docker buildx` builds and
@@ -54,8 +54,11 @@ useful deployment:
 - `MCP_API_KEY` — shared key used to authenticate `/mcp` (`MCP_AUTH_ENABLED=true`)
 - Provider keys: `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`
   (BYOK users can supply their own too)
-- Optional: `SENTRY_DSN`, `LANGFUSE_ENABLED=true` + Langfuse keys,
-  `MEM0_API_KEY`
+- Optional: `SENTRY_DSN`, `NEW_RELIC_ENABLED=true` +
+  `NEW_RELIC_LICENSE_KEY` (requires `uv sync --extra observability` for the
+  OTLP extras), `MEM0_API_KEY`
+- LangSmith traces: `LANGSMITH_API_KEY` + `LANGSMITH_TRACING=true` (LangGraph
+  auto-instruments; free tier shows the orchestration graphs)
 
 ## 3. Run database migrations
 

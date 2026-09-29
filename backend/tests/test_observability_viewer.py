@@ -164,12 +164,12 @@ async def test_render_viewer_html_contains_sections_and_escapes():
     assert 'src="http' not in html_out and 'href="http' not in html_out
 
 
-def test_observability_stack_status_reports_langfuse_honestly():
+def test_observability_stack_status_reports_newrelic_honestly():
     stack = observability_stack_status()
-    assert "langfuse" in stack
-    assert stack["langfuse"]["status"] in ("live", "inactive")
+    assert "newrelic" in stack
+    assert stack["newrelic"]["status"] in ("live", "inactive")
     assert stack["drift_monitoring"]["enabled"] is True
-    assert "activate" in stack["langfuse"]
+    assert "activate" in stack["newrelic"]
 
 
 @pytest.fixture

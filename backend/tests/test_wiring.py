@@ -6,7 +6,6 @@ Tests for wiring of the previously-dead service modules:
   - Structured-output routing with raw fallback (orchestrator node)
   - Critic subagent self-refinement loop in the synthesizer node
   - CAG prompt caching in the prompt compiler
-  - Helicone headers
   - Celery file-indexing task dispatch config
   - Admin evaluation router handlers
 """
@@ -20,7 +19,6 @@ from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.observability.cost_tracking import (
     cost_tracking_service,
 )
-from backend.app.services.observability.helicone import helicone_service
 from backend.app.services.prompt_compiler import prompt_compiler
 from backend.app.services.tools.evidence_gate import EVIDENCE_THRESHOLD, evidence_gate
 
@@ -296,32 +294,7 @@ async def test_prompt_compiler_cag_skips_caching_for_dynamic_inputs(monkeypatch)
     assert isinstance(result, str)
 
 
-# ─── 7. Helicone Headers ──────────────────────────────────────────────────────
-
-
-def test_helicone_headers_noop_without_api_key():
-    original = settings.HELICONE_API_KEY
-    try:
-        settings.HELICONE_API_KEY = None
-        assert helicone_service.get_headers(user_id="u1", conversation_id="c1") == {}
-    finally:
-        settings.HELICONE_API_KEY = original
-
-
-def test_helicone_headers_inject_session_and_user_when_configured():
-    original = settings.HELICONE_API_KEY
-    try:
-        settings.HELICONE_API_KEY = "h-k"
-        headers = helicone_service.get_headers(user_id="u9", conversation_id="c9", properties={"env": "dev"})
-        assert headers["Helicone-Auth"] == "Bearer h-k"
-        assert headers["Helicone-User-Id"] == "u9"
-        assert headers["Helicone-Session-Id"] == "c9"
-        assert headers["Helicone-Property-env"] == "dev"
-    finally:
-        settings.HELICONE_API_KEY = original
-
-
-# ─── 8. Celery File-Indexing Dispatch Config ──────────────────────────────────
+# ─── 7. Celery File-Indexing Dispatch Config ──────────────────────────────────
 
 
 def test_async_indexing_flag_defaults_off():
@@ -334,7 +307,7 @@ def test_process_file_indexing_task_resolves():
     assert process_file_indexing_task.name == "tasks.process_file_indexing"
 
 
-# ─── 9. Admin Evaluation Router Handlers ──────────────────────────────────────
+# ─── 8. Admin Evaluation Router Handlers ──────────────────────────────────────
 
 
 @pytest.mark.asyncio

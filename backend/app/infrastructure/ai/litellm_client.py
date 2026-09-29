@@ -1,4 +1,3 @@
-import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -6,7 +5,6 @@ import litellm
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
 from backend.app.infrastructure.resilience.guards import CircuitBreaker, InFlightLimiter
-from backend.app.services.observability.helicone import helicone_service
 from litellm import Router, completion_cost
 
 # Configure litellm global settings
@@ -153,51 +151,6 @@ _GROUP_NAMES = set(_GROUP_TO_MODEL)
 _ROLE_ALIASES = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}
 
 
-def _configure_langfuse() -> None:
-    """
-    Wire LiteLLM's built-in ``langfuse`` callback when enabled (industry-grade
-    trace/cost observability — the #1 expectation for agent products).
-
-    Deliberately safe: when ``LANGFUSE_ENABLED`` is False, or the ``langfuse``
-    package is not installed, or keys are missing, this is a strict no-op — the
-    application keeps running exactly as before. Importing langfuse here would
-    pull in heavy deps on the hot path, so the callback name is registered so
-    LiteLLM resolves it lazily; env vars are mirrored from settings to cover
-    env-var-only consumers.
-    """
-    if not settings.LANGFUSE_ENABLED:
-        return
-    if not (settings.LANGFUSE_PUBLIC_KEY and settings.LANGFUSE_SECRET_KEY):
-        logger.warning("langfuse_enabled_but_keys_missing_disabled")
-        return
-    try:
-        import importlib.util as _util
-
-        if _util.find_spec("langfuse") is None:
-            logger.warning("langfuse_package_missing_disabled")
-            return
-    except Exception:
-        return
-
-    os.environ.setdefault("LANGFUSE_PUBLIC_KEY", settings.LANGFUSE_PUBLIC_KEY or "")
-    os.environ.setdefault("LANGFUSE_SECRET_KEY", settings.LANGFUSE_SECRET_KEY or "")
-    if settings.LANGFUSE_HOST:
-        os.environ.setdefault("LANGFUSE_HOST", settings.LANGFUSE_HOST)
-
-    callbacks = list(getattr(litellm, "success_callback", None) or [])
-    if "langfuse" not in callbacks:
-        callbacks.append("langfuse")
-        litellm.success_callback = callbacks
-    failure_callbacks = list(getattr(litellm, "failure_callback", None) or [])
-    if "langfuse" not in failure_callbacks:
-        failure_callbacks.append("langfuse")
-        litellm.failure_callback = failure_callbacks
-    logger.info("langfuse_callback_registered", host=settings.LANGFUSE_HOST or "cloud.langfuse.com")
-
-
-_configure_langfuse()
-
-
 def _normalize_messages(messages: list[Any]) -> list[dict[str, str]]:
     cleaned: list[dict[str, str]] = []
     for m in messages:
@@ -328,13 +281,6 @@ class LiteLLMService:
         extra_headers: dict[str, str] = {}
         if enable_caching:
             extra_headers["cache-control"] = "ephemeral"
-        extra_headers.update(
-            helicone_service.get_headers(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                session_name=session_name,
-            )
-        )
 
         group = resolve_model_group(model)
         import time as _time
