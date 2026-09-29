@@ -114,7 +114,8 @@ class AuthService:
             preauth = create_access_token(
                 subject=user.id,
                 expires_delta=timedelta(minutes=settings.TOTP_PREAUTH_MINUTES),
-                token_type="preauth",
+                # JWT `type` claim, not a secret.
+                token_type="preauth",  # nosec B106
             )
             logger.info("two_factor_challenge_issued", user_id=str(user.id))
             return TwoFactorChallengeResponse(
@@ -210,7 +211,8 @@ class AuthService:
             preauth = create_access_token(
                 subject=user.id,
                 expires_delta=timedelta(minutes=settings.TOTP_PREAUTH_MINUTES),
-                token_type="preauth",
+                # JWT `type` claim, not a secret.
+                token_type="preauth",  # nosec B106
             )
             logger.info("two_factor_challenge_issued", user_id=str(user.id), via="sso")
             return TwoFactorChallengeResponse(
@@ -277,7 +279,8 @@ class AuthService:
         token = create_access_token(
             subject=user.id,
             expires_delta=timedelta(minutes=settings.EMAIL_VERIFY_TOKEN_MINUTES),
-            token_type="verify_email",
+            # JWT `type` claim, not a secret.
+            token_type="verify_email",  # nosec B106
         )
         link = build_email_link("/verify-email?token=", token)
         result = await email_service.send(
@@ -298,7 +301,8 @@ class AuthService:
         token = create_access_token(
             subject=user.id,
             expires_delta=timedelta(minutes=settings.PASSWORD_RESET_TOKEN_MINUTES),
-            token_type="reset_password",
+            # JWT `type` claim, not a secret.
+            token_type="reset_password",  # nosec B106
         )
         link = build_email_link("/reset-password?token=", token)
         result = await email_service.send(

@@ -98,12 +98,17 @@ async def test_app_login_returns_429_with_retry_after_when_limit_hit(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_app_login_allowed_sets_headers(monkeypatch):
+async def test_app_login_allowed_sets_headers(monkeypatch, client):
     """When the limiter allows the request, the standard headers are set and
-    the endpoint proceeds (auth failure is a 401, not a 429)."""
+    the endpoint proceeds (auth failure is a 401, not a 429).
+
+    Uses the shared ``client`` fixture rather than a bare ASGI transport. This
+    endpoint looks the user up, so it needs a working database: without the
+    fixture's ``get_db`` override the request falls through to whatever
+    ``DATABASE_URL`` happens to point at, and on a machine with no local
+    Postgres that is a 500 (or a connection error), not the 401 this asserts.
+    """
     from backend.app.infrastructure.resilience import rate_limit as rl_mod
-    from backend.app.main import app
-    from httpx import ASGITransport, AsyncClient
 
     class _AllowingLimiter:
         async def check_rate_limit(self, identifier, limit=100, window_seconds=60, cost=1):
@@ -111,13 +116,11 @@ async def test_app_login_allowed_sets_headers(monkeypatch):
 
     monkeypatch.setattr(rl_mod, "redis_service", _AllowingLimiter())
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.post(
-            "/api/v1/auth/login",
-            data={"username": "nobody@example.com", "password": "wrong"},
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
+    resp = await client.post(
+        "/api/v1/auth/login",
+        data={"username": "nobody@example.com", "password": "wrong"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
 
     assert resp.status_code == 401  # auth fails for bogus creds, but NOT throttled
     assert resp.headers.get(RATE_LIMIT_HEADER_LIMIT) == "60"
