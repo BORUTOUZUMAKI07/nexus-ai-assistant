@@ -192,7 +192,7 @@ async def run_arena_evaluation(
     admin: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
     """
-    Pairwise "arena as judge" comparison (MD §9.3): does output A beat output B
+    Pairwise "arena as judge" comparison: does output A beat output B
     for the same query? Persisted as evaluation logs for A/B prompt decisions.
     """
     result = await deepeval_service.evaluate_arena_pair(
@@ -219,7 +219,7 @@ async def run_conversational_eval(
     admin: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
     """
-    Multi-turn compliance evaluation (MD §9.4) across a full back-and-forth
+    Multi-turn compliance evaluation across a full back-and-forth
     transcript; persisted as evaluation logs.
     """
     results = await deepeval_service.evaluate_conversational(

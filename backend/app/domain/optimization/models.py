@@ -1,5 +1,5 @@
 """
-Domain models for the automated prompt-optimization loop (MD §6.15).
+Domain models for the automated prompt-optimization loop.
 
 Each ``PromptOptimizationRun`` records one closed loop: propose K candidate
 rewrites of a prompt key, score each candidate against a golden case set,

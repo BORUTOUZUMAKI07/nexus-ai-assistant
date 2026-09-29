@@ -77,7 +77,7 @@ async def send_message_sync(
     history = await conv_svc.get_messages(conversation_id)
     target_model = message_in.model or settings.DEFAULT_MODEL
 
-    # Canary/shadow release (MD §6.6): deterministic user-bucket assignment for
+    # Canary/shadow release: deterministic user-bucket assignment for
     # the chat system prompt. No-op ("default") unless the experiment is
     # explicitly configured.
     experiment_variant = experiment_service.variant_for_user(str(current_user.id), "chat_system_prompt")
@@ -85,7 +85,7 @@ async def send_message_sync(
         metrics_collector.increment(f"experiment:chat_system_prompt:{experiment_variant}")
         logger.info("chat_experiment_variant_assigned", prompt_variant=experiment_variant, user_id=str(current_user.id))
 
-    # ε-greedy bandit override (MD §8.9): no-op unless the experiment config
+    # ε-greedy bandit override: no-op unless the experiment config
     # declares bandit: true. Cold start explores uniformly; then exploits the
     # empirically-best variant from recorded rewards. Fail-open.
     try:
@@ -120,7 +120,7 @@ async def send_message_sync(
         model=target_model,
     )
 
-    # 4b. Response cache (MD §8.5): repeated identical questions skip the LLM
+    # 4b. Response cache: repeated identical questions skip the LLM
     # round-trip. Fail-open and only active when RESPONSE_CACHE_ENABLED. Keyed
     # per prompt_variant so a bandit/canary variant flip never reuses an answer
     # generated under a different system prompt.

@@ -1,4 +1,4 @@
-# Canary/Shadow experiments (MD §6.6 safe-release pattern).
+# Canary/Shadow experiments (safe-release pattern).
 # Point EXPERIMENTS_CONFIG_PATH at a file like this to enable gradual,
 # bucket-consistent release of prompt/model variants. Users are assigned to a
 # variant deterministically (HMAC of experiment+user), so a user never flaps

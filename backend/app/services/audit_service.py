@@ -1,5 +1,5 @@
 """
-Responsible-ML / Compliance Audit Surface (MD §8.7 → validated, EU AI Act).
+Responsible-ML / Compliance Audit Surface (EU AI Act-aligned).
 
 Aggregates the evidence a downstream AI provider needs for its responsibility
 story into one admin read model: which system controls are actually on

@@ -1,5 +1,5 @@
 """
-Popularity-Bucketed Slice Monitoring + Fairness Surface (MD §7.5 → validated).
+Popularity-Bucketed Slice Monitoring + Fairness Surface.
 
 ``SliceService`` aggregates production telemetry into per-(model, provider)
 slices with volume, error rate, latency, cost, and user-feedback helpful rate,

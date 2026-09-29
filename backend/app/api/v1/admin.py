@@ -125,7 +125,7 @@ async def get_drift_report(
     admin: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
     """
-    LLM-era drift report (MD §7.6/§8.8): sliding-window z-score comparison of
+    LLM-era drift report: sliding-window z-score comparison of
     recent vs immediately-preceding telemetry for latency, cost, error rate,
     faithfulness-pass rate and hallucination rate. ``detected=true`` means one
     or more metrics moved >2σ from their baseline window.
@@ -149,7 +149,7 @@ async def get_observability_status(
     admin: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
     """
-    Single admin surface for the observability stack (MD §8.3/§8.8): which
+    Single admin surface for the observability stack: which
     collectors are wired, which are live, plus the latest drift + cost rollups.
     Honest signal — an enabled-but-uninstalled Langfuse is reported as such.
     """
@@ -291,7 +291,7 @@ async def get_slice_report(
     admin: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
     """
-    Popularity-bucketed slice monitoring (MD §7.5): per-model/provider slices
+    Popularity-bucketed slice monitoring: per-model/provider slices
     with volume, error rate, latency, cost, and helpful rate, ranked by
     popularity, flagging high-volume slices whose helpful rate lags the overall.
     """
@@ -328,7 +328,7 @@ async def get_bandit_stats(
     admin: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
     """
-    ε-greedy bandit status (MD §8.9): empirical win rates per experiment variant
+    ε-greedy bandit status: empirical win rates per experiment variant
     from the persisted reward stream, plus the configured exploration rate.
     """
     from backend.app.services.bandit_service import bandit_service
@@ -386,7 +386,7 @@ async def run_optimization(
     admin: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
     """
-    Trigger one automated prompt-optimization loop (MD §6.15): propose K
+    Trigger one automated prompt-optimization loop: propose K
     candidate rewrites, score against the golden case set, promote the winner
     if it beats the baseline, and persist the run.
     """

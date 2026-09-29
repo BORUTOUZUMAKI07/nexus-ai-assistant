@@ -179,7 +179,7 @@ def cache_cleanup_task() -> dict:
 @celery_app.task(name="tasks.periodic_drift_check")
 def periodic_drift_check_task(recent_hours: int = 24) -> dict:
     """
-    Sliding-window drift check over usage/evaluation telemetry (MD §7.6/§8.8).
+    Sliding-window drift check over usage/evaluation telemetry.
     Logs whether any LLM-era signal moved >2σ from its baseline window; the
     admin endpoint exposes the full report. No persistence — pure computation
     over the telemetry tables. Singleton-guarded to avoid duplicate scans.

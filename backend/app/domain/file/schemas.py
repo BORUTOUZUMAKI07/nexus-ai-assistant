@@ -40,7 +40,7 @@ class FileChunkResponse(BaseModel):
 
 
 class FileIndexStatusResponse(BaseModel):
-    """Job-status response for the 202-async indexing pattern (§6.3)."""
+    """Job-status response for the 202-async indexing pattern."""
 
     model_config = ConfigDict(from_attributes=True)
 

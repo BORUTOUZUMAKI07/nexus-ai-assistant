@@ -72,7 +72,7 @@ tickets, not pages.
    ```
 
 2. Record rules + alert rules from `docs/alerting/alert-rules.yml`
-   (`promtool check rules` is part of CI).
+   (validate locally with `promtool check rules` — not wired into CI yet).
 
 3. Verify the endpoint manually (dev, token unset):
 

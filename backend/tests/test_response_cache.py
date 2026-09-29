@@ -1,5 +1,5 @@
 """
-Unit tests for the response cache (exact-normalized query replay, MD §8.5).
+Unit tests for the response cache (exact-normalized query replay).
 Uses a fake cache service so no Redis connection is required.
 """
 import json

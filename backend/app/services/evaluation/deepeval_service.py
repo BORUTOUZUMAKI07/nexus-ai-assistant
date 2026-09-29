@@ -89,7 +89,7 @@ class DeepEvalService:
         threshold: float = 0.5,
     ) -> EvaluationResult:
         """
-        Pairwise "arena as judge" comparison (MD §9.3): scores whether output A
+        Pairwise "arena as judge" comparison: scores whether output A
         beats output B on the given criteria. Returns 1.0 for a decisive A win,
         0.0 for a decisive A loss, and 0.5 for a tie — via a deterministic
         heuristic that compares groundedness (lexical overlap with the query)
@@ -116,7 +116,7 @@ class DeepEvalService:
         threshold: float = 0.7,
     ) -> list[EvaluationResult]:
         """
-        Multi-turn conversational compliance evaluation (MD §9.4) — assesses
+        Multi-turn conversational compliance evaluation — assesses
         whether the assistant stays on-policy across an entire back-and-forth
         via a deterministic offline scan: refuse-category markers are expected
         for advice requests; benign turns pass on any substantive answer.

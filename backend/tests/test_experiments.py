@@ -1,5 +1,5 @@
 """
-Unit tests for deterministic canary/shadow experiment bucketing (MD §6.6).
+Unit tests for deterministic canary/shadow experiment bucketing.
 """
 from backend.app.services.experiments import (
     ExperimentService,

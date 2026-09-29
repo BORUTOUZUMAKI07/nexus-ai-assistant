@@ -1,5 +1,5 @@
 """
-Unit tests for PII/secret redaction utilities (log hygiene, MD §8.6).
+Unit tests for PII/secret redaction utilities (log hygiene).
 """
 import structlog
 from backend.app.core import redaction

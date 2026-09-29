@@ -173,7 +173,7 @@ class FileService:
         user_id: UUID,
         session: AsyncSession,
     ) -> File:
-        """Return the indexing job status row for a file the user owns (§6.3)."""
+        """Return the indexing job status row for a file the user owns."""
         repo = FileRepository(session)
         db_file = await repo.get_by_id(file_id, user_id=user_id)
         if not db_file:

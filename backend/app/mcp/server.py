@@ -229,7 +229,7 @@ def get_permissions_matrix() -> str:
 @mcp.resource("nexus://system/capabilities")
 def get_advanced_capabilities() -> str:
     """
-    Declare the server's advanced MCP primitive support (MD §7.7):
+    Declare the server's advanced MCP primitive support:
     Elicitations = supported (structured human input via the signed REST
     bridge), Roots = declared scopes, Sampling = not supported (a
     client-owned primitive this server never initiates).

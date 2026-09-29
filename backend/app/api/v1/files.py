@@ -51,8 +51,8 @@ async def upload_file(
 
     With ASYNC_INDEXING=true the row is handed to the Celery worker
     (process_file_indexing_task) and answered 202 Accepted with a ``Location``
-    header pointing at ``GET /files/{id}/index-status`` (async job pattern —
-    roadmap §6.3); otherwise it is ingested synchronously and answered 201.
+    header pointing at ``GET /files/{id}/index-status`` (202-async job pattern);
+    otherwise it is ingested synchronously and answered 201.
     """
     filename = file.filename or "uploaded_document"
     # Enforce an upload size ceiling BEFORE buffering the whole body into
@@ -110,7 +110,7 @@ async def upload_file(
             if dispatched:
                 logger.info("file_indexing_dispatched_to_worker", file_id=str(db_file.id))
                 # 202 Accepted + Location: the job is queued, poll the index-status
-                # endpoint (roadmap §6.3 async job pattern).
+                # endpoint (202-async job pattern).
                 response.status_code = status.HTTP_202_ACCEPTED
                 response.headers["Location"] = f"{settings.API_V1_PREFIX}/files/{db_file.id}/index-status"
                 return db_file
@@ -190,7 +190,7 @@ async def get_index_status(
     session: AsyncSession = Depends(get_db),
     file_svc: FileService = Depends(get_file_service),
 ):
-    """Poll the async indexing job (§6.3). 404 if the file is not owned."""
+    """Poll the async 202 indexing job. 404 if the file is not owned."""
     try:
         return await file_svc.get_file_index_status(
             file_id=file_id,

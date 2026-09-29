@@ -1,5 +1,5 @@
 """
-Bandit Exploration (MD §8.9 → validated; ε-greedy core, IPS-style reward stream).
+Bandit Exploration (ε-greedy core, IPS-style reward stream).
 
 Industry default for serve-time optimization: keep exploring a little
 (ε-greedy) while exploiting the empirically-best variant, learning from real

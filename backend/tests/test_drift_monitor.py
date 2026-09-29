@@ -1,5 +1,5 @@
 """
-Unit tests for the LLM-era drift monitor (MD §7.6 sliding-window principles).
+Unit tests for the LLM-era drift monitor (sliding-window principles).
 """
 from backend.app.services.monitoring.drift_monitor import (
     distribution_drift_report,

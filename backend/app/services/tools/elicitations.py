@@ -1,5 +1,5 @@
 """
-MCP-Style Elicitations (MD §7.7 core MCP primitive) wired into the existing HITL.
+MCP-Style Elicitations (core MCP primitive) wired into the existing HITL.
 
 An *elicitation* is a structured request for human input mid-task — the
 protocol-native sibling of tool approvals. Whereas an approval says "may I run
