@@ -26,7 +26,8 @@ SQLModel/PostgreSQL schema. Python 3.11+ (CI uses 3.12).
 # 1. Install with uv (creates .venv, syncs locked deps)
 uv sync --group dev
 
-# 2. Start local infra (Postgres, Redis, Qdrant, MinIO)
+# 2. Start local infra (Postgres, Redis, Qdrant). Object storage is Supabase
+#    Storage (hosted) — set SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY below.
 docker compose up -d        # from the repo root
 
 # 3. Configure

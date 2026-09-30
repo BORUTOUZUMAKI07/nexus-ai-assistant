@@ -61,25 +61,6 @@ services:
       timeout: 10s
       retries: 5
 
-  # ── MinIO (S3-compatible object storage for file uploads) ──────────────────
-  minio:
-    image: minio/minio:latest
-    container_name: nexus_minio
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # MinIO Console
-    environment:
-      MINIO_ROOT_USER: nexus
-      MINIO_ROOT_PASSWORD: nexuspassword
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-
   # ── Layer-2: OpenTelemetry Collector (observability transport agent) ──────
   # Receives the app's OTLP logs on :4318, tail-samples, batches, and forwards
   # to New Relic (Layer-3 sink) using NEW_RELIC_LICENSE_KEY. It also scrapes
@@ -110,4 +91,3 @@ volumes:
   postgres_data:
   redis_data:
   qdrant_data:
-  minio_data:

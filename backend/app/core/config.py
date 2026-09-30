@@ -22,6 +22,26 @@ logger = logging.getLogger(__name__)
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 
+# Secret values that have appeared in backend/.env.example, and which therefore
+# live in a public repository. An operator who copies the example to .env and
+# only flips ENVIRONMENT=production would otherwise boot with a signing key
+# anyone can read — the previous guard compared against placeholder strings that
+# no longer matched the example file, so it silently stopped protecting it.
+#
+# The production validator rejects any of these by value. Keep this set in sync
+# with backend/.env.example; tests/test_config_secrets.py fails if they drift.
+PUBLISHED_EXAMPLE_SECRETS: frozenset[str] = frozenset(
+    {
+        # Current .env.example text.
+        "change-this-to-a-super-secret-hex-key-in-production-min-32-chars",
+        "super-secret-aes256-encryption-key-for-byok-keys-32bytes",
+        # Historical values from earlier revisions, still worth refusing.
+        "nexus-development-secret-key-min-32-chars-long-must-be-secure",
+        "nexus-aes256-key-32bytes-long!!",
+    }
+)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -406,34 +426,32 @@ class Settings(BaseSettings):
         """
         Secret hygiene:
         * JWT_SECRET_KEY falls back to SECRET_KEY (single canonical signing key).
-        * Missing secrets get a random value in non-production so dev stays
-          single-process-functional without a checked-in secret.
-        * In production a missing key — or one of the old well-known dev
-          placeholders — aborts startup instead of shipping with a guessable key.
+        * Missing secrets — or ones still carrying published example text — get a
+          random value in non-production, so dev stays single-process-functional
+          without a checked-in secret and never runs on a key from the repo.
+        * In production a missing key, or any value published in
+          ``.env.example``, aborts startup instead of shipping with a
+          guessable key.
         """
-        old_dev_placeholder = "nexus-development-secret-key-min-32-chars-long-must-be-secure"
-        old_dev_encryption = "nexus-aes256-key-32bytes-long!!"
-
         self.JWT_SECRET_KEY = self.JWT_SECRET_KEY or self.SECRET_KEY
 
         if self.ENVIRONMENT == "production":
-            missing: list[str] = []
-            if not self.SECRET_KEY or self.SECRET_KEY == old_dev_placeholder:
-                missing.append("SECRET_KEY")
-            if not self.ENCRYPTION_KEY or self.ENCRYPTION_KEY == old_dev_encryption:
-                missing.append("ENCRYPTION_KEY")
+            missing = [
+                name
+                for name in ("SECRET_KEY", "ENCRYPTION_KEY")
+                if not getattr(self, name) or getattr(self, name) in PUBLISHED_EXAMPLE_SECRETS
+            ]
             if missing:
                 raise ValueError(
                     "Refusing to start in production with missing/insecure secrets: "
-                    f"{', '.join(missing)}. Set them explicitly in the environment."
+                    f"{', '.join(missing)}. Set them explicitly in the environment "
+                    "(generate fresh random values — do not reuse the .env.example text)."
                 )
         else:
-            if not self.SECRET_KEY or self.SECRET_KEY == old_dev_placeholder:
+            if not self.SECRET_KEY or self.SECRET_KEY in PUBLISHED_EXAMPLE_SECRETS:
                 self.SECRET_KEY = secrets.token_urlsafe(48)
                 logger.info("generated_random_development_secret_key")
-            if not self.JWT_SECRET_KEY:
-                self.JWT_SECRET_KEY = self.SECRET_KEY
-            if not self.ENCRYPTION_KEY or self.ENCRYPTION_KEY == old_dev_encryption:
+            if not self.ENCRYPTION_KEY or self.ENCRYPTION_KEY in PUBLISHED_EXAMPLE_SECRETS:
                 self.ENCRYPTION_KEY = secrets.token_hex(32)  # 64 hex chars → 32 bytes
                 logger.info("generated_random_development_encryption_key")
 

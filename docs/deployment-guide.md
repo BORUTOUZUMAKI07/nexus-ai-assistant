@@ -3,8 +3,8 @@
 > Verified against the source at `1f43c89` (main). Supersedes the earlier
 > guide (which claimed Next.js 14, "22 SQLModel tables", `pip install -e .`,
 > and Upstash Redis — all outdated). **Next.js is 16.3.4, the schema has 35
-> tables, deps are managed with `uv sync`, and Redis/Qdrant/MinIO run locally
-> via docker-compose.**
+> tables, deps are managed with `uv sync`, Redis/Qdrant run locally via
+> docker-compose, and object storage is Supabase Storage (hosted).**
 
 ## Production architecture
 
@@ -15,7 +15,7 @@
 | **Database** | PostgreSQL with **pgvector** (`pgvector/pgvector:pg16` locally) — 35 SQLModel tables. Supabase/Postgres-compatible hosts work. |
 | **Vector store** | Qdrant (hybrid dense+sparse). Local container `qdrant/qdrant` in compose. |
 | **Redis** | Cache, rate-limiting, and Celery broker. Local `redis:7-alpine` in compose. `REDIS_URL=redis://localhost:6379/0` locally. |
-| **Object storage** | MinIO (S3-compatible) for uploads; local `minio/minio` in compose. |
+| **Object storage** | Supabase Storage over its REST API (`SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` + `STORAGE_BUCKET`). No S3/R2/MinIO server — the boto3 layer was removed. |
 | **Async tasks** | Celery worker + beat (file indexing, eval dispatch). |
 | **Observability** | Zero-dependency Prometheus `/metrics` (in-process truth) + OTLP logs → Layer-2 collector (`docker-compose` / `render.yaml`) → New Relic; LangSmith traces; Sentry errors. |
 
@@ -48,10 +48,19 @@ useful deployment:
 
 - `DATABASE_URL` — `postgresql+asyncpg://user:pass@host:5432/nexus` (async engine)
 - `REDIS_URL` — `redis://host:6379/0`
-- `QDRANT_URL` / Qdrant API key
-- `MINIO_ENDPOINT` / access-key / secret (or other S3-compatible storage)
-- `JWT_SECRET_KEY`, `REFRESH_SECRET_KEY` (long random values)
-- `MCP_API_KEY` — shared key used to authenticate `/mcp` (`MCP_AUTH_ENABLED=true`)
+- `QDRANT_URL` / QDRANT_API_KEY
+- Object storage is **Supabase Storage over its REST API** — set
+  `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `STORAGE_BUCKET`. There are
+  no S3/R2/MinIO credentials; the boto3 layer was removed and any `S3_*` key
+  left in `.env` is ignored by the app.
+- `SECRET_KEY` (JWT signing; `JWT_SECRET_KEY` is an alias that falls back to it)
+  and `ENCRYPTION_KEY` (AES-256 key material for BYOK) — both must be fresh
+  random values. Startup **aborts** in production if either is blank or still
+  holds the text published in `.env.example`.
+- `CORS_ORIGINS` — comma-separated browser allow-list (defaults to the two
+  localhost:3000 origins)
+- `MCP_API_KEY` — shared key that authenticates `/mcp` alongside Bearer JWTs and
+  the `nexus_access_token` cookie (`MCP_AUTH_ENABLED=true` by default)
 - Provider keys: `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`
   (BYOK users can supply their own too)
 - Optional: `SENTRY_DSN`, `NEW_RELIC_ENABLED=true` +
@@ -131,7 +140,9 @@ react 19.2.8, typescript 5, vitest 4, playwright.
 ## 6. Local infrastructure (docker-compose)
 
 ```bash
-docker compose up -d       # postgres (pgvector/pg16), redis, qdrant, minio
+docker compose up -d       # postgres (pgvector/pg16), redis, qdrant
+# Object storage is Supabase Storage (hosted) — configure SUPABASE_URL /
+# SUPABASE_SERVICE_ROLE_KEY / STORAGE_BUCKET in backend/.env, no local container.
 docker compose down -v     # stop + remove volumes (destructive)
 ```
 

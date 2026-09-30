@@ -94,7 +94,7 @@ plans, artifacts, metrics`, aggregated in `api.py` under `API_V1_PREFIX`
 - `get_current_admin` — admin-only routes (users, hooks, monitoring, evals).
 - `require_idempotency_key(scope)` — `Idempotency-Key` replay protection on
   mutating routes (guard class lives in `infrastructure/resilience/guards.py`).
-- `get_storage()` — MinIO/S3-compatible file storage
+- `get_storage()` — Supabase Storage over its REST API (no boto3/S3 credentials)
   (`infrastructure/storage/supabase_storage.py`).
 
 ### Orchestration layer (`backend/app/agents/orchestrator/`)
