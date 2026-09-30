@@ -77,24 +77,43 @@ $$;
 # Keep new tables protected without anyone having to remember. Scoped to
 # ddl_command_end + the CREATE TABLE tag so it cannot re-enter on the ALTER
 # TABLE it issues (and the filter on schema_name keeps it out of pg_catalog).
-_RLS_EVENT_TRIGGER = """
+#
+# Three separate constants, one per op.execute() call: asyncpg refuses to send
+# several statements in a single prepared statement, so a combined string fails
+# with "cannot insert multiple commands into a prepared statement". Each piece
+# below is a single statement. A DO block counts as one statement, which is why
+# the loops above can stay self-contained.
+_RLS_TRIGGER_FN = """
 CREATE OR REPLACE FUNCTION public.nexus_enable_rls_on_new_table()
 RETURNS event_trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
     cmd record;
+    role_name text;
 BEGIN
     FOR cmd IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
         IF cmd.command_tag = 'CREATE TABLE' AND cmd.schema_name = 'public' THEN
             EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', cmd.objid::regclass);
+            -- Supabase's default privileges hand anon/authenticated ALL on every
+            -- table postgres creates. RLS alone already hides the rows (a query
+            -- returns zero rather than erroring), but revoking keeps a new table
+            -- identical in posture to the forty migrated ones instead of merely
+            -- relying on the row filter.
+            FOREACH role_name IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+                    EXECUTE format('REVOKE ALL ON %s FROM %I', cmd.objid::regclass, role_name);
+                END IF;
+            END LOOP;
         END IF;
     END LOOP;
 END
 $$;
+"""
 
-DROP EVENT TRIGGER IF EXISTS nexus_enable_rls_on_create;
+_DROP_RLS_TRIGGER = "DROP EVENT TRIGGER IF EXISTS nexus_enable_rls_on_create;"
 
+_CREATE_RLS_TRIGGER = """
 CREATE EVENT TRIGGER nexus_enable_rls_on_create
     ON ddl_command_end
     WHEN TAG IN ('CREATE TABLE')
@@ -160,13 +179,16 @@ $$;
 def upgrade() -> None:
     op.execute(_ENABLE_RLS_LOOP)
     op.execute(_REVOKE_PUBLIC_GRANTS)
-    op.execute(_RLS_EVENT_TRIGGER)
+    op.execute(_RLS_TRIGGER_FN)
+    op.execute(_DROP_RLS_TRIGGER)
+    op.execute(_CREATE_RLS_TRIGGER)
 
 
 def downgrade() -> None:
     # Removes the automatic protection first, so nothing created during the
-    # downgrade is left half-protected.
-    op.execute("DROP EVENT TRIGGER IF EXISTS nexus_enable_rls_on_create")
+    # downgrade is left half-protected. Both are single statements for the same
+    # asyncpg reason as upgrade().
+    op.execute(_DROP_RLS_TRIGGER)
     op.execute("DROP FUNCTION IF EXISTS public.nexus_enable_rls_on_new_table()")
     op.execute(_DISABLE_RLS_LOOP)
     op.execute(_RESTORE_PUBLIC_GRANTS)
