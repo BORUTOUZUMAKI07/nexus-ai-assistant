@@ -13,6 +13,13 @@ from urllib.parse import urlparse
 
 import structlog
 from backend.app.core.config import settings
+from backend.app.services.rag.base import mark_requires_scraping
+from backend.app.services.tools.content_shape import (
+    MIN_USEFUL_CHARS,
+    html_to_text,
+    salvage_sentences,
+    scrape_result_verdict,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -205,12 +212,17 @@ class WebSearchService:
         for item in data.get("results", [])[:max_results]:
             raw = _bounded_text(item.get("raw_content"), SEARCH_CONTENT_LIMIT)
             snippet = _bounded_text(item.get("content"), SEARCH_SNIPPET_LIMIT) or raw[:300]
-            results.append({
+            # Tavily is called with include_raw_content=False, so `content` is
+            # almost always empty and the real body is a bounded snippet. Flag
+            # it rather than leaving the caller to infer it from the length.
+            result = {
                 "title": _bounded_text(item.get("title"), SEARCH_TITLE_LIMIT),
                 "url": _bounded_text(item.get("url"), SEARCH_URL_LIMIT),
                 "snippet": snippet,
                 "content": raw,
-            })
+            }
+            mark_requires_scraping(result, "tavily_snippet_only")
+            results.append(result)
         return results
 
     async def _search_firecrawl(self, query: str, max_results: int) -> list[dict[str, Any]]:
@@ -227,12 +239,15 @@ class WebSearchService:
         for item in search_res.get("data", [])[:max_results]:
             markdown = _bounded_text(item.get("markdown"), SEARCH_CONTENT_LIMIT)
             snippet = _bounded_text(item.get("description"), SEARCH_SNIPPET_LIMIT) or markdown[:300]
-            results.append({
-                "title": _bounded_text(item.get("title"), SEARCH_TITLE_LIMIT),
-                "url": _bounded_text(item.get("url"), SEARCH_URL_LIMIT),
-                "snippet": snippet,
-                "content": markdown,
-            })
+            results.append(mark_requires_scraping(
+                {
+                    "title": _bounded_text(item.get("title"), SEARCH_TITLE_LIMIT),
+                    "url": _bounded_text(item.get("url"), SEARCH_URL_LIMIT),
+                    "snippet": snippet,
+                    "content": markdown,
+                },
+                "firecrawl_markdown_may_be_extract",
+            ))
         return results
 
     async def _search_duckduckgo(self, query: str, max_results: int, retries: int = 3) -> list[dict[str, Any]]:
@@ -257,13 +272,19 @@ class WebSearchService:
                     )
                     await asyncio.sleep(attempt)
                     continue
+                # DuckDuckGo has no body at all: `content` is empty by
+                # construction and the snippet is everything there is. This is
+                # the clearest case of a result that must be scraped to be read.
                 return [
-                    {
-                        "title": _bounded_text(r.get("title"), SEARCH_TITLE_LIMIT),
-                        "url": _bounded_text(r.get("href"), SEARCH_URL_LIMIT),
-                        "snippet": _bounded_text(r.get("body"), SEARCH_SNIPPET_LIMIT),
-                        "content": "",
-                    }
+                    mark_requires_scraping(
+                        {
+                            "title": _bounded_text(r.get("title"), SEARCH_TITLE_LIMIT),
+                            "url": _bounded_text(r.get("href"), SEARCH_URL_LIMIT),
+                            "snippet": _bounded_text(r.get("body"), SEARCH_SNIPPET_LIMIT),
+                            "content": "",
+                        },
+                        "duckduckgo_snippet_only",
+                    )
                     for r in raw_results
                 ]
             except DDGSException as exc:
@@ -277,6 +298,13 @@ class WebSearchService:
     async def scrape_url(self, url: str) -> dict[str, Any]:
         """
         Scrapes a URL and converts HTML into clean, LLM-ready markdown using Firecrawl v2.
+
+        The result is shape-validated before it is returned. A block page, an
+        unextracted PDF or a navigation shell used to be returned as
+        ``success: True`` and then consumed as evidence, which is worse than an
+        outright failure: the model reads "Access Denied" as content about the
+        topic. A rejected body is either salvaged or reported as a failure, and
+        the caller can retry with a different source.
         """
         if not isinstance(url, str) or not url or len(url) > 2048:
             raise ValueError("URL must be a non-empty string of at most 2048 characters")
@@ -299,30 +327,69 @@ class WebSearchService:
                 else:
                     markdown_content = scrape_res.get("markdown", "")
                     title = scrape_res.get("metadata", {}).get("title", url)
-                return {
+                candidate = {
                     "url": url,
                     "title": title,
                     "content": markdown_content,
                     "success": True,
                 }
+                verdict = scrape_result_verdict(candidate)
+                if verdict.ok:
+                    return candidate
+                logger.warning(
+                    "scrape_rejected_content_shape",
+                    reason=verdict.reason,
+                    detail=verdict.detail,
+                    chars=len(markdown_content or ""),
+                )
+                # Salvage rather than discard: a body with a binary header but
+                # readable paragraphs still carries evidence.
+                salvaged = salvage_sentences(markdown_content or "")
+                if len(salvaged) >= MIN_USEFUL_CHARS:
+                    logger.info("scrape_salvaged_partial_content", reason=verdict.reason)
+                    return {**candidate, "content": salvaged, "salvaged": True}
+                # Fall through to the httpx path, which sometimes succeeds
+                # where the primary provider was challenged.
             except Exception as exc:
                 logger.warning("firecrawl_scrape_failed_falling_back_to_httpx", error_type=type(exc).__name__)
 
-        # Fallback to basic httpx + html-to-markdown if Firecrawl is unavailable.
+        # Fallback to basic httpx + html-to-text if Firecrawl is unavailable.
         # Every hop is SSRF-validated (scheme, host, DNS resolution, redirects).
+        #
+        # This used to `import html2text`, which is not a declared dependency
+        # and is not installed. The ModuleNotFoundError was swallowed by the
+        # except below, so without Firecrawl configured *every* scrape
+        # returned "Unable to scrape webpage content" -- the whole fallback
+        # path was dead code that looked alive. html_to_text replaces it with
+        # a stdlib converter; see its docstring for the fidelity trade-off.
         try:
-            import html2text
-
             status_code, final_url, content = await _fetch_with_ssrf_guard(url)
             if status_code == 200:
-                h = html2text.HTML2Text()
-                h.ignore_links = False
-                h.ignore_images = True
-                text = h.handle(content.decode("utf-8", errors="replace"))
+                text = html_to_text(content.decode("utf-8", errors="replace"))[:15000]
+                # Same shape validation as the provider path. A 200 from an
+                # interstitial is still a block page, and the body length
+                # check alone cannot tell the two apart.
+                verdict = scrape_result_verdict(
+                    {"url": final_url, "title": final_url, "content": text, "success": True}
+                )
+                if not verdict.ok:
+                    logger.warning(
+                        "scrape_rejected_content_shape",
+                        reason=verdict.reason,
+                        detail=verdict.detail,
+                        transport="httpx",
+                    )
+                    return {
+                        "url": url,
+                        "title": url,
+                        "content": f"Unable to scrape webpage content ({verdict.reason}).",
+                        "success": False,
+                        "rejection_reason": verdict.reason,
+                    }
                 return {
                     "url": final_url,
                     "title": final_url,
-                    "content": text[:15000],  # Limit content size
+                    "content": text,
                     "success": True,
                 }
             logger.warning("basic_http_scrape_non_200", status_code=status_code)

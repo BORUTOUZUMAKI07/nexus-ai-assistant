@@ -59,6 +59,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     logger.info("nexus_ai_starting_up", version="1.0.0", env=settings.ENVIRONMENT)
 
+    # 0. Report configured-but-unusable provider credentials. Previously a
+    #    missing or placeholder key was only discovered mid-request, where the
+    #    symptom was a silent capability downgrade and the only clue was a
+    #    print() in an exception handler. Never raises: one broken provider must
+    #    not stop the process from serving every other capability. Findings
+    #    carry the variable name and a reason, never any secret material.
+    try:
+        from backend.app.core.credential_check import (
+            format_report,
+            validate_settings,
+        )
+
+        _cred_report = validate_settings(settings)
+        if _cred_report.errors:
+            logger.error("credential_validation_failed", **_cred_report.errors[0].as_log_kwargs())
+            for _line in format_report(_cred_report):
+                logger.warning("credential_validation_detail", detail=_line)
+        elif _cred_report.warnings:
+            for _line in format_report(_cred_report):
+                logger.warning("credential_validation_detail", detail=_line)
+        else:
+            logger.info("credential_validation_ok", checked=_cred_report.checked)
+    except Exception as exc:
+        logger.warning("credential_validation_skipped", error_type=type(exc).__name__)
+
     # 1. Initialize Database Tables
     try:
         await init_db()

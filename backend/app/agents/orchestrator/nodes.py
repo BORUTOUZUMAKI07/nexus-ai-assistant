@@ -14,6 +14,7 @@ from backend.app.agents.subagents.critic import critic_subagent
 from backend.app.agents.subagents.researcher import researcher_subagent
 from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.services.confidence_action import apply_confidence_action
 from backend.app.services.context_compiler import context_compiler
 from backend.app.services.memory import long_term_memory
 from backend.app.services.memory_lifecycle import should_persist_memory
@@ -887,9 +888,9 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("evidence_gate_evaluation_failed", error=str(exc))
 
-    # â”€â”€ Calibrated confidence gate (record-only, fail-open) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    # The gate never rewrites or blocks a draft â€” it records a decision
-    # (answer / hedge) any upstream consumer or admin surface can act on.
+    # -- Calibrated confidence gate (fail-open) ---------------------------
+    # Produces a decision (answer / hedge) which is acted on immediately
+    # below. It never raises and never blocks: see apply_confidence_action.
     confidence_decision: dict[str, Any] = {
         "confidence": 0.0,
         "threshold": 0.0,
@@ -918,6 +919,30 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         )
     except Exception as exc:
         logger.warning("confidence_gate_skipped", error=str(exc))
+
+    # Act on the gate. Previously the verdict was computed, logged, returned in
+    # state and streamed to the UI, and nothing branched on it — a response the
+    # system itself judged low-confidence was delivered as a flat claim. Now a
+    # sub-threshold answer is qualified (or withheld) before the user sees it.
+    # Fail-open by construction: any failure leaves response_text untouched.
+    if settings.CONFIDENCE_ACTION_ENABLED:
+        try:
+            _hedge = apply_confidence_action(
+                response_text,
+                confidence_decision,
+                mode=settings.CONFIDENCE_HEDGE_MODE,
+            )
+            if _hedge.hedged:
+                response_text = _hedge.text
+            logger.info(
+                "confidence_action_applied",
+                hedged=_hedge.hedged,
+                reason=_hedge.reason,
+                confidence=_hedge.confidence,
+                action=_hedge.action,
+            )
+        except Exception as exc:
+            logger.warning("confidence_action_failed_open", error=str(exc))
 
     # â”€â”€ Save new memories from this exchange via mem0 (background, non-blocking) â”€â”€
     memory_decision = should_persist_memory(last_user_content, response_text)

@@ -6,6 +6,48 @@ from abc import ABC, abstractmethod
 from typing import Any
 from uuid import UUID
 
+#: Key a retriever sets on a result whose ``content`` is a preview rather than
+#: the source body. Declared here, on the contract, because the consumer that
+#: has to act on it (the researcher deciding whether to fetch the full page) is
+#: not the component that produced it.
+REQUIRES_SCRAPING = "requires_scraping"
+
+
+def mark_requires_scraping(result: dict[str, Any], reason: str = "") -> dict[str, Any]:
+    """Flag a retrieval result as needing its full source fetched.
+
+    Why this exists: the retrieval providers do not return the same amount of
+    text. Tavily hands back a snippet capped at ``SEARCH_SNIPPET_LIMIT``, and
+    DuckDuckGo hands back whatever the result page exposed. A caller that
+    cannot tell a preview from a full body has to either always scrape (wasteful)
+    or never scrape (sometimes answers from a 200-character snippet). Declaring
+    the difference on the result removes the guess.
+    """
+    result[REQUIRES_SCRAPING] = True
+    if reason:
+        result["scrape_reason"] = reason
+    return result
+
+
+def needs_scraping(result: dict[str, Any]) -> bool:
+    """Whether a result is a preview the caller should fetch in full.
+
+    Defaults to True for a result that carries a URL but no usable body: an
+    unlabelled empty result is far more often a preview than a genuinely
+    content-free page, and the cost of a needless scrape is far lower than the
+    cost of answering from a snippet.
+    """
+    if REQUIRES_SCRAPING in result:
+        return bool(result[REQUIRES_SCRAPING])
+    if not result.get("url"):
+        return False
+    content = result.get("content") or result.get("snippet") or ""
+    return len(str(content)) < FULL_TEXT_CHARS
+
+
+#: Below this, a body is treated as a preview rather than a full page.
+FULL_TEXT_CHARS = 600
+
 
 class IChunker(ABC):
     """Abstract document chunking contract."""
