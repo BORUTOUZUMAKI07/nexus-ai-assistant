@@ -4,6 +4,7 @@ from typing import Any
 import litellm
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
+from backend.app.core.spend import charge_tokens
 from backend.app.infrastructure.resilience.guards import CircuitBreaker, InFlightLimiter
 from litellm import Router, completion_cost
 
@@ -369,6 +370,13 @@ class LiteLLMService:
             logger.warning("completion_cost_lookup_failed", model=getattr(response, "model", ""))
         input_tokens = response.usage.prompt_tokens if response.usage else 0
         output_tokens = response.usage.completion_tokens if response.usage else 0
+        # Feed the per-run spend meter. Done here, at the only place that
+        # already knows a call's token usage, so every model call in the
+        # process is counted without any call site having to remember to --
+        # including the planner, router, critic and subagents, and any call
+        # site added later. A hand-maintained counter in each node would
+        # undercount precisely when a new node is added and nobody updates it.
+        charge_tokens(input_tokens + output_tokens)
         logger.info(
             "llm_completion_ok",
             model=group,
@@ -436,11 +444,13 @@ class LiteLLMService:
                 first_chunk_latency_ms=int((_time.perf_counter() - _start) * 1000),
             )
             try:
+                _streamed_chars = 0
                 async for chunk in response:
                     # Guard: streaming chunks can have delta.content = None between
                     # thinking tokens — skip silently rather than yielding "None" strings.
                     delta = (chunk.choices[0].delta.content if chunk.choices else None) or ""
                     if delta:
+                        _streamed_chars += len(delta)
                         yield delta
             finally:
                 # Always release the upstream SSE connection, including when the
@@ -451,6 +461,17 @@ class LiteLLMService:
                     await response.aclose()
                 except Exception as exc:
                     logger.warning("llm_stream_aclose_failed", model=group, error=str(exc))
+                # Charge the spend meter for the stream. This is an ESTIMATE, not
+                # reported usage: litellm only exposes usage on a streaming call if
+                # the request sets stream_options={"include_usage": True}, and
+                # adding that changes the request shape for every provider in the
+                # router -- not a change to make blind, on free tiers whose exact
+                # accounting is what pays the bill. Characters/4 is the standard
+                # approximation and is deliberately cheap, because the point is
+                # to keep the final answer visible in the run total rather than to
+                # bill it. The request side is already hard-capped by
+                # `effective_max_tokens`.
+                charge_tokens((_streamed_chars + 3) // 4)
 
     async def completion(
         self,

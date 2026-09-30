@@ -19,6 +19,7 @@ from backend.app.api.deps import (
 from backend.app.core.config import settings
 from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.core.logging import bind_request_context, clear_request_context
+from backend.app.core.spend import clear_spend_meter
 from backend.app.domain.conversation.schemas import (
     BranchCreate,
     ConversationCreate,
@@ -545,6 +546,13 @@ async def stream_conversation(
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
         finally:
             clear_request_context()
+            # Same reasoning as the request context: a spend meter left bound
+            # would keep charging the *next* request served by this task and,
+            # once it hit its ceiling, silently disable the ceiling for that
+            # request too. The graph binds its own meter in bootstrap_node for
+            # the non-streaming paths; clearing here covers the stream path and
+            # any generator abandoned mid-flight.
+            clear_spend_meter()
             await _release_stream_slot(thread_id)
 
         yield "data: [DONE]\n\n"

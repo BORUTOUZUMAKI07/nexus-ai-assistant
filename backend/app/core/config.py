@@ -367,6 +367,61 @@ class Settings(BaseSettings):
     # ── Self-Refinement (Critic Subagent) ─────────────────────────────────────
     CRITIC_MAX_REVISIONS: int = Field(default=2, description="Max revision passes of the critic subagent before a draft is accepted as-is")
 
+    # ── Research depth (D1) ───────────────────────────────────────────────────
+    # The researcher used to be exactly one search plus one synthesis call, so
+    # it could not notice that its own evidence was inadequate. These bound
+    # breadth, parallelism and the one extra round reflection may buy. Every
+    # knob is a ceiling, not a target: the common case must not pay for them.
+    RESEARCH_MAX_SUBQUERIES: int = Field(
+        default=3,
+        description="Breadth: max sub-queries a topic is decomposed into. 1 disables decomposition",
+    )
+    RESEARCH_MAX_SCRAPES: int = Field(
+        default=4,
+        description="Total scrapes across all sub-queries, not per sub-query",
+    )
+    RESEARCH_SCRAPE_CONCURRENCY: int = Field(
+        default=3,
+        description="Concurrent scrapes. Higher is faster but loads the provider harder",
+    )
+    RESEARCH_MAX_REFLECTIONS: int = Field(
+        default=1,
+        description="Max gap-filling rounds after the researcher inspects its own evidence. 0 disables",
+    )
+    #: Below this many characters of gathered evidence, the researcher assumes
+    #: it found nothing useful and reflects rather than synthesizing a hollow
+    #: answer. Above it, reflection usually only adds cost.
+    RESEARCH_EVIDENCE_FLOOR_CHARS: int = Field(
+        default=1200,
+        description="Chars of evidence below which the researcher treats its own harvest as inadequate",
+    )
+    #: Token ceiling for the final synthesis. The old 800-token cap truncated
+    #: multi-source findings mid-sentence, which reads as a bug to the user.
+    RESEARCH_SYNTHESIS_MAX_TOKENS: int = Field(
+        default=1400,
+        description="Max tokens for the researcher's final synthesis",
+    )
+    #: Hard ceiling on LLM calls per researcher turn, including reflection.
+    #: The decomposition round is only taken when at least this many calls
+    #: remain, so the cap can never be spent into an over-budget call.
+    RESEARCH_MAX_MODEL_CALLS: int = Field(
+        default=4,
+        description="Hard ceiling on LLM calls per researcher turn (decompose + reflect + synthesize)",
+    )
+
+    # ── Agent-loop spend ceiling (D2) ─────────────────────────────────────────
+    # No reference implementation bounds a research agent's spend. Without a
+    # ceiling the graph's own bounds compose into an unbounded product: N
+    # tool calls x M CRAG revisions x K critic revisions x R research rounds.
+    AGENT_LOOP_MAX_STEPS: int = Field(
+        default=8,
+        description="Hard ceiling on graph iterations before the synthesizer force-accepts",
+    )
+    AGENT_LOOP_TOKEN_BUDGET: int = Field(
+        default=60000,
+        description="Cumulative token ceiling for one graph run; the cheapest way to stop is to refuse to start the next step",
+    )
+
     # ── Candidate feature sweep (CRAG / confidence / bandit / optimizer) ──────
     # Knobs for the industry-aligned features landed in the "8 candidates"
     # milestone. Each is fail-open: wrong tuning degrades gracefully, never
