@@ -131,6 +131,29 @@ class Settings(BaseSettings):
     # development — on by default it floods the dev console with every
     # sqlalchemy query (pg_catalog table checks, etc.).
     DATABASE_ECHO: bool = Field(default=False)
+    # DSN for LangGraph's Postgres checkpointer, if it must differ from
+    # DATABASE_URL.
+    #
+    # Why it exists: the two consumers have incompatible connection-lifetime
+    # needs.
+    #
+    #   * The SQLAlchemy engine uses NullPool — a fresh connection per request,
+    #     discarded immediately. It cannot hold a stale socket.
+    #   * The checkpointer (orchestrator/graph.py) holds ONE psycopg connection
+    #     for the whole process lifetime, because AsyncPostgresSaver exposes no
+    #     pool API.
+    #
+    # On a transaction-mode pooler (Supabase's port 6543, i.e. pgbouncer) that
+    # long-lived connection is at the mercy of the pooler's own idle/lifetime
+    # timer. When it is reaped, the socket is dead but the Python object still
+    # looks valid, and the next chat message dies on its first read with
+    # "server closed the connection unexpectedly". That is not a query error —
+    # it is a dead transport, and it took down a live stream in production.
+    #
+    # Point this at a session-mode endpoint (Supabase's same host on port 5432)
+    # and the connection is allowed to stay open for as long as we hold it.
+    # Leave it unset and graph.py derives a session-mode DSN from DATABASE_URL.
+    LANGGRAPH_CHECKPOINT_DSN: str | None = None
     SUPABASE_URL: str | None = None
     # Only the service-role (admin) key belongs on a server. Every Storage call
     # authenticates with it. SUPABASE_ANON_KEY is a publishable, client-side key

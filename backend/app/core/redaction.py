@@ -34,6 +34,11 @@ _PRIVATE_KEY_RE = re.compile(
 _HOME_PATH_RE = re.compile(
     r"(?<![\\/\w])(?:C:\\Users\\[^\\\s]+|/home/[^/\s]+|/Users/[^/\s]+)"
 )
+# The `user:password@` of a DSN. Group 1 is the scheme (kept so the match is
+# anchored to a URL shape), group 2 is the username (kept -- it identifies the
+# role, e.g. `postgres.<ref>`, which is genuinely useful when debugging Supabase
+# pooler auth). Only the password is dropped.
+_DSN_CREDENTIALS_RE = re.compile(r"(?i)\b(postgres(?:ql)?(?:\+\w+)?://)([^:/@\s]+):([^@/\s]*)@")
 
 # Keys whose *entire value* is replaced in structured events (they are secrets
 # by name even when the value does not match a format pattern).
@@ -53,6 +58,31 @@ _SECRET_KEYS = {
     "encryption_key",
     "jwt",
 }
+
+
+def redact_dsn(dsn: str) -> str:
+    """
+    Strip credentials from a Postgres DSN, keeping it diagnosable.
+
+    A DSN is the one string that is *guaranteed* to contain a password and
+    *guaranteed* to be the thing you most want in a log when a connection fails
+    ("which host? which port? session or transaction mode?"). So it needs the
+    credentials gone and everything else intact.
+
+    Truncation is not a substitute. ``dsn[:40]`` happens to be safe for a
+    Supabase pooler URL only because ``postgres.<16-char-ref>`` is 25
+    characters, which lands the cut on the colon before the password. Change
+    the provider, shorten the username, or add a ``+asyncpg`` driver suffix and
+    the same slice prints the password in full.
+
+    >>> redact_dsn("postgresql://postgres.ref:hunter2@db.example.com:5432/app")
+    'postgresql://postgres.ref:***@db.example.com:5432/app'
+    """
+    if not dsn:
+        return dsn
+    return _DSN_CREDENTIALS_RE.sub(
+        lambda m: f"{m.group(1)}{m.group(2)}:***@", dsn, count=1
+    )
 
 
 def redact_text(text: str, replacement: str | None = None) -> str:
