@@ -75,7 +75,23 @@ class UserMemory(SQLModel, table=True):
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True, nullable=False)
     category: str = Field(default="preference", description="preference | fact | skill | context | goal | role")
     content: str = Field(sa_type=Text)
-    confidence: float = Field(default=1.0)
+    # Lifecycle. `confidence` used to be a hardcoded 1.0 that was never written
+    # again, so every memory was permanently maximally trusted. It is now the
+    # *observed* confidence: seeded low on write, raised on recall, decayed
+    # toward CONFIDENCE_FLOOR when unused (see services/memory_lifecycle.py).
+    confidence: float = Field(default=0.7)
+    # mem0's id for the same fact, so the semantic index and this table can be
+    # reconciled. Null for memories that only ever existed here.
+    mem0_id: str | None = Field(default=None, index=True)
+    # How many times this memory was retrieved and injected. Feeds the
+    # "memories that prove useful survive" half of the lifecycle.
+    retrieval_count: int = Field(default=0)
+    # Last time it was retrieved (None = never used), and when it will have
+    # decayed to the floor so a reaper can retire it.
+    last_used_at: datetime | None = Field(default=None)
+    # "user" for a standing preference, "conversation" for context that should
+    # not outlive its thread.
+    scope: str = Field(default="user", index=True)
     source_conversation_id: uuid.UUID | None = Field(default=None)
     is_active: bool = Field(default=True)
     embedding: list[float] | None = Field(default=None, sa_column=Column(ARRAY(Float)))
