@@ -189,8 +189,6 @@ interface BackendCall {
  * test instead of drifting unnoticed.
  */
 const EXCEPTIONS: Record<string, { backendPath?: string; directFetch?: boolean }> = {
-  // Frontend "start SSO" maps to the backend's OIDC start endpoint.
-  "/api/auth/oauth": { backendPath: "/auth/oauth/login" },
   // These need the raw response body (streaming, multipart), so they call
   // fetch() directly instead of going through the proxy helpers.
   "/api/chat": { directFetch: true },
@@ -209,7 +207,7 @@ function isDirect(route: string) {
  * These are covered by dedicated tests below that assert both branches, so the
  * generic sweep skips them rather than papering over a missing call.
  */
-const SHORT_CIRCUITS = new Set(["/api/auth/oauth/callback"])
+const SHORT_CIRCUITS = new Set(["/api/auth/oauth/[provider]/callback"])
 
 /**
  * A body each route's own input validation will accept.
@@ -477,13 +475,13 @@ describe("routes that short-circuit on bad input", () => {
   })
 
   it("the OAuth callback rejects a request with no code/state instead of calling the backend", async () => {
-    const file = ROUTES.find((r) => r.route === "/api/auth/oauth/callback")?.file
+    const file = ROUTES.find((r) => r.route === "/api/auth/oauth/[provider]/callback")?.file
     expect(file).toBeDefined()
     const mod = await loadRoute(file!)
 
     const res = await mod.GET!(
-      nextRequest("/api/auth/oauth/callback"),
-      routeContext("/api/auth/oauth/callback"),
+      nextRequest("/api/auth/oauth/[provider]/callback"),
+      routeContext("/api/auth/oauth/[provider]/callback"),
     )
 
     expect(res.status).toBe(307)
@@ -492,20 +490,20 @@ describe("routes that short-circuit on bad input", () => {
   })
 
   it("the OAuth callback exchanges code+state when the IdP supplies them", async () => {
-    const file = ROUTES.find((r) => r.route === "/api/auth/oauth/callback")?.file
+    const file = ROUTES.find((r) => r.route === "/api/auth/oauth/[provider]/callback")?.file
     const mod = await loadRoute(file!)
     backendFetch.mockImplementation(async () =>
       fakeBackendResponse(200, { access_token: "at", refresh_token: "rt", expires_in: 60 }),
     )
 
     const res = await mod.GET!(
-      nextRequest("/api/auth/oauth/callback", "?code=abc&state=xyz"),
-      routeContext("/api/auth/oauth/callback"),
+      nextRequest("/api/auth/oauth/[provider]/callback", "?code=abc&state=xyz"),
+      routeContext("/api/auth/oauth/[provider]/callback"),
     )
 
     expect(backendFetch).toHaveBeenCalledTimes(1)
     const [path, init] = backendFetch.mock.calls[0] as [string, RequestInit]
-    expect(path).toBe("/auth/oauth/callback")
+    expect(path).toBe("/auth/oauth/test-provider/callback")
     expect(init.method).toBe("POST")
     // The PKCE verifier must reach the backend, not just a code.
     expect(JSON.parse(init.body as string)).toEqual({ code: "abc", state: "xyz" })

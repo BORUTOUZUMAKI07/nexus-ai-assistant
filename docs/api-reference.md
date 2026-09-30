@@ -29,9 +29,10 @@
 - `POST /auth/forgot-password` · `POST /auth/reset-password`
 - 2FA (TOTP): `POST /auth/2fa/setup`, `POST /auth/2fa/enable`,
   `POST /auth/2fa/disable`, `POST /auth/2fa/verify`, `GET /auth/2fa/status`
-- OAuth (PKCE): `GET /auth/oauth/login` → returns the provider authorization
-  URL; `POST /auth/oauth/callback` → exchanges the provider code for a session
-  (both 404 while SSO is unconfigured)
+- OAuth (PKCE): `GET /auth/oauth/{provider}` (`google` | `github`) → returns
+  the provider authorization URL; `POST /auth/oauth/{provider}/callback` →
+  exchanges the provider code for a session (both 404 while that provider is
+  unconfigured)
 
 ## Conversations & messages
 

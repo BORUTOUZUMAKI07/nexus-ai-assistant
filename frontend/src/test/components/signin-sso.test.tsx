@@ -24,10 +24,10 @@ describe("Sign-in page SSO", () => {
     })
   })
 
-  it("sends the browser to the provider authorize URL when the SSO button is clicked", async () => {
+  it("sends the browser to the provider authorize URL when Google is clicked", async () => {
     render(<SignInPage />)
 
-    fireEvent.click(screen.getByRole("button", { name: /continue with sso/i }))
+    fireEvent.click(screen.getByRole("button", { name: /continue with google/i }))
 
     await waitFor(() => expect(assign).toHaveBeenCalledTimes(1))
     const url = assign.mock.calls[0][0] as string
@@ -37,12 +37,21 @@ describe("Sign-in page SSO", () => {
     expect(url).toContain("code_challenge_method=S256")
   })
 
+  it("sends the browser to the provider authorize URL when GitHub is clicked", async () => {
+    render(<SignInPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: /continue with github/i }))
+
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1))
+    expect(assign.mock.calls[0][0] as string).toContain("code_challenge_method=S256")
+  })
+
   it("surfaces an inline error when SSO is unconfigured", async () => {
-    // Override the MSW handler for this test: 404 = backend has no OIDC config.
+    // Override the MSW handler for this test: 404 = backend has no OAuth config.
     const { http, HttpResponse } = await import("msw")
     const { server } = await import("@/test/mocks/server")
     server.use(
-      http.get("/api/auth/oauth", () =>
+      http.get("/api/auth/oauth/:provider", () =>
         HttpResponse.json(
           { detail: "OAuth single sign-on is not configured." },
           { status: 404 },
@@ -51,7 +60,7 @@ describe("Sign-in page SSO", () => {
     )
 
     render(<SignInPage />)
-    fireEvent.click(screen.getByRole("button", { name: /continue with sso/i }))
+    fireEvent.click(screen.getByRole("button", { name: /continue with google/i }))
 
     await waitFor(() =>
       expect(

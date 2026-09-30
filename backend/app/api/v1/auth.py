@@ -274,14 +274,16 @@ async def reset_password(
         raise HTTPException(status_code=400, detail=exc.message)
 
 
-# ─── OAuth / OIDC SSO ─────────────────────────────────────────────────────────
-# Authorization Code + PKCE. GET /oauth/login returns the provider authorize
-# URL; POST /oauth/callback accepts the code the provider hands back (the
-# frontend proxy performs the exchange and stores the session in httpOnly
-# cookies). Both endpoints are 404 while SSO is unconfigured.
+# ─── OAuth / SSO (Google + GitHub) ─────────────────────────────────────────
+# Authorization Code + PKCE, one adapter per provider. GET /oauth/{provider}
+# returns the provider authorize URL; POST /oauth/{provider}/callback accepts
+# the code the provider hands back (the frontend proxy performs the exchange
+# and stores the session in httpOnly cookies). Both endpoints 404 while the
+# named provider is unconfigured.
 
-@router.get("/oauth/login", response_model=OAuthLoginResponse)
+@router.get("/oauth/{provider}", response_model=OAuthLoginResponse)
 async def oauth_login(
+    provider: str,
     oauth_svc: OAuthService = Depends(get_oauth_service),
 ):
     if not oauth_svc.enabled:
@@ -294,9 +296,10 @@ async def oauth_login(
     )
 
 
-@router.post("/oauth/callback", response_model=TokenResponse | TwoFactorChallengeResponse)
+@router.post("/oauth/{provider}/callback", response_model=TokenResponse | TwoFactorChallengeResponse)
 async def oauth_callback(
     request: Request,
+    provider: str,
     body: OAuthCallbackRequest,
     auth_svc: AuthService = Depends(get_auth_service),
     oauth_svc: OAuthService = Depends(get_oauth_service),

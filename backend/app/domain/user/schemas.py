@@ -33,10 +33,10 @@ class TokenRefresh(BaseModel):
     refresh_token: str = Field(min_length=1, max_length=4096)
 
 
-# ── OAuth / OIDC SSO ────────────────────────────────────────────────────────
+# ── OAuth / SSO (Google + GitHub) ─────────────────────────────────────────
 
 class OAuthCallbackRequest(BaseModel):
-    """The authorization-code leg of the OIDC callback."""
+    """The authorization-code leg of the per-provider OAuth callback."""
 
     code: str = Field(min_length=1)
     state: str = Field(min_length=1)
