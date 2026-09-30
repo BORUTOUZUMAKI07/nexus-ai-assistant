@@ -18,6 +18,7 @@ from backend.app.api.deps import (
 )
 from backend.app.core.config import settings
 from backend.app.core.exceptions import ResourceNotFoundError
+from backend.app.core.logging import bind_request_context, clear_request_context
 from backend.app.domain.conversation.schemas import (
     BranchCreate,
     ConversationCreate,
@@ -35,6 +36,8 @@ from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.org_service import OrganizationService
+from backend.app.services.prompt_compiler import prompt_compiler
+from backend.app.services.prompt_service import load_active_skills
 from backend.app.services.usage_service import UsageService
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -237,9 +240,10 @@ async def stream_conversation(
         logger.info("conversation_created_from_stream", conversation_id=thread_id)
     else:
         # Existing conversation UUID: verify ownership BEFORE reading the thread
-        # history or persisting anything into it (IDOR guard).
+        # history or persisting anything into it (IDOR guard). The fetched row is
+        # kept so the conversation's own system_prompt can seed the compiled one.
         try:
-            await conv_svc.get_conversation(convo_uuid, user_id=current_user.id)
+            conv = await conv_svc.get_conversation(convo_uuid, user_id=current_user.id)
         except ResourceNotFoundError:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -260,6 +264,29 @@ async def stream_conversation(
             **({"plan_preamble": body.plan_preamble} if body.plan_preamble else {}),
         }
     }
+
+    # Compile the system prompt through the same path the non-streaming /messages
+    # endpoints use. Previously this route passed only {"messages", "mode"} into
+    # the graph, so `bootstrap_node` always fell back to its hardcoded default:
+    # the prompt_templates/*.txt base, the CAG static-prefix cache and the
+    # `skills` table were all bypassed for streaming chat — the path the UI
+    # actually uses. Fail-open: on any error the graph keeps its own default.
+    try:
+        active_skills = await load_active_skills()
+        compiled_system_prompt = await prompt_compiler.compile_system_prompt_cached(
+            custom_instructions=getattr(conv, "system_prompt", None),
+            active_skills=active_skills,
+        )
+        logger.info(
+            "stream_system_prompt_compiled",
+            conversation_id=thread_id,
+            skills_count=len(active_skills),
+            prompt_chars=len(compiled_system_prompt),
+        )
+    except Exception as exc:
+        logger.warning("stream_system_prompt_compile_failed", error=str(exc))
+        active_skills = []
+        compiled_system_prompt = None
 
     # Persist the latest user message so the agentic path is durably tracked,
     # mirroring the messages.py chat endpoints. The input is pass guardrailed
@@ -320,10 +347,22 @@ async def stream_conversation(
         # the text if we already streamed individual tokens — use it only as a
         # fallback when the model did NOT stream token-by-token (e.g. ToT node).
         _streamed_tokens = False
+        # Bind identity (agent + prompt version, conversation, mode) onto every
+        # log line for the life of this stream. Cleared in the finally below —
+        # contextvars outlive the statement that set them, so a streaming
+        # response that returned without clearing would mislabel later logs.
+        bind_request_context(
+            conversation_id=thread_id, user_id=str(current_user.id), mode=body.mode
+        )
         try:
             async with trace_span("agentic_stream", {"thread_id": thread_id, "mode": body.mode, "user_id": str(current_user.id)}):
                 async for event in orchestrator_graph.astream_events(
-                    input={"messages": graph_messages, "mode": body.mode},
+                    input={
+                        "messages": graph_messages,
+                        "mode": body.mode,
+                        **({"system_prompt": compiled_system_prompt} if compiled_system_prompt else {}),
+                        **({"active_skills": [s.name for s in active_skills]} if active_skills else {}),
+                    },
                     config=config,
                     version="v2",
                 ):
@@ -505,6 +544,7 @@ async def stream_conversation(
             logger.exception("stream_error", thread_id=thread_id, error=str(exc))
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
         finally:
+            clear_request_context()
             await _release_stream_slot(thread_id)
 
         yield "data: [DONE]\n\n"

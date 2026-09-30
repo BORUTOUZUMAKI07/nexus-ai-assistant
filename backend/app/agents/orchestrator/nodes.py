@@ -14,6 +14,7 @@ from backend.app.agents.subagents.critic import critic_subagent
 from backend.app.agents.subagents.researcher import researcher_subagent
 from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.services.context_compiler import context_compiler
 from backend.app.services.memory import long_term_memory
 from backend.app.services.rag.critique import (
     VERDICT_UNRELATED,
@@ -660,16 +661,52 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
 
     final_messages = [{"role": "system", "content": system_prompt}]
 
-    # Context compaction: replay only the most recent history turns so a long
-    # conversation doesn't grow the prompt without bound on every synthesis.
-    for m in messages[-_MAX_HISTORY_TURNS:-1]:
-        if isinstance(m, dict):
-            m_role = m.get("role", "user")
-            m_content = m.get("content", "")
-        else:
-            m_role = m.type
-            m_content = m.content
-        final_messages.append({"role": {"human": "user", "ai": "assistant"}.get(m_role, m_role), "content": m_content})
+    # Context budgeting: replay history newest-first under a real token budget
+    # rather than a fixed turn count, so one long message cannot blow the window
+    # and many short ones are not cut off prematurely. Overflow is summarised
+    # into a single episodic block; summarisation is fail-open, and a failure
+    # simply drops the overflow (see summarize_agent_history).
+    #
+    # `_MAX_HISTORY_TURNS` remains the outer bound so a pathological history can
+    # never make the budgeting pass itself expensive.
+    _history = messages[-_MAX_HISTORY_TURNS:-1]
+    if _history:
+        _keep, _compress, _kept_tokens = context_compiler.budget_history(
+            _history, system_prompt=system_prompt, model=settings.DEFAULT_MODEL
+        )
+        if _compress:
+            try:
+                _episodic = await context_compiler.summarize_agent_history(
+                    _compress, model=settings.FAST_MODEL
+                )
+            except Exception as exc:
+                # Fail-open: dropping the overflow loses some recall, raising here
+                # would lose the user's turn entirely.
+                logger.warning("agent_history_summarization_failed", error=str(exc))
+                _episodic = ""
+            if _episodic:
+                final_messages.append(
+                    {
+                        "role": "system",
+                        "content": f"[Earlier conversation summary]: {_episodic}",
+                    }
+                )
+                logger.info(
+                    "agent_history_compacted",
+                    summarized_turns=len(_compress),
+                    kept_turns=len(_keep),
+                    kept_tokens=_kept_tokens,
+                )
+        for m in _keep:
+            if isinstance(m, dict):
+                m_role = m.get("role", "user")
+                m_content = m.get("content", "")
+            else:
+                m_role = m.type
+                m_content = m.content
+            final_messages.append(
+                {"role": {"human": "user", "ai": "assistant"}.get(m_role, m_role), "content": m_content}
+            )
 
     last_user_raw = (
         messages[-1].content

@@ -28,6 +28,45 @@ def add_correlation_id(
     return event_dict
 
 
+def bind_request_context(**kwargs: Any) -> None:
+    """Bind request-scoped key/values onto every subsequent structlog event.
+
+    ``setup_logging`` installs ``structlog.contextvars.merge_contextvars`` as the
+    first processor, so anything bound here appears on every log line emitted
+    for the rest of the current context — without threading a logger object
+    through every function that might want to log.
+
+    Binds the agent graph and prompt-set versions by default so any line can be
+    attributed to the revision that produced it. Callers may override or add
+    their own keys; ``None`` values are dropped rather than logged as null.
+
+    The caller owns the matching :func:`clear_request_context` — contextvars
+    live for the life of the context they are bound in, so a streaming response
+    must clear in its ``finally`` or the values outlive the request.
+    """
+    from backend.app.core.config import settings as _settings
+
+    payload: dict[str, Any] = {
+        "agent_version": _settings.AGENT_VERSION,
+        "prompt_version": _settings.PROMPT_SET_VERSION,
+    }
+    payload.update({k: v for k, v in kwargs.items() if v is not None})
+    structlog.contextvars.bind_contextvars(**payload)
+
+
+def clear_request_context() -> None:
+    """Drop every contextvar bound by :func:`bind_request_context`.
+
+    Fail-safe by design: a failure here must never propagate into a request's
+    ``finally`` block and mask the real error being handled.
+    """
+    try:
+        structlog.contextvars.clear_contextvars()
+    except Exception:  # nosec B110
+        # Telemetry-only seam — a stuck contextvar must not break the request.
+        pass
+
+
 def resolve_log_level() -> int:
     """Return the stdlib logging level the app should run at.
 
