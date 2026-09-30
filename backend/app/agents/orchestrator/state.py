@@ -62,3 +62,14 @@ class AgentState(TypedDict):
     # ARQ (Attentive Reasoning Queries) — constraint check output from orchestrator
     # Keys: needs_tool, safety_flag, recency_needed, ambiguous — all bool.
     arq_flags: dict[str, bool] | None
+
+    # Run spend accounting (D2). Every loop in the graph is individually
+    # bounded, and their product is not, so the run carries a cumulative
+    # ceiling. These live in the state rather than only in a contextvar
+    # because the graph can suspend for HITL approval and resume in a later
+    # request, where in-memory accounting is gone — and a budget that resets on
+    # every suspend is a budget that never binds on exactly the long runs it
+    # exists to catch.
+    loop_steps: int
+    tokens_used: int
+    spend_stop_reason: str

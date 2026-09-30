@@ -13,6 +13,12 @@ from backend.app.agents.subagents.coder import coder_subagent
 from backend.app.agents.subagents.critic import critic_subagent
 from backend.app.agents.subagents.researcher import researcher_subagent
 from backend.app.core.config import settings
+from backend.app.core.spend import (
+    bind_spend_meter,
+    budget_exhausted,
+    charge_step,
+    current_spend_meter,
+)
 from backend.app.infrastructure.ai.litellm_client import ai_client
 from backend.app.services.confidence_action import apply_confidence_action
 from backend.app.services.context_compiler import context_compiler
@@ -123,6 +129,44 @@ def _has_image_content(content: Any) -> bool:
     return False
 
 
+#: Pessimistic token cost of one more critic-revision pass (a 1200-token draft
+#: plus a critique over both the request and the draft). Checked against the
+#: remaining budget before the pass is started, so a pass that would overrun is
+#: one that never happens.
+REVISION_TOKEN_ESTIMATE = 4000
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    """Read an int out of checkpointed state, defaulting rather than raising.
+
+    ``bootstrap_node`` runs before anything else, so an ``int()`` that raises on
+    a malformed checkpoint takes down the whole run at step 0 -- on a
+    hand-edited, partially-migrated or corrupt thread the user can no longer
+    use at all. A wrong counter degrades one behaviour; a crash at bootstrap
+    degrades every behaviour, and it does so for a thread that may hold real
+    history. Same convention as the rest of the graph's tuning knobs: fail
+    open, never crash the hot path.
+    """
+    try:
+        if value is None or value == "":
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning("state_value_coerced", wanted="int", value_type=type(value).__name__)
+        return default
+
+
+def _coerce_float(value: Any, default: float = 0.0) -> float:
+    """Float counterpart of `_coerce_int`, same reasoning."""
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        logger.warning("state_value_coerced", wanted="float", value_type=type(value).__name__)
+        return default
+
+
 def _extract_text_content(content: Any) -> str:
     """Extracts pure text string from either string or multimodal list content."""
     if isinstance(content, str):
@@ -138,6 +182,92 @@ def _extract_text_content(content: Any) -> str:
     return str(content)
 
 
+def _bind_run_spend_meter(state: AgentState) -> None:
+    """Bind the run's spend meter, seeded from any spend already on the state.
+
+    Called from the first node so every model call in the run -- planner,
+    router, tree-of-thoughts, subagents, critic, synthesizer -- is counted by
+    the one place that already sees each call's usage.
+
+    Seeding is what makes the ceiling survive a HITL suspend: the contextvar is
+    gone by the time a resumed run picks up, so the run's real spend has to
+    arrive through the checkpointed state or the budget restarts from zero
+    every time the user is asked to approve a tool call.
+
+    Fails open on every path. A budgeting bug must never be the reason a
+    request fails.
+    """
+    try:
+        if current_spend_meter() is not None:
+            # Already bound for this request (e.g. the route bound it before
+            # entering the graph). Do not replace it: rebinding here would
+            # discard tokens already spent this request and silently raise the
+            # ceiling for the rest of the run.
+            return
+        bind_spend_meter(
+            limit_tokens=int(getattr(settings, "AGENT_LOOP_TOKEN_BUDGET", 60_000)),
+            limit_steps=int(getattr(settings, "AGENT_LOOP_MAX_STEPS", 8)),
+            seed_tokens=int(state.get("tokens_used", 0) or 0),
+            seed_steps=int(state.get("loop_steps", 0) or 0),
+        )
+    except Exception as exc:
+        logger.warning("spend_meter_bind_failed", error_type=type(exc).__name__)
+
+
+def _charge_step(state: AgentState | None = None) -> None:
+    """Record one unit of agent work against the run's budget. Fails open."""
+    charge_step()
+
+
+def _spend_state(state: AgentState) -> dict[str, Any]:
+    """The meter as state keys, so the run's spend survives a suspend.
+
+    Returns an empty dict when no meter is bound, leaving the state untouched
+    rather than zeroing counters a caller may be carrying.
+    """
+    meter = current_spend_meter()
+    if meter is None:
+        return {}
+    return {
+        "tokens_used": meter.tokens,
+        "loop_steps": meter.steps,
+        "spend_stop_reason": meter.stop_reason,
+    }
+
+
+def _budget_stop(state: AgentState, estimated_tokens: int) -> str:
+    """Whether to refuse more work, recorded onto the state either way.
+
+    Returns the reason, or an empty string when there is headroom. The stop
+    reason is written to the state on the first refusal and left alone
+    afterwards, so what surfaces in the log and the UI is the ceiling that
+    actually bit rather than the last one to be evaluated.
+    """
+    try:
+        blocked, reason = budget_exhausted(estimated_tokens)
+    except Exception:
+        return ""
+    if not blocked:
+        return ""
+    logger.info(
+        "agent_loop_budget_exhausted",
+        reason=reason,
+        tokens=meter_tokens(),
+        steps=meter_steps(),
+    )
+    return reason
+
+
+def meter_tokens() -> int:
+    meter = current_spend_meter()
+    return meter.tokens if meter is not None else 0
+
+
+def meter_steps() -> int:
+    meter = current_spend_meter()
+    return meter.steps if meter is not None else 0
+
+
 async def bootstrap_node(state: AgentState) -> dict[str, Any]:
     """
     Step 0: Materialises session identity (user_id, conversation_id) and
@@ -146,6 +276,7 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
     config = get_config()
     conf = (config or {}).get("configurable", {})
     plan_preamble = str(conf.get("plan_preamble") or "").strip()
+    _bind_run_spend_meter(state)
     base_system_prompt = state.get("system_prompt") or (
         "You are Nexus AI â€” an elite production assistant engineered for maximum clarity, intelligence, and elegance.\n\n"
         "Format every response with clean, professional presentation:\n"
@@ -183,14 +314,17 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
         "citations": state.get("citations") or [],
         "evidence_score": state.get("evidence_score", 0.0),
         "evidence_gate_passed": bool(state.get("evidence_gate_passed", False)),
-        "revision_count": int(state.get("revision_count", 0)),
+        "revision_count": _coerce_int(state.get("revision_count"), 0),
         "critique": state.get("critique"),
-        "rag_relevance_score": float(state.get("rag_relevance_score", 0.0)),
+        "rag_relevance_score": _coerce_float(state.get("rag_relevance_score"), 0.0),
         "grader_verdict": state.get("grader_verdict", "relevant"),
-        "grader_confidence": float(state.get("grader_confidence", 0.0)),
+        "grader_confidence": _coerce_float(state.get("grader_confidence"), 0.0),
         "needs_web_search": bool(state.get("needs_web_search", False)),
         "retry_count": state.get("retry_count", 0),
         "error": state.get("error"),
+        "loop_steps": _coerce_int(state.get("loop_steps"), 0),
+        "tokens_used": _coerce_int(state.get("tokens_used"), 0),
+        "spend_stop_reason": str(state.get("spend_stop_reason") or ""),
     }
 
 
@@ -812,14 +946,46 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         critique: dict[str, Any] | None = None
         draft_prompt = augmented_prompt
         revisions_used = 0
+        # The most recent draft, tracked separately from `response_text`.
+        # `response_text` is only assigned on the paths that *accept* a draft,
+        # so a break from any other path -- the budget stop below -- has
+        # nothing to return unless the last draft is held here. Without it, a
+        # budget stop left `response_text` unbound and the whole request 500'd
+        # instead of answering. `response_text` starts empty rather than
+        # undefined for the same reason: the existing empty-response fallback
+        # further down is a far better outcome than a NameError.
+        last_draft = ""
+        response_text = ""
 
         for attempt in range(max_revisions + 1):
+            # The run-level spend ceiling, checked BEFORE the draft is asked
+            # for. CRITIC_MAX_REVISIONS alone is a sane number, but it composes
+            # with the planner, the tree-of-thoughts fan-out, the researcher's
+            # own rounds and the subagent dispatches, and their product is not
+            # bounded by anything. Refusing here is the difference between
+            # stopping and merely noticing.
+            #
+            # A budget stop takes the last draft as the answer. There is
+            # always one: the loop cannot reach its second iteration without
+            # having produced a first.
+            if attempt > 0 and _budget_stop(state, REVISION_TOKEN_ESTIMATE):
+                logger.info(
+                    "critic_loop_cut_short_by_budget",
+                    attempt=attempt,
+                    revisions_used=revisions_used,
+                )
+                # Take the best draft the run has and answer with it. A budget
+                # stop must cost the user a revision, never the answer.
+                response_text = last_draft
+                break
+            _charge_step(state)
             draft = await ai_client.completion(
                 messages=final_messages[:-1] + [{"role": "user", "content": draft_prompt}],
                 model="llama-3.3-70b-versatile",
                 temperature=0.7,
                 max_tokens=1200,
             )
+            last_draft = draft
             if max_revisions == 0:
                 response_text = draft
                 break
@@ -996,4 +1162,9 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         "revision_count": revision_count,
         "critique": critique,
         "confidence_decision": confidence_decision,
+        # Publish the run's spend so it is checkpointed. This is the last node
+        # of the run, so it is the only place the total is complete -- and the
+        # total is what a later, resumed run needs in order not to restart the
+        # budget from zero.
+        **_spend_state(state),
     }
