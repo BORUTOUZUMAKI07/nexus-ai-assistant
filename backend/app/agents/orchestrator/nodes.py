@@ -16,6 +16,7 @@ from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
 from backend.app.services.context_compiler import context_compiler
 from backend.app.services.memory import long_term_memory
+from backend.app.services.memory_lifecycle import should_persist_memory
 from backend.app.services.rag.critique import (
     VERDICT_UNRELATED,
     retrieval_critique_service,
@@ -53,6 +54,62 @@ _MAX_HISTORY_TURNS = 12
 
 # Per-source cap so a single huge web/RAG drop can't balloon the prompt.
 _MAX_SOURCE_CHARS = 4000
+
+
+async def _mirror_memories_to_table(
+    user_id: str,
+    facts: list[dict[str, Any]],
+    conversation_id: Any = None,
+) -> int:
+    """Copy mem0-extracted facts into the local ``user_memories`` table.
+
+    mem0 owns semantic extraction and deduplication; the table owns durability,
+    lifecycle (confidence decay / reinforcement) and user-facing visibility,
+    because there is a REST API over it. Before this existed the two stores
+    never exchanged anything, so a memory could exist only in mem0 — invisible
+    to every local query, to the memory API, and to the delete path.
+
+    Opens its own short-lived session: this runs inside the graph, which does
+    not hold a request-scoped DB session. Fail-open by construction — a memory
+    that fails to mirror is still in mem0, so the cost is a duplicate, never a
+    lost memory or a failed turn.
+    """
+    from backend.app.domain.user.repository import UserRepository
+    from backend.app.infrastructure.database.session import async_session_factory
+
+    # Both ids are free-form in the graph state, and a malformed one must not
+    # abort the mirror: the fact is already safely in mem0, so a bad id costs a
+    # duplicate at worst. Parsed inside the try so the failure is a logged
+    # warning rather than an exception escaping the caller's handler.
+    try:
+        user_uuid = UUID(str(user_id))
+    except (ValueError, TypeError, AttributeError):
+        logger.warning("memory_mirror_skipped_bad_user_id", user_id=str(user_id))
+        return 0
+    conv_uuid: UUID | None = None
+    if conversation_id:
+        try:
+            conv_uuid = UUID(str(conversation_id))
+        except (ValueError, TypeError, AttributeError):
+            conv_uuid = None
+
+    try:
+        async with async_session_factory() as session:
+            created, skipped = await UserRepository(session).mirror_memories(
+                user_id=user_uuid,
+                facts=facts,
+                source_conv_id=conv_uuid,
+            )
+        logger.info(
+            "memories_mirrored_to_table",
+            user_id=str(user_id),
+            created=len(created),
+            skipped_duplicates=skipped,
+        )
+        return len(created)
+    except Exception as exc:
+        logger.warning("memory_mirror_failed_non_blocking", user_id=str(user_id), error=str(exc))
+        return 0
 
 
 def _has_image_content(content: Any) -> bool:
@@ -863,20 +920,38 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         logger.warning("confidence_gate_skipped", error=str(exc))
 
     # â”€â”€ Save new memories from this exchange via mem0 (background, non-blocking) â”€â”€
-    if user_id:
+    memory_decision = should_persist_memory(last_user_content, response_text)
+    if user_id and memory_decision.should_write:
         exchange = [
             {"role": "user", "content": last_user_content},
             {"role": "assistant", "content": response_text},
         ]
         try:
-            await long_term_memory.add_from_conversation(
+            extracted = await long_term_memory.add_from_conversation(
                 messages=exchange,
                 user_id=user_id,
                 metadata={"conversation_id": state.get("conversation_id", "")},
             )
+            # Reconcile into the durable local table. Previously mem0 and
+            # user_memories were two stores of the same facts that never
+            # exchanged anything, so a mem0 memory was invisible to every local
+            # query and to the user's own memory API.
+            if extracted:
+                await _mirror_memories_to_table(
+                    user_id=user_id,
+                    facts=extracted,
+                    conversation_id=state.get("conversation_id"),
+                )
+            logger.info(
+                "memory_write_completed",
+                reason=memory_decision.reason,
+                extracted=len(extracted) if extracted else 0,
+            )
         except Exception as exc:
             # Memory saving is best-effort â€” never fail the main response
             logger.warning("mem0_save_failed_non_blocking", error=str(exc))
+    elif user_id:
+        logger.info("memory_write_skipped", reason=memory_decision.reason)
 
     # Guard: never emit an empty AIMessage â€” LangGraph/litellm raise
     # "model output must contain either output text or tool calls" when
