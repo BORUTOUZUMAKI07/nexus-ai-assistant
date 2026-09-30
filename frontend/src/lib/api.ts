@@ -580,17 +580,38 @@ export async function fetchConversation(
   return res.json();
 }
 
+/**
+ * Creates a conversation.
+ *
+ * `mode` is deliberately NOT sent, even though the signature still accepts it.
+ * `ConversationCreate` in the backend is `extra="forbid"` and declares only
+ * `title`, `model`, `system_prompt` and `is_pinned` — so including `mode` made
+ * *every* call fail with a 422, and the failure was invisible because both call
+ * sites swallow it into a `console.warn`. That is why "New Chat" appeared to
+ * work in the UI: it went through the stream endpoint's own conversation
+ * creation, and this call had already failed.
+ *
+ * The value was also never used. There is no mode column on `Conversation`, and
+ * `ConversationService.create_conversation` reads only title/model/system_prompt.
+ * Mode is a property of a *message*, not a conversation: it travels on
+ * `StreamChatRequest.mode` and is chosen per send. Keeping it in the parameter
+ * list avoids churning the two call sites for a field that has no server-side
+ * meaning; it is accepted and discarded.
+ */
 export async function createConversation(
-  titleOrOptions?: string | { title?: string; mode?: ConversationMode; model?: string },
-  mode: ConversationMode = "normal",
+  titleOrOptions?:
+    | string
+    | { title?: string; mode?: ConversationMode; model?: string },
+  // Retained for call-site compatibility. Not forwarded: see above. The leading
+  // underscore is the TypeScript convention for "deliberately unread", which is
+  // exactly what this is, and it keeps the lint rule quiet without a suppression.
+  _mode?: ConversationMode,
   model?: string
 ): Promise<Conversation> {
   let title = "New Conversation";
-  let convMode = mode;
   let convModel = model;
   if (typeof titleOrOptions === "object" && titleOrOptions !== null) {
     title = titleOrOptions.title ?? "New Conversation";
-    convMode = titleOrOptions.mode ?? "normal";
     convModel = titleOrOptions.model;
   } else if (typeof titleOrOptions === "string") {
     title = titleOrOptions;
@@ -599,9 +620,11 @@ export async function createConversation(
   const res = await nexusFetch(`${API_BASE}/conversations`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
+    // Exactly the fields `ConversationCreate` accepts. The backend is
+    // `extra="forbid"`, so this object and that schema must stay in agreement —
+    // adding a key here is a 422 in production, not a type error locally.
     body: JSON.stringify({
       title,
-      mode: convMode,
       ...(convModel ? { model: convModel } : {}),
     }),
   });

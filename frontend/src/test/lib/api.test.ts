@@ -125,7 +125,6 @@ describe("api client", () => {
         return HttpResponse.json({
           id: "conv-new-1",
           title: "New Conversation",
-          mode: "code",
           created_at: "",
           updated_at: "",
           message_count: 0,
@@ -135,7 +134,38 @@ describe("api client", () => {
     const created = await createConversation("My title", "code")
     expect(created.id).toBe("conv-new-1")
     expect(sentBody).toContain("My title")
-    expect(sentBody).toContain('"mode":"code"')
+  })
+
+  it("never sends `mode` on conversation create, which the backend forbids", async () => {
+    // `ConversationCreate` is `extra="forbid"` and declares no `mode` field, so
+    // including it made every POST /conversations return 422. The assertion in
+    // the test above used to check the opposite — that `"mode":"code"` WAS
+    // present — which is exactly how the bug survived a green suite: the test
+    // encoded the broken contract as correct.
+    //
+    // `mode` is still accepted in the signature for call-site compatibility and
+    // is discarded, so this pins both halves: accepted, and not forwarded.
+    let sentBody = ""
+    server.use(
+      http.post(`${API}/conversations`, async ({ request }) => {
+        sentBody = await request.text()
+        return HttpResponse.json({
+          id: "conv-new-2",
+          title: "New Conversation",
+          created_at: "",
+          updated_at: "",
+          message_count: 0,
+        })
+      })
+    )
+
+    await createConversation("Titled", "code")
+    expect(JSON.parse(sentBody)).not.toHaveProperty("mode")
+
+    // The object-form call site (app/app/page.tsx plan-mode path) sends the
+    // same shape, and `model` is a real schema field so it must survive.
+    await createConversation({ title: "Titled", mode: "research", model: "m1" })
+    expect(JSON.parse(sentBody)).toEqual({ title: "Titled", model: "m1" })
   })
 
   it("resolves after a 204 on delete", async () => {
