@@ -18,7 +18,7 @@ help: ## Show available targets
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # ─── Infrastructure ───────────────────────────────────────────────────────────
-infra: ## Start Docker services (Postgres, Redis, Qdrant, MinIO)
+infra: ## Start Docker services (Postgres, Redis, Qdrant)
 	docker compose up -d
 	@echo "Waiting for services to be healthy..."
 	docker compose ps
@@ -75,7 +75,7 @@ dev: infra ## Start all services + backend + frontend concurrently
 	@echo "║  Backend:   http://localhost:8000             ║"
 	@echo "║  API Docs:  http://localhost:8000/docs        ║"
 	@echo "║  Qdrant UI: http://localhost:6333/dashboard   ║"
-	@echo "║  MinIO:     http://localhost:9001             ║"
+	@echo "║  Storage:   Supabase Storage (hosted)         ║"
 	@echo "╚═══════════════════════════════════════════════╝"
 
 # ─── Testing ──────────────────────────────────────────────────────────────────

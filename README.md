@@ -32,7 +32,7 @@ failures.
 | `docs/` | Architecture, API reference, deployment guide, SLOs, alerting rules, runbooks, user guide, keyboard shortcuts. |
 | `.github/workflows/` | CI (`ci.yml`), nightly security + full test suites (`nightly.yml`), release (`release.yml`). |
 | `Makefile` | Infra / migrate / run / test targets (see below). |
-| `docker-compose.yml` | Local infra: Postgres (pgvector), Redis, Qdrant, MinIO. |
+| `docker-compose.yml` | Local infra: Postgres (pgvector), Redis, Qdrant. Object storage is Supabase Storage (hosted), not a local container. |
 
 ## Quick start
 

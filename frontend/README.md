@@ -40,7 +40,7 @@ npm run dev          # http://localhost:3000
 
 The backend must be running (`make backend` from the repo root, or see
 [`../backend/README.md`](../backend/README.md)). Local infra (Postgres, Redis,
-Qdrant, MinIO) comes from `docker compose up -d` at the repo root.
+Qdrant) comes from `docker compose up -d` at the repo root.
 
 To point at a non-default backend, set `BACKEND_URL` in `.env.local` (a
 legacy `NEXT_PUBLIC_API_URL` is also honored; fallback is
