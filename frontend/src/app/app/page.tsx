@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Sidebar, ConversationItem } from "@/components/Sidebar";
 import {
@@ -15,10 +16,6 @@ import { ArtifactCanvas, ArtifactItem } from "@/components/ArtifactCanvas";
 import PlanHistory from "@/components/PlanHistory";
 import SavedArtifacts from "@/components/SavedArtifacts";
 import { CitationInspector } from "@/components/CitationInspector";
-import { KnowledgeView } from "@/components/KnowledgeView";
-import { UsageView } from "@/components/UsageView";
-import { SettingsView } from "@/components/SettingsView";
-import { AdminView } from "@/components/AdminView";
 import { AuthModal } from "@/components/AuthModal";
 import { CommandPalette } from "@/components/CommandPalette";
 import {
@@ -45,6 +42,62 @@ import {
 } from "@/lib/api";
 import { clearSession, SESSION_EXPIRED_EVENT } from "@/lib/auth";
 import { useNexusChat, NexusMessage, NexusAnnotation } from "@/hooks/useNexusChat";
+
+/**
+ * The four secondary tabs are code-split.
+ *
+ * All of them are zero-prop components that fetch their own data on mount, so
+ * splitting them is free of any wiring: nothing here has to be threaded through
+ * to make the import lazy. What it buys is that none of the 2139 lines of
+ * KnowledgeView/UsageView/SettingsView/AdminView are in the initial bundle.
+ * AdminView alone is 1162 lines and is reachable only by an admin — the previous
+ * setup shipped the entire admin console, its API helpers and its types to every
+ * signed-in user, and to every signed-out visitor who could load the chunk.
+ *
+ * `ssr: false` is the right call for all four: each one fetches in a
+ * `useEffect` on mount, so there is nothing to server-render, and skipping the
+ * pass keeps their data-fetching shape out of the server render entirely. The
+ * tradeoff is a brief fallback on first open, which is why the skeleton below
+ * reserves the same vertical rhythm the panels use rather than collapsing to a
+ * spinner in the middle of an otherwise stable layout.
+ */
+const TabSkeleton: React.FC<{ rows?: number }> = ({ rows = 4 }) => (
+  <div
+    className="mx-auto w-full max-w-3xl space-y-4 p-6"
+    role="status"
+    aria-live="polite"
+    aria-busy="true"
+  >
+    <span className="sr-only">Loading…</span>
+    {Array.from({ length: rows }, (_, i) => (
+      <div
+        key={i}
+        className="h-20 animate-pulse rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]"
+        style={{ animationDelay: `${i * 70}ms` }}
+      />
+    ))}
+  </div>
+);
+
+const KnowledgeView = dynamic(
+  () => import("@/components/KnowledgeView").then((m) => m.KnowledgeView),
+  { ssr: false, loading: () => <TabSkeleton rows={3} /> },
+);
+
+const UsageView = dynamic(
+  () => import("@/components/UsageView").then((m) => m.UsageView),
+  { ssr: false, loading: () => <TabSkeleton /> },
+);
+
+const SettingsView = dynamic(
+  () => import("@/components/SettingsView").then((m) => m.SettingsView),
+  { ssr: false, loading: () => <TabSkeleton rows={5} /> },
+);
+
+const AdminView = dynamic(
+  () => import("@/components/AdminView").then((m) => m.AdminView),
+  { ssr: false, loading: () => <TabSkeleton rows={6} /> },
+);
 
 function mapServerMessage(m: ConversationMessage): MessageItem {
   return {
@@ -492,6 +545,12 @@ export default function AppPage() {
       console.warn("Plan approval failed:", err);
     } finally {
       setPlanBusy(false);
+      // Consume the task. It is set *before* the draft request, so a failed
+      // draft left it populated; and it was never cleared at all, so approving
+      // any later plan card re-sent the previous task as a brand-new agent
+      // message. Clear it on every exit path -- on success it has been consumed,
+      // and on failure replaying a stale task is worse than doing nothing.
+      setPendingPlanTask("");
     }
   };
 
@@ -506,12 +565,16 @@ export default function AppPage() {
       console.warn("Plan rejection failed:", err);
     } finally {
       setPlanBusy(false);
+      // A rejected plan must not leave its originating task armed for the next
+      // approval.
+      setPendingPlanTask("");
     }
   };
 
   const handleDismissPlan = () => {
     if (planBusy) return;
     setPendingPlan(null);
+    setPendingPlanTask("");
   };
 
   /**

@@ -1,8 +1,10 @@
 "use client";
 
 import React from "react";
+import { createPortal } from "react-dom";
 import { X, BookOpen, ExternalLink, Sparkles, Copy, Check } from "lucide-react";
 import { CitationItem } from "./ChatArea";
+import { useCopyToggle } from "@/lib/clipboard";
 
 export interface CitationInspectorProps {
   citation: CitationItem | null;
@@ -13,25 +15,53 @@ export const CitationInspector: React.FC<CitationInspectorProps> = ({
   citation,
   onClose,
 }) => {
-  const [copied, setCopied] = React.useState(false);
+  const [copied, copySnippet] = useCopyToggle();
+
+  // Escape dismisses. This panel was previously a plain absolutely-positioned
+  // `fixed` div with no key handling, no dialog semantics and no focus
+  // management, so a keyboard user could open a citation and have no way to
+  // close it except reaching for the X button by tab.
+  React.useEffect(() => {
+    if (!citation) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [citation, onClose]);
 
   if (!citation) return null;
 
   const matchPercent = Math.min(100, Math.max(1, Math.round(citation.score * 100)));
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(citation.content_snippet);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const handleCopy = () => copySnippet(citation.content_snippet);
 
-  return (
-    <div className="fixed inset-y-0 right-0 w-full sm:w-96 z-40 bg-[var(--bg-surface)] border-l border-[var(--border-subtle)] shadow-2xl flex flex-col transition-transform duration-200">
+  // Portalled to <body>: the panel is `position: fixed`, so it currently
+  // depends on no ancestor establishing a containing block. Adding a single
+  // `transform`/`filter`/`will-change` to any chat-shell wrapper would silently
+  // clip it, which is invisible at review time. Portalling removes the
+  // dependency entirely and also stops the panel from being unmounted when the
+  // user switches tabs -- it used to live inside the chat subtree, so opening a
+  // citation and then clicking "Settings" made it vanish while its state
+  // survived.
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby="citation-inspector-title"
+      className="fixed inset-y-0 right-0 w-full sm:w-96 z-40 bg-[var(--bg-surface)] border-l border-[var(--border-subtle)] shadow-2xl flex flex-col transition-transform duration-200"
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)]">
         <div className="flex items-center gap-2 min-w-0">
           <BookOpen className="w-4 h-4 text-[var(--accent-ink)] shrink-0" />
-          <h3 className="text-xs font-semibold text-[var(--text-primary)] truncate">
+          <h3
+            id="citation-inspector-title"
+            className="text-xs font-semibold text-[var(--text-primary)] truncate"
+          >
             Grounding Source
           </h3>
         </div>
@@ -39,6 +69,7 @@ export const CitationInspector: React.FC<CitationInspectorProps> = ({
           onClick={onClose}
           className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-main)] transition-colors"
           title="Close Inspector"
+          aria-label="Close citation inspector"
         >
           <X className="w-4 h-4" />
         </button>
@@ -99,6 +130,7 @@ export const CitationInspector: React.FC<CitationInspectorProps> = ({
           </span>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };

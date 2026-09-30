@@ -104,6 +104,89 @@ describe("useNexusChat", () => {
     expect(result.current.messages[0].content).toBe("Hello!")
   })
 
+  it("concatenates multiple text deltas in order", async () => {
+    // Every existing fixture sends a single `0:` frame, so nothing covered the
+    // case that actually happens in production: a real answer arrives as dozens
+    // of deltas. If the reader replaced content instead of appending, a
+    // single-delta test would still pass and the user would see only the last
+    // token of every sentence.
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse(
+          chatStreamBody(["Hello", ", ", "this ", "is ", "Nexus."]),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        )
+      )
+    )
+    const { result } = renderHook(() => useNexusChat())
+
+    await act(async () => {
+      await result.current.sendMessage("Hello!")
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    const assistant = result.current.messages.find((m) => m.role === "assistant")
+    expect(assistant?.content).toBe("Hello, this is Nexus.")
+  })
+
+  it("reassembles a frame split across two network chunks", async () => {
+    // The important one. `reader.read()` returns whatever bytes happened to
+    // arrive, which is *not* aligned to the SSE frame boundaries — a frame can
+    // and does straddle a chunk. The reader has to hold the incomplete tail in a
+    // buffer and prepend it to the next chunk, otherwise the split frame is
+    // parsed as two malformed lines and that text silently vanishes from the
+    // answer. Every pre-existing fixture delivered the whole body in one chunk,
+    // so this path was entirely untested.
+    const encoder = new TextEncoder()
+    server.use(
+      http.post("/api/chat", () => {
+        const stream = new ReadableStream({
+          start(controller) {
+            // Deliberately cut mid-frame and mid-token.
+            controller.enqueue(encoder.encode('0:"Hello from N'))
+            controller.enqueue(encoder.encode('exus."\n'))
+            controller.close()
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        })
+      })
+    )
+    const { result } = renderHook(() => useNexusChat())
+
+    await act(async () => {
+      await result.current.sendMessage("Hello!")
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    const assistant = result.current.messages.find((m) => m.role === "assistant")
+    expect(assistant?.content).toBe("Hello from Nexus.")
+  })
+
+  it("keeps a trailing frame that arrives without a final newline", async () => {
+    // The reader pops the last element of the split as its buffer and processes
+    // it after the loop ends. A backend that closes the stream without the
+    // trailing newline — or a proxy that trims it — must not lose that last
+    // delta, which is typically the end of the answer.
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse('0:"Complete answer"', {
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        })
+      )
+    )
+    const { result } = renderHook(() => useNexusChat())
+
+    await act(async () => {
+      await result.current.sendMessage("Hello!")
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    const assistant = result.current.messages.find((m) => m.role === "assistant")
+    expect(assistant?.content).toBe("Complete answer")
+  })
+
   it("surfaces hitl_request annotations as pendingHITL", async () => {
     server.use(
       http.post("/api/chat", () =>

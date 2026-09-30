@@ -8,7 +8,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { sendHITLFeedback } from "@/lib/api";
+import { fetchWithSessionRecovery, sendHITLFeedback } from "@/lib/api";
 
 export interface ToolCallAnnotation {
   type: "tool_call";
@@ -160,6 +160,12 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       const imageDataUrl = sendOptions?.imageDataUrl;
       if (!trimmed && !imageDataUrl) return;
       if (loadingRef.current) return;
+      // Claim the in-flight slot synchronously. `loadingRef` is normally synced
+      // from `isLoading` by an effect, which runs *after* commit -- so between
+      // this guard and that effect two `sendMessage` calls in the same tick both
+      // saw `false` and both sent, duplicating the user turn. The ref is the
+      // guard's source of truth; `setIsLoading` is only the render-facing mirror.
+      loadingRef.current = true;
 
       setError(null);
       setPendingHITL(null);
@@ -227,7 +233,14 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           return { role: m.role, content: m.content };
         });
 
-        const response = await fetch("/api/chat", {
+        // Session-recovering fetch, not a bare `fetch`. The chat stream is the
+        // one authenticated call that cannot go through the JSON helpers (it
+        // consumes a ReadableStream), and it used to use plain `fetch`, which
+        // meant an expired access token surfaced as a raw "Backend returned 401"
+        // banner instead of the transparent refresh every other call gets. The
+        // route now also returns a real 401 rather than a 200 with an error
+        // frame, so this recovery path can actually fire.
+        const response = await fetchWithSessionRecovery("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
@@ -392,6 +405,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         setError(err instanceof Error ? err : new Error("Chat stream failed"));
       } finally {
         setIsLoading(false);
+        loadingRef.current = false;
         abortRef.current = null;
       }
     },
@@ -409,6 +423,10 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   const stop = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    // Release the in-flight guard synchronously, exactly as `reload` does.
+    // Otherwise a stop immediately followed by a send is swallowed, because
+    // the effect that mirrors `isLoading` into this ref has not run yet.
+    loadingRef.current = false;
     setIsLoading(false);
   }, []);
 
@@ -482,14 +500,25 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     ) => {
       const request = pendingHITL;
       if (!request) return;
+      setError(null);
       try {
         await sendHITLFeedback({
           threadId: request.thread_id,
           action,
           data: data ?? (action === "modify" ? { approved: true } : {}),
         });
-      } finally {
+        // Only retire the card once the backend has actually recorded the
+        // decision. Clearing it in a `finally` destroyed the Approve/Deny UI on
+        // any transient failure (offline, 5xx, timeout), silently dropping a
+        // human approval with no error and no way to retry it -- the one flow in
+        // this product that must not be lossy.
         setPendingHITL(null);
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err
+            : new Error("Could not submit the approval. Please try again."),
+        );
       }
     },
     [pendingHITL]

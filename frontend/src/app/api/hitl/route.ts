@@ -37,6 +37,11 @@ export async function POST(req: NextRequest) {
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         body: JSON.stringify({ action, data }),
+        // An approval decision is the one request in this product that must not
+        // hang silently: without a ceiling a stalled backend holds the socket
+        // and the user's Approve click appears to do nothing. 30s matches the
+        // ceiling lib/proxy.ts applies to every other upstream call.
+        signal: AbortSignal.timeout(30_000),
       }
     );
 

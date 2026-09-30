@@ -4,6 +4,8 @@
  *
  * Reference: https://sdk.vercel.ai/docs/ai-sdk-ui/stream-protocol
  */
+import "server-only";
+
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { TOKEN_COOKIE } from "@/lib/auth";
@@ -16,10 +18,29 @@ const BACKEND_URL =
 
 export const runtime = "nodejs"; // Must be Node.js for native fetch streaming
 
+/**
+ * Hard ceiling on one streamed answer.
+ *
+ * `req.signal` already handles the *client* walking away, but nothing bounds the
+ * server side: a backend that accepts the request and then stalls — no `data:`
+ * frames, no close — held the socket and spun the read loop until the platform
+ * limit, and a stalled answer is indistinguishable from a slow one for as long
+ * as it lasts. This is far more generous than the JSON routes' 30s because a
+ * research-mode answer legitimately runs for minutes; it exists to convert an
+ * indefinite hang into a legible error, not to interrupt healthy work.
+ */
+const STREAM_TIMEOUT_MS = 10 * 60 * 1000;
+
 // Backend conversations are UUIDs; "new" signals auto-creation. Anything else
 // is rejected up front so malformed client payloads never reach the backend.
 const CONVERSATION_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Upstream stream endpoint for a conversation, or a fresh one when `new`. */
+function backendStreamUrl(conversationId: unknown): string {
+  const id = typeof conversationId === "string" && conversationId ? conversationId : "new";
+  return `${BACKEND_URL}/api/v1/conversations/${id}/stream`;
+}
 
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -65,43 +86,78 @@ export async function POST(req: NextRequest) {
   const cookieStore = await cookies();
   const accessToken = cookieStore.get(TOKEN_COOKIE)?.value;
 
+  // Open the upstream stream *before* committing to a response.
+  //
+  // This used to happen inside the ReadableStream's start(), which meant the
+  // 200 status was already on the wire by the time we could learn the backend
+  // had rejected us. A 401 was therefore delivered as HTTP 200 carrying a "3:"
+  // error frame, so the client's 401-recovery path never fired: an hour into a
+  // session, sending a message produced a raw "Backend returned 401" banner
+  // instead of the silent refresh every other call performs. It also reported
+  // auth failures as successes to anything watching status codes.
+  //
+  // Both signals are combined so pressing Stop still cancels the upstream LLM
+  // call (token billing) while a stalled backend cannot hold the socket open
+  // indefinitely. `req.signal` is filtered rather than passed through: a real
+  // NextRequest always has one, but `AbortSignal.any` throws outright on an
+  // undefined member, so a caller that omits it would take the route down.
+  const upstreamSignal = AbortSignal.any(
+    [req.signal, AbortSignal.timeout(STREAM_TIMEOUT_MS)].filter(
+      (s): s is AbortSignal => s !== undefined
+    )
+  );
+
+  let backendRes: Response;
+  try {
+    backendRes = await fetch(backendStreamUrl(conversationId), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({
+        messages,
+        mode: streamMode,
+        stream: true,
+        ...(typeof planPreamble === "string" && planPreamble
+          ? { planPreamble }
+          : {}),
+      }),
+      signal: upstreamSignal,
+    });
+  } catch (err) {
+    // A client abort is not a failure to report: the user pressed Stop.
+    if (err instanceof Error && err.name === "AbortError") {
+      return new NextResponse(null, { status: 499 });
+    }
+    const timedOut = err instanceof Error && err.name === "TimeoutError";
+    return NextResponse.json(
+      { detail: timedOut ? "backend_timeout" : "backend_unavailable" },
+      { status: 504, headers: timedOut ? { "Retry-After": "5" } : undefined }
+    );
+  }
+
+  // Real status codes for pre-stream failures, so the client can tell "your
+  // session expired" (worth a refresh) from "the backend is unwell" (not worth
+  // retrying) instead of parsing an opaque string out of a 200 response.
+  if (!backendRes.ok) {
+    return NextResponse.json(
+      { detail: `backend_rejected_${backendRes.status}` },
+      { status: backendRes.status }
+    );
+  }
+  if (!backendRes.body) {
+    return NextResponse.json({ detail: "backend_stream_empty" }, { status: 502 });
+  }
+
   // Stream data annotations alongside text (tool calls, citations, reasoning)
   const encoder = new TextEncoder();
 
   const readableStream = new ReadableStream({
     async start(controller) {
       try {
-        const backendRes = await fetch(
-          `${BACKEND_URL}/api/v1/conversations/${conversationId || "new"}/stream`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-            },
-            body: JSON.stringify({
-              messages,
-              mode: streamMode,
-              stream: true,
-              ...(typeof planPreamble === "string" && planPreamble
-                ? { planPreamble }
-                : {}),
-            }),
-            // Forward the client abort so pressing Stop cancels the upstream
-            // LLM stream instead of draining it to completion (token billing).
-            signal: req.signal,
-          }
-        );
-
-        if (!backendRes.ok || !backendRes.body) {
-          // Return structured error in Vercel AI SDK format
-          const errorChunk = `3:"Backend returned ${backendRes.status}"\n`;
-          controller.enqueue(encoder.encode(errorChunk));
-          controller.close();
-          return;
-        }
-
-        const reader = backendRes.body.getReader();
+        // The upstream response was opened above, before the 200 was committed.
+        const reader = backendRes.body!.getReader();
         const textDecoder = new TextDecoder();
         let buffer = "";
         let doneReceived = false;

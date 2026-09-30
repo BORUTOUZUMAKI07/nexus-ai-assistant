@@ -154,7 +154,7 @@ frontend/src/
 │   ├── page.tsx             # landing page
 │   ├── signin/page.tsx      # SSO sign-in
 │   ├── app/page.tsx         # the main chat shell (sidebar + views)
-│   ├── layout.tsx           # root layout (proxies to BFF)
+│   ├── layout.tsx           # root layout: fonts, theme-init script, root metadata
 │   └── api/**/route.ts      # BFF route handlers → proxy to backend
 ├── components/              # ChatArea, ChatInput, Sidebar, CommandPalette,
 │   │                        #   ArtifactCanvas, KnowledgeView, SettingsView,

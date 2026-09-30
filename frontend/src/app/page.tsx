@@ -1,4 +1,6 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+import { CurrentYear } from "@/components/CurrentYear";
 import {
   ArrowRight,
   BarChart2,
@@ -17,6 +19,26 @@ import {
 } from "lucide-react";
 
 const GRADIENT_TEXT = "text-gradient";
+
+/**
+ * The landing page is the one route that *should* be indexed.
+ *
+ * The root layout marks the app `noindex` because everything behind `/` is an
+ * authenticated shell — a crawl hint only, the real gate is the session check in
+ * src/proxy.ts. That default would otherwise apply here too, hiding the only
+ * public page in the product, so it is re-enabled explicitly at this route.
+ */
+export const metadata: Metadata = {
+  title: "Nexus AI — Agentic Production Assistant",
+  description:
+    "Research, code, and execute with an agentic assistant: live web search, hybrid RAG over your own documents, sandboxed code execution, and human-in-the-loop approvals on every risky action.",
+  robots: { index: true, follow: true },
+  alternates: { canonical: "/" },
+  openGraph: {
+    type: "website",
+    url: "/",
+  },
+};
 
 function BrandMark({ size = 32 }: { size?: number }) {
   return (
@@ -714,7 +736,9 @@ function Footer() {
         </div>
 
         <div className="mt-12 flex flex-col items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-6 text-[12.5px] text-[var(--text-faint)] sm:flex-row">
-          <span>© {new Date().getFullYear()} Nexus AI. All rights reserved.</span>
+          <span>
+            © <CurrentYear /> Nexus AI. All rights reserved.
+          </span>
           <span className="inline-flex items-center gap-2">
             Built with
             <span className={GRADIENT_TEXT}>
