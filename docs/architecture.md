@@ -149,8 +149,9 @@ Checkpointing uses `AsyncPostgresSaver` + `InMemoryStore`, with full
   assistant deltas, thinking/CoT blocks, tool events, and HITL interrupts.
   `POST /conversations/{id}/messages` is the single-shot synchronous variant.
 - **Auth** — JWT (HS256 only; signed + verified by jose), refresh tokens,
-  optional TOTP 2FA, email verification, OAuth (GET `/oauth/login` for the
-  provider URL, POST `/oauth/callback` for the code exchange).
+  optional TOTP 2FA, email verification, per-provider OAuth (Google + GitHub;
+  GET `/oauth/{provider}` for the provider URL, POST `/oauth/{provider}/callback`
+  for the code exchange).
 - **MCP** — every `/mcp` request is gated by a middleware: Bearer JWT,
   `nexus_access_token` cookie, or `x-nexus-mcp-key` shared key.
 - **Rate limiting & idempotency** — Redis-backed sliding-window limiter and

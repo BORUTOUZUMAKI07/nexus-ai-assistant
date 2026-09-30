@@ -46,11 +46,18 @@ These were each confirmed first-hand and are intentional:
   the unpatched PYSEC-2026-1325 Minerva advisory); the app only ever signs
   HS256 (`JWT_ALGORITHM` in `core/config.py`). CI's `pip-audit` ignores that
   one advisory. Do **not** add ES* algorithms without re-reviewing ecdsa.
-- **OAuth is a pure GET-login / POST-callback flow**: `GET /auth/oauth/login`
-  returns the provider authorization URL (PKCE), and
-  `POST /auth/oauth/callback` accepts the code the provider hands back — both
-  404 while SSO is unconfigured. Verified in `api/v1/auth.py` (`oauth_login`,
-  `oauth_callback`); there is **no** POST `/oauth/login` route.
+- **OAuth is provider-based, GET-login / POST-callback**: two first-class SSO
+  providers — Google (OIDC; the userinfo `email_verified` claim gates the
+  login) and GitHub (OAuth2; a verified email — primary preferred — is
+  re-fetched from `/user/emails` because GitHub has no trustable userinfo
+  claim).
+  `GET /auth/oauth/{provider}` returns the provider authorization URL (PKCE)
+  and `POST /auth/oauth/{provider}/callback` accepts the code the provider
+  hands back — both 404 while that provider (`google` | `github`) is
+  unconfigured or unknown. Verified in `api/v1/auth.py` +
+  `services/oauth_service.py` (`SSOProviderRegistry` with
+  `GoogleOAuthProvider`/`GitHubOAuthProvider`); there is **no** flat
+  `/auth/oauth/login` route.
 - **`except Exception: pass` appears 7 times in `backend/app/` and is
   deliberate** — each is a fail-open or fail-silent seam (e.g., telemetry,
   non-critical caches). Don't blanket-remove them.

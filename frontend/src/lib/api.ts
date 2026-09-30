@@ -839,6 +839,9 @@ export async function loginUser(payload: {
   return (await res.json()) as { ok: boolean };
 }
 
+/** The OAuth identity providers the sign-in page offers. */
+export type OAuthProviderName = "google" | "github";
+
 export interface SsoAuthorizationUrl {
   authorization_url: string;
   state: string;
@@ -846,12 +849,13 @@ export interface SsoAuthorizationUrl {
 }
 
 /**
- * Asks the server-side proxy for the OIDC authorize URL. The page then sends
- * the whole browser to `authorization_url`; the provider bounces back to
- * /api/auth/oauth/callback where the httpOnly session cookies are written.
+ * Asks the server-side proxy for a provider's authorize URL. The page then
+ * sends the whole browser to `authorization_url`; the provider bounces back to
+ * /api/auth/oauth/{provider}/callback where the httpOnly session cookies are
+ * written.
  */
-export async function ssoLogin(): Promise<SsoAuthorizationUrl> {
-  const res = await nexusFetch(`${API_BASE}/auth/oauth`, { method: "GET" });
+export async function ssoLogin(provider: OAuthProviderName): Promise<SsoAuthorizationUrl> {
+  const res = await nexusFetch(`${API_BASE}/auth/oauth/${provider}`, { method: "GET" });
   if (!res.ok) {
     throw await parseError(res, "Single sign-on is not configured.");
   }

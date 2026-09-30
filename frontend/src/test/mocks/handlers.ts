@@ -320,7 +320,7 @@ export const handlers = [
     return HttpResponse.json({ ok: true })
   }),
 
-  http.get("/api/auth/oauth", () =>
+  http.get("/api/auth/oauth/:provider", () =>
     HttpResponse.json({
       authorization_url:
         "https://idp.example/authorize?response_type=code&client_id=nexus-test&state=test-sso-state&code_challenge_method=S256",
@@ -331,7 +331,7 @@ export const handlers = [
 
   // IdP redirect destination: the proxy route writes httpOnly cookies and
   // bounces to /app — no JSON body reaches the page script.
-  http.get("/api/auth/oauth/callback", () => HttpResponse.json({})),
+  http.get("/api/auth/oauth/:provider/callback", () => HttpResponse.json({})),
 
   http.post("/api/auth/refresh", () =>
     HttpResponse.json({

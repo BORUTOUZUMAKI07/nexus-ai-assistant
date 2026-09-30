@@ -169,14 +169,17 @@ def get_auth_service(session: AsyncSession = Depends(get_db)) -> "AuthService":
     return AuthService(session)
 
 
-def get_oauth_service() -> "OAuthService":
-    """Inject the OIDC SSO adapter (stateless; configured from settings).
+def get_oauth_service(request: Request) -> "OAuthService":
+    """Inject the provider adapter for the route's ``{provider}`` path segment.
 
-    SSO is disabled (the /auth/oauth/* routes 404) until OAUTH_CLIENT_ID and
-    the provider endpoints are configured via environment.
+    Unknown provider names yield a never-enabled service, so the
+    /auth/oauth/{provider}* routes answer 404 (exactly as they do for a
+    registered provider whose client id is unconfigured) instead of guessing
+    at a path.
     """
     from backend.app.services.oauth_service import OAuthService
-    return OAuthService.from_settings()
+    provider = str(request.path_params.get("provider", ""))
+    return OAuthService.for_provider(provider)
 
 
 def get_conversation_service(session: AsyncSession = Depends(get_db)) -> "ConversationService":

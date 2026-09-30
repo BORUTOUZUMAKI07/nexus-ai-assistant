@@ -74,21 +74,23 @@ class Settings(BaseSettings):
     # restores the strict behaviour.
     REFRESH_REUSE_GRACE_SECONDS: int = Field(default=10)
 
-    # ── OAuth / OIDC SSO (Authorization Code + PKCE) ─────────────────────────
-    # Generic OpenID Connect client (Google, GitHub, Azure AD, Keycloak…).
-    # Leave OAUTH_CLIENT_ID empty to disable SSO: /auth/oauth/* then return
-    # 404 and the frontend hides the "Continue with SSO" button.
-    OAUTH_CLIENT_ID: str | None = Field(default=None, description="OIDC client id")
-    OAUTH_CLIENT_SECRET: str | None = Field(default=None, description="OIDC client secret")
-    OAUTH_AUTHORIZE_URL: str | None = Field(default=None, description="OIDC /authorize endpoint")
-    OAUTH_TOKEN_URL: str | None = Field(default=None, description="OIDC /token endpoint")
-    OAUTH_USERINFO_URL: str | None = Field(default=None, description="OIDC userinfo endpoint")
-    OAUTH_SCOPE: str = Field(default="openid profile email", description="OIDC scopes")
-    # Public origin of THIS backend: authlib builds the registered
-    # redirect_uri = {OAUTH_BACKEND_URL}/api/v1/auth/oauth/callback from it.
-    OAUTH_BACKEND_URL: str = Field(
-        default="http://localhost:8000",
-        description="Backend public origin used to build the OAuth redirect_uri",
+    # ── OAuth / SSO (Authorization Code + PKCE) ────────────────────────────────
+    # Two first-class providers: Google (OIDC; the userinfo `email_verified`
+    # claim gates the login) and GitHub (OAuth2; a verified email — primary
+    # preferred — is fetched from /user/emails, which GitHub's userinfo lacks).
+    # Leave a provider's client id empty to disable it: /auth/oauth/{provider}
+    # then 404s and the frontend hides that provider's button.
+    GOOGLE_OAUTH_CLIENT_ID: str | None = Field(default=None, description="Google OAuth client id")
+    GOOGLE_OAUTH_CLIENT_SECRET: str | None = Field(default=None, description="Google OAuth client secret")
+    GOOGLE_OAUTH_REDIRECT_URI: str = Field(
+        default="http://localhost:8000/api/v1/auth/oauth/google/callback",
+        description="Google redirect_uri — must match the authorized URI in Google Cloud Console",
+    )
+    GITHUB_OAUTH_CLIENT_ID: str | None = Field(default=None, description="GitHub OAuth client id")
+    GITHUB_OAUTH_CLIENT_SECRET: str | None = Field(default=None, description="GitHub OAuth client secret")
+    GITHUB_OAUTH_REDIRECT_URI: str = Field(
+        default="http://localhost:8000/api/v1/auth/oauth/github/callback",
+        description="GitHub redirect_uri — must match the authorized URI in the GitHub OAuth App",
     )
     # Lifetime of the stored PKCE state codes (one-time use).
     OAUTH_STATE_TTL_SECONDS: int = Field(default=600, description="PKCE state/verifier lifetime")

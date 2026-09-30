@@ -8,8 +8,11 @@ import {
 } from "@/lib/auth";
 import { backendFetch } from "@/lib/proxy";
 
+type Ctx = { params: Promise<{ provider: string }> };
+
 /**
- * GET /api/auth/oauth/callback — the IdP redirects browsers here after SSO.
+ * GET /api/auth/oauth/[provider]/callback — the IdP redirects browsers here
+ * after sign-in.
  *
  * The provider ships `?code&state` on this URL. The proxy completes the
  * authorization-code + PKCE exchange with the backend, then persists the
@@ -22,7 +25,8 @@ import { backendFetch } from "@/lib/proxy";
  *   * provider errors  — bounce to /signin with an `error` query so the page
  *     can render the message without ever leaking tokens to the browser.
  */
-export async function GET(req: NextRequest) {
+export async function GET(req: NextRequest, { params }: Ctx) {
+  const { provider } = await params;
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code") ?? "";
   const state = searchParams.get("state") ?? "";
@@ -32,7 +36,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const res = await backendFetch("/auth/oauth/callback", {
+  const res = await backendFetch(`/auth/oauth/${provider}/callback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code, state }),

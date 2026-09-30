@@ -35,7 +35,6 @@ dependencies = [
     # algorithms are ever added, re-review ecdsa before enabling them.
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt,argon2]>=1.7.4",
-    "authlib>=1.3.0",
     "pyotp>=2.9.0",
     "cryptography>=42.0.0",
     
