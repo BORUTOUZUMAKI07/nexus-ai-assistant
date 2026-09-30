@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { TOKEN_COOKIE } from "@/lib/auth";
+import { MAX_AUDIO_UPLOAD_BYTES, rejectOversizedBody } from "@/lib/upload-limits";
 
 export const runtime = "nodejs";
 
@@ -17,6 +18,17 @@ const BACKEND_URL =
 export async function POST(req: NextRequest) {
   const cookieStore = await cookies();
   const accessToken = cookieStore.get(TOKEN_COOKIE)?.value;
+
+  // Judged before `formData()` buffers the body into this process. Unlike the
+  // file upload path there is no backend ceiling to fall back on here —
+  // api/v1/audio.py does a bare `await file.read()` — so this is the only place
+  // the size is bounded at all.
+  const tooLarge = rejectOversizedBody(
+    req.headers.get("content-length"),
+    MAX_AUDIO_UPLOAD_BYTES,
+    "Audio",
+  );
+  if (tooLarge) return tooLarge;
 
   // Read the multipart form data from the client
   const formData = await req.formData();
@@ -36,6 +48,12 @@ export async function POST(req: NextRequest) {
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
       body: backendForm,
+      // Transcription is billable and slow, so it gets a longer ceiling than a
+      // JSON round-trip -- but not an infinite one. Without a signal, a backend
+      // that accepts the upload and stalls holds the socket and the request
+      // never returns, so the recording is silently lost and the call is never
+      // billed. 120s is generous for a short voice note.
+      signal: AbortSignal.timeout(120_000),
     });
 
     if (!res.ok) {
@@ -46,7 +64,15 @@ export async function POST(req: NextRequest) {
     const data = (await res.json()) as { text: string };
     return NextResponse.json(data);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Transcription proxy error";
-    return NextResponse.json({ detail: msg }, { status: 502 });
+    // Do not forward the raw error message. Every sibling route returns a
+    // generic string here, and this one was the only place leaking an internal
+    // `err.message` -- inconsistent even though the practical content is just
+    // "fetch failed". Report the timeout distinctly so a slow backend is not
+    // mistaken for an unreachable one.
+    const timedOut = err instanceof Error && err.name === "TimeoutError";
+    return NextResponse.json(
+      { detail: timedOut ? "Transcription timed out" : "Transcription proxy error" },
+      { status: timedOut ? 504 : 502 }
+    );
   }
 }

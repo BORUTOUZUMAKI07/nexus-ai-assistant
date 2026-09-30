@@ -49,7 +49,16 @@ function cookieStore(jar: Record<string, string> = SESSION) {
 // /api/hitl read the auth cookie themselves, so `cookies()` needs a request scope
 // or the handler throws "cookies was called outside a request scope" before it
 // forwards anything. Individual tests re-mock this with their own jar.
-vi.mock("next/headers", () => ({ cookies: async () => cookieStore() }))
+//
+// `headers` is mocked alongside it because lib/proxy reads the Origin header on
+// mutating requests for the CSRF check. Returning no Origin makes the check
+// inert by default, which is what a same-origin request looks like, so these
+// tests keep exercising forwarding rather than the guard. The guard itself is
+// covered directly in src/test/lib/proxy.test.ts.
+vi.mock("next/headers", () => ({
+  cookies: async () => cookieStore(),
+  headers: async () => ({ get: () => undefined }),
+}))
 
 /** A Response the mocked helpers can hand back to a handler. */
 function fakeBackendResponse(status = 200, body: unknown = { ok: true }) {
@@ -616,6 +625,7 @@ describe("proxyJson propagates backend status instead of flattening it", () => {
     // look anonymous, which would make this test pass for the wrong reason.
     vi.doMock("next/headers", () => ({
       cookies: async () => cookieStore({ nexus_access_token: "stale-token" }),
+      headers: async () => ({ get: () => undefined }),
     }))
     const { backendFetch } = await import("@/lib/proxy")
 
@@ -661,7 +671,10 @@ describe("auth cookie lifetimes follow the tokens they carry", () => {
       backendFetch: (...args: unknown[]) => backendFetch(...args),
       proxyJson: (...args: unknown[]) => proxyJson(...args),
     }))
-    vi.doMock("next/headers", () => ({ cookies: async () => cookieStore() }))
+    vi.doMock("next/headers", () => ({
+      cookies: async () => cookieStore(),
+      headers: async () => ({ get: () => undefined }),
+    }))
     backendFetch.mockImplementation(async () => fakeBackendResponse())
   })
 

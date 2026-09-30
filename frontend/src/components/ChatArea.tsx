@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useCallback, useEffect, useRef } from "react";
+import { useCopyFeedback, useCopyToggle } from "@/lib/clipboard";
 import {
   User,
   Bot,
@@ -278,13 +279,9 @@ const PlanReviewCard: React.FC<{
 };
 
 const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, code }) => {
-  const [copied, setCopied] = useState(false);
+  const [copied, copyCode] = useCopyToggle();
 
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const handleCopyCode = () => copyCode(code);
 
   return (
     <div className="my-3 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--code-block-bg)] dark-island font-mono text-xs">
@@ -334,13 +331,9 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
  * change with those constraints designed for, rather than bolted on here.
  */
 const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
-  const [copied, setCopied] = useState(false);
+  const [copied, copyCode] = useCopyToggle();
 
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const handleCopyCode = () => copyCode(code);
 
   return (
     <div className="my-3 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--code-block-bg)] dark-island">
@@ -418,6 +411,33 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
   // Regex to split on code fences
   const parts = content.split(/(```[\w-]*\n[\s\S]*?```)/g);
 
+  // Stable identity for each fenced block.
+  //
+  // Keying these by `index` was wrong in a way that only shows up mid-stream.
+  // The split pattern matches a *closed* fence, so while the model is writing
+  // the first answer the array is short; the instant a closing ``` arrives the
+  // regex matches and the array grows by two, shifting every later index. React
+  // then re-binds `key={index}` to a different component instance, so a
+  // "Copied!" badge a user had just clicked jumped onto a different code block
+  // and the one they clicked reverted.
+  //
+  // Counting fences in document order is stable under that growth, because
+  // streamed content is append-only: text before a given fence never changes, so
+  // the Nth fence is always the Nth fence. Deriving the number with a
+  // `matchAll` over the whole message (rather than incrementing during `.map`)
+  // keeps the mapping independent of the array's current length.
+  const fenceOrdinal = (() => {
+    const ordinals = new Map<number, number>();
+    let seen = 0;
+    parts.forEach((part, i) => {
+      if (/^```[\w-]*\n[\s\S]*?```$/.test(part)) {
+        ordinals.set(i, seen);
+        seen += 1;
+      }
+    });
+    return ordinals;
+  })();
+
   return (
     <div className="space-y-2">
       {parts.map((part, index) => {
@@ -428,10 +448,11 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
         if (codeMatch) {
           const lang = codeMatch[1]?.trim() || "code";
           const codeText = codeMatch[2];
+          const key = `fence-${fenceOrdinal.get(index) ?? index}`;
           if (lang.toLowerCase() === "mermaid") {
-            return <MermaidBlock key={index} code={codeText} />;
+            return <MermaidBlock key={key} code={codeText} />;
           }
-          return <CodeBlock key={index} language={lang} code={codeText} />;
+          return <CodeBlock key={key} language={lang} code={codeText} />;
         }
 
         // Detect and group Markdown tables
@@ -612,12 +633,42 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onDismissPlan,
   planBusy,
 }) => {
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedId, copyText] = useCopyFeedback();
   const [hitlOpen, setHitlOpen] = useState(false);
   const [hitlNote, setHitlNote] = useState("");
   const [resolving, setResolving] = useState(false);
   const [resolved, setResolved] = useState<"approve" | "reject" | "modify" | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+
+  // Auto-scroll. Without this the transcript never follows a streamed answer:
+  // tokens arrive one delta at a time, so the user had to scroll manually to
+  // read the response the model was producing.
+  //
+  // The `stick` guard is what makes this safe to add: once the user scrolls up
+  // to re-read something, we stop yanking them to the bottom and only resume
+  // when they come back. `requestAnimationFrame` waits for layout so we measure
+  // the *rendered* height, not the height before the new token painted.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+
+  const lastContent = messages[messages.length - 1]?.content ?? "";
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [messages.length, lastContent]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // 80px of slack: treat "close enough to the bottom" as pinned so a small
+    // overscroll or a sub-pixel rounding does not flip the flag off.
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
 
   // Find the last assistant message index (for streaming cursor)
   const lastAssistantIdx = messages.reduce(
@@ -642,11 +693,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     window.speechSynthesis.speak(utt);
   }, [speakingId]);
 
-  const handleCopy = (id: string, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
+  const handleCopy = (id: string, text: string) => copyText(id, text);
 
   const resolve = async (
     action: "approve" | "reject" | "modify",
@@ -659,13 +706,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       setResolved(action);
       setHitlOpen(false);
       setHitlNote("");
+    } catch {
+      // The hook now rethrows nothing on failure -- it records the error and
+      // deliberately keeps `pendingHITL` so the card stays actionable. Guard
+      // here too so a rejection can never mark the decision as resolved and
+      // collapse the card the user still needs.
     } finally {
       setResolving(false);
     }
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6 md:px-12 space-y-6">
+    <div
+      ref={scrollRef}
+      onScroll={handleScroll}
+      className="flex-1 overflow-y-auto px-4 py-6 md:px-12 space-y-6"
+    >
       {messages.length === 0 && (
         <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto py-24 space-y-4">
           <div className="w-12 h-12 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] flex items-center justify-center">

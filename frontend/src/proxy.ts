@@ -48,11 +48,41 @@ export function proxy(request: NextRequest) {
     // Preserve where they were heading so signin could return them there.
     // signin currently always lands on /app, so this is informational; keeping
     // it means a future return-honouring signin needs no change here.
-    if (pathname !== SIGNIN_PATH) signin.searchParams.set("next", pathname);
+    if (pathname !== SIGNIN_PATH) signin.searchParams.set("next", safeNext(pathname));
     return NextResponse.redirect(signin);
   }
 
   return NextResponse.next();
+}
+
+/**
+ * Constrain the `next` handoff to a path on this origin.
+ *
+ * `pathname` is read off `request.nextUrl`, so today it is always a clean
+ * same-origin path and cannot be attacker-controlled. That is an accident of
+ * *this* call site, not a property of the value, and it is exactly the kind of
+ * accident that a well-meaning refactor removes:
+ *
+ *   - if this ever switches to reading `request.nextUrl.search`, or to
+ *     `request.url` minus origin, or starts composing the value from more than
+ *     one part, `//evil.com` and `https://evil.com` become expressible;
+ *   - `?next=` is the classic open-redirect payload, and `/signin` is the single
+ *     place in this app where such a value would be consumed as a destination.
+ *
+ * Returning `""` on anything that is not a plain leading-slash path makes the
+ * hazard structurally impossible instead of merely absent, and costs one regex.
+ * The fallbacks are ordered so a protocol-relative `//host` is rejected: it does
+ * start with `/`, so a naive `startsWith("/")` check would wave it straight
+ * through, and browsers treat `//host` as an absolute URL.
+ */
+function safeNext(pathname: string): string {
+  if (!pathname.startsWith("/")) return "";
+  // Reject backslashes too: several browsers normalise `/\evil.com` to
+  // `//evil.com`, which is the same open redirect by another spelling.
+  if (pathname.startsWith("//") || pathname.includes("\\")) return "";
+  // Reject anything that could be parsed as a URL with a scheme of its own.
+  if (/^\/+[a-z][a-z0-9+.-]*:/i.test(pathname)) return "";
+  return pathname;
 }
 
 export const config = {

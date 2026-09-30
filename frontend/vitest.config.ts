@@ -31,6 +31,13 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // The real `server-only` module throws unless the bundler is resolving
+      // under the `react-server` condition. That is the guard working as
+      // intended, but Vitest imports route handlers directly in jsdom where the
+      // condition is absent, so the real import throws and fails the handler
+      // suite for a reason unrelated to handler behaviour. The client/server
+      // boundary itself is still enforced by `next build`.
+      "server-only": path.resolve(__dirname, "./src/test/stubs/server-only.ts"),
     },
   },
 })

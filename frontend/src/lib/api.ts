@@ -207,7 +207,15 @@ function sleep(ms: number): Promise<void> {
 const NO_AUTO_REFRESH_PATHS = ["/api/auth/login", "/api/auth/register", "/api/auth/refresh"];
 
 function isAuthRoute(url: string): boolean {
-  return NO_AUTO_REFRESH_PATHS.some((path) => url.includes(path));
+  // Exact match on the path, or the path with a query string appended. This
+  // used to be `url.includes(path)`, which meant any URL merely *containing*
+  // one of these substrings silently opted out of session recovery — a
+  // hypothetical `/api/auth/refresh-status`, or any path with "refresh" in it,
+  // would have been excluded from the 401 retry. Nothing collides today, which
+  // is exactly why it would have been introduced unnoticed.
+  return NO_AUTO_REFRESH_PATHS.some(
+    (path) => url === path || url.startsWith(`${path}?`)
+  );
 }
 
 let refreshInFlight: Promise<boolean> | null = null;
@@ -499,6 +507,20 @@ async function nexusFetch(
   }
   return res;
 }
+
+/**
+ * A plain `fetch` that heals an expired access token before giving up.
+ *
+ * Exported because the chat stream is not an ordinary JSON call: it consumes a
+ * `ReadableStream` and therefore cannot go through the JSON helpers above. It
+ * used to use a bare `fetch`, which made it the one authenticated call in the
+ * app with no session recovery. An hour into a session, sending a message
+ * produced a raw "Backend returned 401" banner instead of quietly refreshing,
+ * even though every other call self-healed. Reusing the same single-flight,
+ * cross-tab-elected refresh keeps one recovery implementation rather than two
+ * that can drift apart.
+ */
+export const fetchWithSessionRecovery = nexusFetch;
 
 async function fetchWithRetry(
   url: string,

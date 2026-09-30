@@ -1,0 +1,38 @@
+﻿# Build context hygiene for the Next.js standalone image.
+#
+# Without this, `COPY . .` (Dockerfile:10) uploads node_modules/, .next/ and the
+# test artifacts on every build, and busts the cached `deps` layer (Dockerfile:4-5)
+# on each source edit. It also drops real secrets into the builder stage: .env.local
+# is gitignored (so git will not save you) but Docker does not read .gitignore.
+
+# Dependencies and build output are produced inside the image.
+node_modules
+.next
+out
+build
+
+# Secrets: .env.local holds live credentials in local dev. Never bake it into a
+# layer, the build cache, or a pushed image.
+.env
+.env.*
+!.env.example
+
+# Test + tooling artifacts
+coverage
+playwright-report
+test-results
+blob-report
+.playwright
+*.tsbuildinfo
+next-env.d.ts
+
+# VCS and editor noise
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Docker's own ignore file (avoids a redundant context scan)
+Dockerfile
+.dockerignore
