@@ -350,6 +350,20 @@ class Settings(BaseSettings):
     # is unreachable.
     ASYNC_INDEXING: bool = Field(default=False)
 
+    # ── Build / prompt identity (log attribution) ─────────────────────────────
+    # Bound into every request's log context (core/logging.bind_request_context)
+    # so a log line can be traced to the agent graph revision and the prompt set
+    # that produced it. Without these, prompt-regression CI failures and
+    # production incidents cannot be attributed to a specific prompt revision.
+    AGENT_VERSION: str = Field(
+        default="1.0.0",
+        description="Version of the agent graph (nodes/routing). Bump on behavioural graph changes.",
+    )
+    PROMPT_SET_VERSION: str = Field(
+        default="2026-09-30",
+        description="Version of the prompt_templates/*.txt set. Bump whenever any template file changes.",
+    )
+
     # ── Self-Refinement (Critic Subagent) ─────────────────────────────────────
     CRITIC_MAX_REVISIONS: int = Field(default=2, description="Max revision passes of the critic subagent before a draft is accepted as-is")
 

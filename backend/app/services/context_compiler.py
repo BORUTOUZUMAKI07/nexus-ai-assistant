@@ -3,6 +3,8 @@ Context Compiler and Attention Budget Compactor.
 Implements sliding-window conversation compaction, token budgeting,
 and summary preservation to prevent context overflow.
 """
+from typing import Any
+
 import structlog
 from backend.app.domain.conversation.models import Message
 from backend.app.infrastructure.ai.litellm_client import ai_client
@@ -39,6 +41,9 @@ class ContextCompiler:
     def __init__(self, target_budget_ratio: float = 0.75, reserve_completion_tokens: int = 4096):
         self.target_budget_ratio = target_budget_ratio
         self.reserve_completion_tokens = reserve_completion_tokens
+        # Injected so tests can drive summarisation without a live provider; the
+        # module-level singleton below keeps the production default.
+        self.ai_client = ai_client
 
     def estimate_tokens(self, text: str, model: str = "llama-3.3-70b-versatile") -> int:
         return ai_client.count_tokens(text, model)
@@ -119,6 +124,94 @@ class ContextCompiler:
             formatted_messages.append({"role": msg.role, "content": msg.content})
 
         return formatted_messages
+
+    # ── Agent-graph assembly ────────────────────────────────────────────────
+    #
+    # `compile_context` above serves the non-streaming /messages endpoints, which
+    # pass ORM `Message` rows. The streaming chat path instead runs the LangGraph
+    # orchestrator, whose history is a mix of LangChain `BaseMessage` objects and
+    # plain dicts. `compile_agent_context` is the same attention-budget algorithm
+    # over that shape, so the graph stops bounding context by turn count alone.
+
+    @staticmethod
+    def _agent_message_parts(msg: Any) -> tuple[str, str]:
+        """Normalise a BaseMessage or dict into an OpenAI-style (role, content)."""
+        if isinstance(msg, dict):
+            return str(msg.get("role", "user")), str(msg.get("content", ""))
+        msg_type = getattr(msg, "type", None)
+        role = {"human": "user", "ai": "assistant"}.get(
+            msg_type if isinstance(msg_type, str) else "", "user"
+        )
+        return role, str(getattr(msg, "content", "") or "")
+
+    def budget_history(
+        self,
+        messages: list[Any],
+        system_prompt: str,
+        model: str = "llama-3.3-70b-versatile",
+        min_recent_turns: int = 2,
+    ) -> tuple[list[Any], list[Any], int]:
+        """Split history into (keep, compress, tokens_kept) against the budget.
+
+        Walks newest-to-oldest accumulating real token counts, always keeping at
+        least ``min_recent_turns`` so the immediate exchange survives even when
+        it alone exceeds the budget. Older turns are returned in chronological
+        order for summarisation.
+
+        Returns the kept messages unchanged — this method never rewrites or
+        summarises, so callers stay in control of what the model actually sees.
+        """
+        max_context = self.get_max_context(model)
+        usable = int(max_context * self.target_budget_ratio) - self.reserve_completion_tokens
+        remaining = usable - self.estimate_tokens(system_prompt, model)
+
+        keep: list[Any] = []
+        compress: list[Any] = []
+        used = 0
+        for msg in reversed(messages):
+            _, content = self._agent_message_parts(msg)
+            cost = self.estimate_tokens(content, model)
+            if used + cost <= remaining or len(keep) < min_recent_turns:
+                keep.insert(0, msg)
+                used += cost
+            else:
+                compress.insert(0, msg)
+        return keep, compress, used
+
+    async def summarize_agent_history(
+        self, messages: list[Any], model: str = "llama-3.3-70b-versatile"
+    ) -> str:
+        """Summarise graph history into a dense episodic block.
+
+        Overload-safe: summarisation is an optimisation, so any provider failure
+        returns an empty string and the caller drops the overflow rather than
+        failing the turn. Preserves the transcript's role labels.
+        """
+        if not messages:
+            return ""
+        transcript = "\n".join(
+            f"{role.upper()}: {content}" for role, content in map(self._agent_message_parts, messages)
+        )
+        prompt = (
+            "Summarize the key facts, user preferences, decisions, constraints, and "
+            "open items from this conversation excerpt. Keep it compact and factual. "
+            "Preserve identifiers, file names, and stated constraints verbatim.\n\n"
+            f"{transcript}"
+        )
+        try:
+            summary = await self.ai_client.completion(
+                messages=[
+                    {"role": "system", "content": "You are a concise conversation summarizer."},
+                    {"role": "user", "content": prompt},
+                ],
+                model=model,
+                max_tokens=500,
+                temperature=0.2,
+            )
+            return str(summary).strip()
+        except Exception as exc:
+            logger.warning("agent_history_summarization_failed", error=str(exc))
+            return ""
 
 
 context_compiler = ContextCompiler()
