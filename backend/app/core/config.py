@@ -379,6 +379,22 @@ class Settings(BaseSettings):
         default=0.6,
         description="Calibrated confidence gate: composite confidence below this marks a response low-confidence",
     )
+    CONFIDENCE_ACTION_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Act on the confidence gate's verdict. When False the gate is "
+            "record-only (its previous behaviour: computed, logged, returned, "
+            "and nothing branched on it)"
+        ),
+    )
+    CONFIDENCE_HEDGE_MODE: str = Field(
+        default="annotate",
+        description=(
+            "What to do when the gate says 'hedge': 'annotate' prefixes an "
+            "explicit uncertainty note, 'abstain' replaces the answer with a "
+            "refusal, 'none' records only"
+        ),
+    )
     BANDIT_EPSILON: float = Field(
         default=0.1,
         description="ε-greedy exploration rate for bandit-selected experiment variants",
