@@ -58,9 +58,16 @@ These were each confirmed first-hand and are intentional:
   `services/oauth_service.py` (`SSOProviderRegistry` with
   `GoogleOAuthProvider`/`GitHubOAuthProvider`); there is **no** flat
   `/auth/oauth/login` route.
-- **`except Exception: pass` appears 7 times in `backend/app/` and is
-  deliberate** — each is a fail-open or fail-silent seam (e.g., telemetry,
-  non-critical caches). Don't blanket-remove them.
+- **8 `except` handlers in `backend/app/` have `pass` as their entire body,
+  and are deliberate** — each is a fail-open or fail-silent seam (e.g.,
+  telemetry, non-critical caches). Don't blanket-remove them. A ~64 more are
+  "silent" only in the sense that their body is a docstring plus a `return` /
+  `assign`; those are real logic, not swallows. **Prefer a documented body
+  over a bare `pass` in new code** — the new Batch C/D modules deliberately use
+  a docstring-then-`return` form so the intent is legible and `bandit` (a CI
+  gate) stays at zero. Verify any count you rely on with
+  `ast.walk(tree)`, not a regex: on CRLF checkouts a `\s*\n\s*` pattern
+  matches nothing and you will conclude the seams were removed.
 - **No mutable default arguments** anywhere in `backend/app/` (verified).
 - **mypy is NOT a gate on the full tree.** It only runs over the 17-file
   allowlist in `backend/scripts/mypy_targets.txt`. The full app has ~466
@@ -145,6 +152,26 @@ backend/app/
 - No new third-party dependencies without reviewing advisories (ragas, garak,
   and deepeval were **removed** in 2026-09 due to unfixed CVEs — see comments
   in `pyproject.toml`).
+- **New cross-cutting modules (added 2026-10, Batch A–D).** All are pure
+  functions/classes with injected deps, and all are covered by a
+  `tests/test_batch_*.py` whose every fix is verified by reverting it:
+
+  | Module | Role |
+  |---|---|
+  | `core/spend.py` | Per-run spend meter: token + step ceiling, contextvar-bound, seeded from checkpoint. |
+  | `core/credential_check.py` | Boot-time inventory of expected env keys; **never raises at startup** — one broken provider must not stop the process serving everything else. |
+  | `services/context_compiler.py` | `ContextCompiler.budget_history()` / `summarize_agent_history()`. New methods only — `compile_context()` consumes ORM `Message` rows and compacts them, destroying history the graph still needs. |
+  | `services/memory_lifecycle.py` | B1 write gate + B2 decay. Biases **toward writing**: a missed memory is permanent, a redundant one is deduped downstream. |
+  | `services/confidence_action.py` | C1: what to do about a low confidence score. Deterministic and fail-open — no second retry loop, which would double cost on the turns that can least afford it. |
+  | `services/tools/content_shape.py` | C2: classify scraped shape; **rejects bad shape and salvages** rather than discarding (discarding would *remove* evidence). Also holds the stdlib `html_to_text()`. |
+
+- **The `html2text` trap.** `services/tools/web_search.py` imported `html2text`,
+  which was neither a declared dependency nor installed. The `ModuleNotFoundError`
+  was swallowed by the surrounding `except Exception`, so without Firecrawl
+  configured *every* scrape returned "Unable to scrape webpage content" and the
+  whole direct-HTTP fallback was dead code. Replaced with a stdlib extractor in
+  `content_shape.py` rather than adding a dependency. When auditing a fallback
+  path, check that its import actually resolves.
 
 ### Frontend layout (`frontend/src/`)
 
@@ -225,10 +252,15 @@ webhook_deliveries, webhook_endpoints`
 
 - ORM: SQLModel (SQLAlchemy under the hood); async via `asyncpg`, sync via
   `psycopg2`/`psycopg3`.
-- Migrations: Alembic (`backend/migrations/`, head `f6a7b8c9d0e1` —
-  7 revisions: `0001_initial_schema` → `9290fa24428d` → `a1b2c3d4e5f6` →
-  `c1d2e3f4a5b6` → `d3e4f5a6b7c8` → `e5f6a7b8c9d0` → `f6a7b8c9d0e1`).
+- Migrations: Alembic (`backend/migrations/`, head `b1c2d3e4f5a6` —
+  8 revisions: `0001_initial_schema` → `9290fa24428d` → `a1b2c3d4e5f6` →
+  `c1d2e3f4a5b6` → `d3e4f5a6b7c8` → `e5f6a7b8c9d0` → `f6a7b8c9d0e1` (closes a
+  pre-existing drift) → `b1c2d3e4f5a6` (Batch B memory lifecycle columns)).
   `alembic upgrade head` before first boot.
+- **Index-name convention**: `index=True` on a model column makes SQLModel
+  auto-name the index `ix_<table>_<col>`. The migration must use that exact
+  name, not merely avoid colliding with it — otherwise autogenerate reports
+  permanent drift.
 - Dev DB: `postgres` service in docker-compose with `pgvector/pgvector:pg16`
   image (so **Postgres has the pgvector extension** for embeddings — the code
   stores some embedding vectors; do not switch to a non-pgvector image).
@@ -248,6 +280,16 @@ Sensible defaults exist for everything; `.env` overrides. Highlights:
 - `EXPERIMENTS_CONFIG_PATH=` → canary/shadow experiments YAML (unset =
   default variant).
 - `SHARE_DEFAULT_TTL_SECONDS` — default public-share expiry.
+- **Researcher (D1)** — `RESEARCH_MAX_SUBQUERIES=3`, `RESEARCH_MAX_SCRAPES=4`,
+  `RESEARCH_SCRAPE_CONCURRENCY=3`, `RESEARCH_MAX_REFLECTIONS=1`,
+  `RESEARCH_EVIDENCE_FLOOR_CHARS=1200`, `RESEARCH_SYNTHESIS_MAX_TOKENS=1400`,
+  `RESEARCH_MAX_MODEL_CALLS=4`. The scrape budget is a **total across all
+  sub-queries**, not per sub-query, or breadth multiplies into unbounded spend.
+  Decomposition and reflection are each skipped when they cannot pay, so the
+  common case costs what it cost before.
+- **Run spend ceiling (D2)** — `AGENT_LOOP_MAX_STEPS=8`,
+  `AGENT_LOOP_TOKEN_BUDGET=60000`. Every loop in the graph is individually
+  bounded and their product is not; this is the only cumulative check.
 - `JWT_ALGORITHM=HS256`, refresh tokens, `oauth2_scheme` tokenUrl=auth/login.
 - `REDIS_URL=redis://localhost:6379/0` (local Redis from docker-compose).
 - `SENTRY_DSN`, `NEW_RELIC_ENABLED` + `NEW_RELIC_OTLP_ENDPOINT` (optional OTLP
@@ -318,16 +360,30 @@ Windows shell gotchas (learned the hard way):
   to `sys.path`.
 - Use `app.openapi()` (not `app.routes`) for endpoint introspection.
 
-## 7. Testing inventory (verified counts at `1f43c89`)
+## 7. Testing inventory (verified counts at `a4936e4`)
 
-- Backend: **51 unit test files** (48 in `tests/` + 3 in `tests/unit/`) +
-  **11 integration** + **1 e2e** under `backend/tests/` (pytest). Fakes live
-  in the single module `backend/tests/fakes.py` (e.g. `FakeSession`).
+- Backend: **61 unit test files** + **11 integration** + **1 e2e** under
+  `backend/tests/` (pytest). Fakes live in the single module
+  `backend/tests/fakes.py` (e.g. `FakeSession`).
+- Suite total: **827 passed, 4 skipped, 9 deselected** for `pytest` (which
+  already excludes e2e via `addopts`).
 - Frontend: **25 Vitest test files** under `frontend/src/test/` + **6 Playwright
   specs** in `frontend/e2e/`.
-- `walkthrough.md` once claimed "82 tests" — that is stale; the suite grew to
-  211+ backend-wide. Current counts: see above.
+- Batch A–D test files: `test_batch_a_wiring.py`, `test_batch_b_memory.py`,
+  `test_batch_c_correctness.py`, `test_batch_d_research.py`,
+  `test_batch_d_spend.py`, `test_memory_lifecycle_schema.py`.
+- `walkthrough.md` once claimed "82 tests" — that is stale. Current counts: see
+  above.
 - Backend pyproject: `addopts = -v -m 'not e2e'` — plain `pytest` skips e2e.
+
+**The revert check is the part that matters.** Every batch ships with a script
+that applies each fix's inverse to the real source, runs the suite, and
+requires it to *fail* — then restores the file. A test that passes with and
+without the fix is not testing the fix. Nine genuine defects were found this
+way that the fixes alone would have hidden, including an `UnboundLocalError`
+where a budget stop mid-revision-loop 500'd the request, and two cases where a
+wiring test was only a source-grep and passed even with the call's result
+discarded.
 
 ## 8. Common operations
 
@@ -368,6 +424,37 @@ Windows shell gotchas (learned the hard way):
    subagent modules).
 8. **`main.py` docstring and code comments** reference the real architecture —
    if you move things, keep those comments true.
+9. **Contextvars must be bound inside the generator and cleared in `finally`.**
+   This is already done for A4's request context (bound in the SSE generator,
+   cleared at `conversations.py`'s `finally`) and D2's spend meter
+   (`bind_spend_meter` / `reset_spend_meter(token)`, cleared in the same
+   `finally`). A contextvar outlives the statement that set it, so binding it
+   outside the generator — or omitting the reset — leaks one request's state
+   into the next request served by the same task. For the spend meter that
+   leak is doubly bad: an already-exhausted meter **silently disables the
+   ceiling** for the following request. `reset_spend_meter` catches broadly on
+   purpose: a token from another context raises `ValueError`, a wrong-typed one
+   raises `TypeError`, and dropping the meter is the safe direction.
+10. **The spend meter fails open on absence, not on breakage.** No meter bound
+    means no ceiling (something that forgot to bind runs unbounded); a meter
+    that *raises* propagates (the only realistic cause is a bug in the meter,
+    and swallowing it would hide that bug from the test that introduced it).
+    Do not re-add a `try/except` around `charge_tokens`/`charge_step`/
+    `budget_exhausted` — it also reintroduces a bandit `B110` CI failure.
+11. **A budget stop must cost a revision, never the answer.** The synthesizer's
+    critic loop tracks `last_draft` separately from `response_text`, because
+    `response_text` is only assigned on the paths that *accept* a draft. When
+    adding any new early-`break` path to that loop, assign `response_text`.
+12. **`nodes.py` contains corrupted box-drawing bytes** on some lines, so `edit`
+    anchors containing em-dashes fail there. Use ASCII-only anchors or a
+    Python script. In revert scripts use `rindex()` for trailing anchors.
+
+## 9b. Already solved — do not re-propose
+
+Bounded revision loop with force-accept; LLM retry/empty-response handling +
+circuit breaker; token limiter (now wired to real usage); SSRF guard;
+structured citations; search provider ladder; checkpointer durability. These
+were all re-verified against source during the Batch A–D work.
 
 ## 10. Where is the source of truth for each doc
 
@@ -384,5 +471,6 @@ Windows shell gotchas (learned the hard way):
 
 ---
 
-_Last updated: 2026-09-29. Regenerate counts (tables/endpoints/tests) from
-code rather than trusting any static number here._
+_Last updated: 2026-10-01. Regenerate counts (tables/endpoints/tests) from
+code rather than trusting any static number here — and verify code-shape
+claims with `ast`, not regex, since this repo has CRLF checkouts._
