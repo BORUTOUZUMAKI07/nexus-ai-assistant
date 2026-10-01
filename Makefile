@@ -40,8 +40,20 @@ migrate-history: ## Show migration history
 	cd backend && $(ALEMBIC) history --verbose
 
 # ─── Backend ──────────────────────────────────────────────────────────────────
+# uvicorn's --loop flag is REQUIRED on Windows, not a preference.
+#
+# uvicorn 0.36+ resolves the event-loop factory in Config.get_loop_factory
+# *before* it imports the FastAPI app, so main.py's
+# `asyncio.set_event_loop_policy(WindowsSelectorEventLoopPolicy())` never gets a
+# chance to run. uvicorn then picks ProactorEventLoop, which psycopg 3 rejects
+# for async I/O, and the checkpointer's first read dies with an OperationalError
+# that looks like a database problem and is not one. The factory is a no-op
+# branch on non-Windows platforms, so it is passed unconditionally rather than
+# guarded by an OS check that would itself be wrong on WSL or Git Bash.
+UVICORN_LOOP := --loop backend.app.infrastructure.common.event_loop:event_loop_factory
+
 backend: ## Start FastAPI backend (hot reload)
-	cd backend && $(UV) run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	cd backend && $(UV) run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 $(UVICORN_LOOP)
 
 worker: ## Start Celery worker
 	cd backend && $(UV) run celery -A app.worker.celery_app worker --loglevel=info --concurrency=4
@@ -65,7 +77,7 @@ frontend-build: ## Build frontend for production
 # ─── Development (all together) ───────────────────────────────────────────────
 dev: infra ## Start all services + backend + frontend concurrently
 	@echo "Starting backend and frontend..."
-	@powershell -Command "Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd backend; uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000'"
+	@powershell -Command "Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd backend; uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 $(UVICORN_LOOP)'"
 	@powershell -Command "Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd frontend; npm run dev'"
 	@echo ""
 	@echo "╔═══════════════════════════════════════════════╗"
@@ -82,8 +94,11 @@ dev: infra ## Start all services + backend + frontend concurrently
 test: ## Run all backend tests
 	cd backend && $(PYTEST) -v --tb=short
 
-test-unit: ## Run unit tests only
-	cd backend && $(PYTEST) tests/unit -v
+# 58 of the 61 unit test files sit directly in tests/, not in tests/unit/, so the
+# old `pytest tests/unit` ran 3 of them and reported success. Deselect the
+# integration and e2e markers instead of pointing at a directory.
+test-unit: ## Run unit tests only (excludes integration/ and e2e/)
+	cd backend && $(PYTEST) tests -m "not integration and not e2e" -v
 
 test-integration: ## Run integration tests (requires running infra)
 	cd backend && $(PYTEST) tests/integration -v
@@ -101,8 +116,15 @@ lint-fix: ## Run Ruff linter and auto-fix
 format: ## Format code with Ruff formatter
 	cd backend && $(RUFF) format .
 
-type-check: ## Run mypy type checking
-	cd backend && $(UV) run mypy app --ignore-missing-imports
+# Type-check the allowlist, not the tree. The full app graph carries hundreds of
+# pre-existing strict errors (see scripts/mypy_targets.txt), so `mypy app` here
+# would report them forever and gate nothing — the previous version of this
+# target did exactly that. This reads the same allowlist CI uses, so a local run
+# and a CI run cannot disagree about what is enforced.
+MYPY_TARGETS = $(shell grep -v '^\s*\#' scripts/mypy_targets.txt | sed 's/\r$$//;s|^backend/||')
+
+type-check: ## Run mypy over the CI allowlist (scripts/mypy_targets.txt)
+	cd backend && $(UV) run mypy --follow-imports=silent $(MYPY_TARGETS)
 
 # ─── Setup ────────────────────────────────────────────────────────────────────
 setup: ## First-time project setup
