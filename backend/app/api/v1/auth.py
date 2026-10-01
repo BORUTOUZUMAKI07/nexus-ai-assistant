@@ -13,6 +13,7 @@ from backend.app.domain.user.schemas import (
     ForgotPasswordRequest,
     OAuthCallbackRequest,
     OAuthLoginResponse,
+    OAuthProvidersResponse,
     ResetPasswordRequest,
     TokenRefresh,
     TokenResponse,
@@ -27,7 +28,7 @@ from backend.app.domain.user.schemas import (
 from backend.app.infrastructure.cache.redis_client import get_cache_service, redis_service
 from backend.app.infrastructure.resilience.rate_limit import rate_limit_anon
 from backend.app.services.auth_service import AuthService
-from backend.app.services.oauth_service import OAuthService
+from backend.app.services.oauth_service import OAuthService, SSOProviderRegistry
 from backend.app.services.two_factor_service import TwoFactorService
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordRequestForm
@@ -280,6 +281,23 @@ async def reset_password(
 # the code the provider hands back (the frontend proxy performs the exchange
 # and stores the session in httpOnly cookies). Both endpoints 404 while the
 # named provider is unconfigured.
+
+# Declared BEFORE `/oauth/{provider}`. FastAPI matches routes in registration
+# order, so a literal path added after a `{provider}` catch-all is unreachable:
+# the request for `/oauth/providers` is captured by the parameterised route and
+# answered with the "not configured" 404 for a provider named "providers". That
+# is a silently dead endpoint -- the sign-in page would get a 404 and fall back
+# to showing no SSO buttons, which looks identical to SSO being unconfigured.
+@router.get("/oauth/providers", response_model=OAuthProvidersResponse)
+async def oauth_providers() -> OAuthProvidersResponse:
+    """Which SSO providers this deployment can actually complete a login with.
+
+    Unauthenticated by necessity: the sign-in page has no session yet, and that
+    is the only time it needs this. The response reveals only provider names and
+    a boolean, so there is nothing here for an unauthenticated caller to abuse.
+    """
+    return OAuthProvidersResponse(providers=SSOProviderRegistry.describe_providers())
+
 
 @router.get("/oauth/{provider}", response_model=OAuthLoginResponse)
 async def oauth_login(

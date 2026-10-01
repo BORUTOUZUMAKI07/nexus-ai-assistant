@@ -336,6 +336,29 @@ class SSOProviderRegistry:
     def list_providers(cls) -> list[str]:
         return list(cls.providers.keys())
 
+    @classmethod
+    def describe_providers(cls) -> list[dict[str, Any]]:
+        """Every registered provider with its configuration state.
+
+        Kept on the registry rather than in the router so the "is it usable
+        here" rule lives next to the ``is_configured`` implementations it reads,
+        and adding a third IdP needs no change to the transport layer.
+
+        ``is_configured`` reads settings, so a provider instantiated here
+        reflects this process's environment. That is the point: the sign-in page
+        must reflect the server it is talking to, not a baked-in assumption.
+        """
+        described: list[dict[str, Any]] = []
+        for name in cls.providers:
+            provider = cls.get(name)
+            described.append(
+                {
+                    "name": name,
+                    "configured": bool(provider and provider.is_configured()),
+                }
+            )
+        return described
+
 
 SSOProviderRegistry.register("google", GoogleOAuthProvider)
 SSOProviderRegistry.register("github", GitHubOAuthProvider)
