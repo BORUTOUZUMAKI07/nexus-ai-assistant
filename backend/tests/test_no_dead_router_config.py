@@ -27,11 +27,25 @@ changing routing. That is worse than having no file. It is deleted, and this
 module asserts the property that made it dangerous cannot come back unnoticed.
 
 The assertion is deliberately narrow. It does not claim "every file in
-backend/config/ is read" -- that is false for `task_contracts.yaml` and
-`eval_criteria.yaml`, which are documentation-adjacent, and a test encoding a
-half-true claim is worse than no test. It claims the specific thing: no file
-anywhere in the tree may declare LiteLLM `model_list` or `fallbacks` policy
-for the app's router, because the router's policy is code.
+backend/config/ is read" -- that was still false for `task_contracts.yaml` and
+`eval_criteria.yaml`, and a test encoding a half-true claim is worse than no
+test. Both of those have since been deleted as well (2026-10-01), for the same
+reason and with the same three-way drift:
+
+    task_contracts.yaml  critic evaluates contracts/done_when/escalate_when
+                         critic.py checks Completeness/Hallucinations/Code/
+                         Clarity and returns STATUS/SCORE/FEEDBACK
+    task_contracts.yaml  context budget 0.60 / 0.85 / 0.95 tiers
+                         context_compiler.py has one ratio, 0.75
+    eval_criteria.yaml   g_eval_rubrics (a deepeval metric)
+                         deepeval was removed from dependencies over unpatched
+                         CVEs in 2026-09
+    eval_criteria.yaml   profanity sanitize tier
+                         no profanity filter exists anywhere in the app
+
+It claims the specific thing: no file anywhere in the tree may declare LiteLLM
+`model_list` or `fallbacks` policy for the app's router, because the router's
+policy is code.
 """
 from __future__ import annotations
 
