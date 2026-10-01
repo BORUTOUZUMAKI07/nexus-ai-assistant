@@ -6,14 +6,16 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from backend.app.api.deps import get_current_admin, get_db
+from backend.app.api.deps import get_account_service, get_current_admin, get_db
 from backend.app.core.config import settings
 from backend.app.domain.hook.schemas import HookPolicyCreate, HookPolicyUpdate
+from backend.app.domain.system.models import AuditLog
 from backend.app.domain.system.service import SystemService
 from backend.app.domain.usage.models import CostLog
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.cache.redis_client import redis_client
 from backend.app.infrastructure.database.engine import check_database_health
+from backend.app.services.account_service import AccountService
 from backend.app.services.hook_service import HookService
 from backend.app.services.monitoring.drift_service import DriftService
 from backend.app.services.observability.metrics import metrics_collector
@@ -75,6 +77,88 @@ async def toggle_user_status(
     session.add(user)
     await session.commit()
     return {"user_id": str(user.id), "is_active": user.is_active}
+
+
+@router.delete("/users/{user_id}", status_code=200)
+async def delete_user(
+    user_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+    account_svc: AccountService = Depends(get_account_service),
+) -> dict[str, Any]:
+    """Erase a user account and every row it owns.
+
+    Exists because the only other erasure path, `DELETE /account`, requires the
+    *owner's* token. That makes it unusable for the cases an admin actually
+    hits: a probe/seed account to clean up, a user who asked to be removed by
+    email, an account abandoned mid-onboarding. Without this, the only ways to
+    remove a user are raw SQL against production or resetting their password so
+    they can delete themselves — and raw SQL is the one that skips the
+    dependency ordering and leaves orphans behind 35 tables deep.
+
+    So this deliberately delegates to `AccountService.delete_account`, the same
+    dependency-ordered cascade the self-service path uses, rather than issuing
+    its own deletes. That is also why it gets the fail-open saga behaviour for
+    Qdrant and object storage for free: the DB erasure is the source of truth
+    and cross-store cleanup is reconciled separately.
+
+    Two refusals, both of which an admin cannot undo by re-reading the user row:
+
+    * your own account — this is the console's only door, and unlike
+      `toggle-status` there is no "log back in" to recover from it;
+    * the last remaining admin — deleting it leaves `/admin` permanently
+      unreachable, with no account left holding `role == "admin"` to grant it
+      back. Counted from the database rather than assumed, because an admin
+      count of one is exactly the situation where this matters.
+    """
+    if user_id == admin.id:
+        raise HTTPException(
+            status_code=400, detail="Cannot delete your own admin account"
+        )
+
+    target = await session.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if target.role == "admin":
+        remaining = await session.exec(
+            select(func.count())
+            .select_from(User)
+            .where(User.role == "admin", User.id != user_id, User.is_active.is_(True))
+        )
+        # `.one()` on a scalar select is how SQLModel returns the bare value;
+        # `.first()` would hand back the row and silently compare a Row to 0.
+        admins_left = await remaining.one()
+        if not admins_left:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete the last active admin account",
+            )
+
+    await account_svc.delete_account(target.id)
+
+    # Recorded after the erase, in the same style as the GDPR path: the audit
+    # row is fail-open because losing the trail must not fail the erasure, and
+    # writing it first would leave a record of something that then failed.
+    try:
+        session.add(
+            AuditLog(
+                user_id=admin.id,
+                action="admin_user_erasure",
+                resource_type="user",
+                resource_id=str(target.id),
+                status="success",
+                details={"target_email": target.email, "target_role": target.role},
+            )
+        )
+        await session.commit()
+    except Exception as exc:
+        logger.warning(
+            "admin_user_erasure_audit_failed", target=str(target.id), error=str(exc)
+        )
+
+    logger.info("admin_user_deleted", target_user_id=str(target.id), admin_id=str(admin.id))
+    return {"status": "deleted", "user_id": str(target.id)}
 
 
 @router.get("/audit-logs")
