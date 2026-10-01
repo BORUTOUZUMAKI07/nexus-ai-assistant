@@ -27,6 +27,7 @@ try:
 except ImportError:
     AsyncPostgresSaver = None
 
+from backend.app.agents.orchestrator.artifact_node import artifact_node
 from backend.app.agents.orchestrator.nodes import (
     bootstrap_node,
     critic_grader_node,
@@ -108,6 +109,10 @@ def _build_workflow() -> StateGraph:
     workflow.add_node("tool_node", tool_node)
     workflow.add_node("critic_grader", critic_grader_node)
     workflow.add_node("synthesizer", synthesizer_node)
+    # After the synthesizer, never before: the artifact body is the finalized
+    # post-critique, post-guardrail text. An artifact built from an earlier
+    # draft would be a different document from the one the user is reading.
+    workflow.add_node("artifact", artifact_node)
 
     # Edges
     workflow.add_edge(START, "bootstrap")
@@ -147,7 +152,8 @@ def _build_workflow() -> StateGraph:
         },
     )
     workflow.add_edge("tool_node", "synthesizer")
-    workflow.add_edge("synthesizer", END)
+    workflow.add_edge("synthesizer", "artifact")
+    workflow.add_edge("artifact", END)
 
     return workflow
 

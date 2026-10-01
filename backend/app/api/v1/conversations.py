@@ -39,6 +39,7 @@ from backend.app.services.observability.tracing import trace_span
 from backend.app.services.org_service import OrganizationService
 from backend.app.services.prompt_compiler import prompt_compiler
 from backend.app.services.prompt_service import load_active_skills
+from backend.app.services.run_events import finished_run_events
 from backend.app.services.usage_service import UsageService
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -513,11 +514,14 @@ async def stream_conversation(
             # HITL pauses (graph parked at an interrupt → resume endpoint continues it).
             snapshot = await orchestrator_graph.aget_state(config)
             if snapshot is not None and getattr(snapshot, "values", None):
-                values = snapshot.values
-                critique = values.get("critique") if isinstance(values, dict) else None
-                if critique:
-                    yield f"data: {json.dumps({'type': 'critique', 'critique': critique, 'revision_count': values.get('revision_count', 0)})}\n\n"
-                yield f"data: {json.dumps({'type': 'quality', 'evidence_score': values.get('evidence_score', 0.0), 'evidence_gate_passed': values.get('evidence_gate_passed', None)})}\n\n"
+                # Which frames this is, and in what order, is a contract with
+                # the client -- see services/run_events.py. It lives there, not
+                # inline, so it is unit-testable: as three inline `yield`s in
+                # this generator it was unreachable by any test, and a revert
+                # harness proved the artifact frame could be deleted with
+                # nothing turning red.
+                for frame in finished_run_events(snapshot.values):
+                    yield frame
             if snapshot is not None and getattr(snapshot, "next", None):
                 # LangGraph stores interrupts on snapshot.tasks[].interrupts (the
                 # __interrupt__ values key does not exist). surface the latest

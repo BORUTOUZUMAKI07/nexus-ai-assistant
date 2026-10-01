@@ -1,9 +1,9 @@
 # AGENTS.md — Nexus AI Assistant Repo Context
 
 This file is the **persistent context** for AI agents and future maintainers.
-Everything here was verified against the actual source at commit `1f43c89`
-(main). If something here contradicts the code, **trust the code** and update
-this file.
+Everything here was verified against the actual source through the D3 commit
+(Batches A–D) plus the checkpointer `isinstance` fix. If something here
+contradicts the code, **trust the code** and update this file.
 
 ---
 
@@ -69,9 +69,30 @@ These were each confirmed first-hand and are intentional:
   `ast.walk(tree)`, not a regex: on CRLF checkouts a `\s*\n\s*` pattern
   matches nothing and you will conclude the seams were removed.
 - **No mutable default arguments** anywhere in `backend/app/` (verified).
-- **mypy is NOT a gate on the full tree.** It only runs over the 17-file
-  allowlist in `backend/scripts/mypy_targets.txt`. The full app has ~466
-  pre-existing strict-mode errors (75 files). Do not attempt a full fix.
+- **mypy is NOT a gate on the full tree.** It only runs over the 18-file
+  allowlist in `backend/scripts/mypy_targets.txt`, and the command needs those
+  paths passed explicitly (`--follow-imports=silent`, `backend/` prefix
+  stripped) — bare `uv run mypy` has no target and exits 2. The full app has
+  ~466 pre-existing strict-mode errors (75 files). Do not attempt a full fix.
+  New modules belong on the allowlist: check one with
+  `uv run mypy --follow-imports=silent <module>` and append it if clean.
+- **`ResilientPostgresSaver` must subclass `BaseCheckpointSaver`, and did
+  not.** `StateGraph.compile()` calls `ensure_valid_checkpointer`, which is an
+  `isinstance` check
+  (`.venv/.../langgraph/types.py:109`); `lifespan_graph` catches the resulting
+  `TypeError` and falls back to `InMemorySaver`. So the wrapper shipped as a
+  duck-typed class with every right method, was *discarded at compile time*, and
+  every one of its 18 tests passed — they all exercise the wrapper directly and
+  never ask LangGraph whether it accepts it. Production ran with no
+  persistence while the reconnect logic never executed once. The class now
+  subclasses the base and `FORWARDED_METHODS` is the base's full async surface
+  (anything not forwarded inherits a `NotImplementedError` stub).
+- **Run `pytest` from `backend/`, never the repo root.** The Batch A–D test
+  files open source files by repo-root-relative path (`app/services/...`), so
+  from the repo root every one of them raises `FileNotFoundError`: 131 spurious
+  failures and 124 errors that look like a catastrophic regression and are
+  entirely a CWD mistake. `uv run --project backend pytest` from the root hits
+  this; `cd backend && uv run pytest` is the documented run.
 - **No tracked `.env`.** Only `.env.example`. Real secrets live in CI
   variables / GitHub Actions secrets. Pushed history contains no real secrets
   (verified).
@@ -164,6 +185,9 @@ backend/app/
   | `services/memory_lifecycle.py` | B1 write gate + B2 decay. Biases **toward writing**: a missed memory is permanent, a redundant one is deduped downstream. |
   | `services/confidence_action.py` | C1: what to do about a low confidence score. Deterministic and fail-open — no second retry loop, which would double cost on the turns that can least afford it. |
   | `services/tools/content_shape.py` | C2: classify scraped shape; **rejects bad shape and salvages** rather than discarding (discarding would *remove* evidence). Also holds the stdlib `html_to_text()`. |
+  | `services/artifact_intent.py` | D3: three-layer "is this turn a document?" decision — explicit request, then answer shape, then one small typed classifier. **The artifact body is never regenerated**; the synthesizer already paid for that text, and a second generation would leave the canvas and the chat permanently disagreeing. |
+  | `agents/orchestrator/artifact_node.py` | D3 graph node, `synthesizer → artifact → END`. Opens its own short-lived session (like the memory mirror) and is fail-open: a graph exception there costs the user their whole reply to save them one file. |
+  | `services/run_events.py` | The SSE frames a finished run reports (`critique` / `quality` / `artifact`). Extracted from `api/v1/conversations.py` **because it had to be testable, not for tidiness** — as three inline `yield json.dumps(...)` statements in a 300-line async generator, the artifact frame could be deleted outright with no test changing result. |
 
 - **The `html2text` trap.** `services/tools/web_search.py` imported `html2text`,
   which was neither a declared dependency nor installed. The `ModuleNotFoundError`
@@ -172,6 +196,26 @@ backend/app/
   whole direct-HTTP fallback was dead code. Replaced with a stdlib extractor in
   `content_shape.py` rather than adding a dependency. When auditing a fallback
   path, check that its import actually resolves.
+
+- **An SSE event nobody translates looks exactly like one that was never
+  emitted.** The backend speaks `data: {"type": …}`; the browser hook reads the
+  Vercel AI SDK 3 data-stream dialect (`0:` text, `8:` annotations, `3:` errors),
+  and `frontend/src/app/api/chat/route.ts` is the translator between them. A
+  new backend event therefore has **two** integration points, and the first one
+  is invisible: the row lands in the database, the API works, no test fails, and
+  the user is simply never told. `critique` and `quality` are emitted by the
+  backend and dropped by the route today — `test_leaves_critique_and_quality_events_untranslated`
+  in `src/test/chat-stream-translation.test.ts` exists to make that a decision
+  rather than an accident.
+
+- **Artifact identity is the deterministic title, not the message id.** The
+  node runs inside the graph, which finishes *before* the assistant message row
+  is created (`api/v1/conversations.py`), so `message_id` is unavailable. The
+  lookup is `(user_id, conversation_id, title)`
+  (`ArtifactRepository.find_by_conversation_title`). That is why
+  `artifact_intent.derive_title` must stay deterministic — a title derived from
+  the model would give every regeneration a new identity, and
+  `artifact_versions` would stay empty forever.
 
 ### Frontend layout (`frontend/src/`)
 
@@ -290,6 +334,20 @@ Sensible defaults exist for everything; `.env` overrides. Highlights:
 - **Run spend ceiling (D2)** — `AGENT_LOOP_MAX_STEPS=8`,
   `AGENT_LOOP_TOKEN_BUDGET=60000`. Every loop in the graph is individually
   bounded and their product is not; this is the only cumulative check.
+- **Artifact generation (D3)** — `ARTIFACT_GENERATION_ENABLED=true` (master
+  switch; false makes the decision record-only, still logged, nothing written),
+  `ARTIFACT_MIN_DOCUMENT_CHARS=1200`, `ARTIFACT_MIN_CODE_CHARS=400`,
+  `ARTIFACT_MIN_CODE_SHARE=0.25`, `ARTIFACT_MIN_CLASSIFIER_CHARS=200`,
+  `ARTIFACT_ALLOW_CLASSIFIER=true`. The two length floors are **separate on
+  purpose**: a prose document is long *because* it is a document, and a code
+  file is worth keeping well before it reaches prose length.
+  `ARTIFACT_MIN_CODE_SHARE` is the main false-positive guard — without it,
+  `"use % to test evenness: ```x % 2 == 0```"` becomes a source file, because
+  a closed fence cannot tell a file from an illustration. Fence *count* is the
+  wrong discriminator; *proportion of the answer* is the right one. Turning
+  `ARTIFACT_ALLOW_CLASSIFIER` off leaves the free signals deciding alone — that
+  is how the thresholds were tuned, and it is the setting to reach for if LLM
+  spend matters more than recall.
 - `JWT_ALGORITHM=HS256`, refresh tokens, `oauth2_scheme` tokenUrl=auth/login.
 - `REDIS_URL=redis://localhost:6379/0` (local Redis from docker-compose).
 - `SENTRY_DSN`, `NEW_RELIC_ENABLED` + `NEW_RELIC_OTLP_ENDPOINT` (optional OTLP
@@ -312,7 +370,7 @@ Verified `.env.example` has mojibake only in the PowerShell console **render**
 — the files themselves are proper UTF-8 (emoji/box-drawing chars). Do not
 "fix" them.
 
-## 6. CI / CD (all green at `1f43c89`)
+## 6. CI / CD (all gates green locally at the D3 commit)
 
 `.github/workflows/`:
 
@@ -320,7 +378,7 @@ Verified `.env.example` has mojibake only in the PowerShell console **render**
   1. `test` job: backend `pytest -m "not e2e"` (unit + behavioral-invariant;
      includes offline arena/conversational/prompt-regression heuristics).
   2. `security` job: bandit over `app/`, pip-audit over the locked venv
-     (ignores the one ecdsa advisory), npm audit, **mypy over the 17-file
+     (ignores the one ecdsa advisory), npm audit, **mypy over the 18-file
      allowlist**.
   3. `frontend` job: `npx next typegen` → `tsc --noEmit`, eslint, vitest,
      `next build`.
@@ -343,7 +401,8 @@ uv run pytest -m "not e2e"          # or: make test
 uv run ruff check app tests migrations scripts
 uv run bandit -c pyproject.toml -r app -q
 uv run pip-audit                    # against the locked venv
-uv run mypy                         # allowlist only
+uv run mypy --follow-imports=silent \
+  $(grep -v '^\s*#' scripts/mypy_targets.txt | sed 's/\r$//;s|^backend/||')
 cd frontend
 node "node_modules\vitest\vitest.mjs" run   # Windows: bin shim is broken
 npx next typegen && npx tsc --noEmit
@@ -360,18 +419,21 @@ Windows shell gotchas (learned the hard way):
   to `sys.path`.
 - Use `app.openapi()` (not `app.routes`) for endpoint introspection.
 
-## 7. Testing inventory (verified counts at `a4936e4`)
+## 7. Testing inventory (verified counts at the D3 commit)
 
-- Backend: **61 unit test files** + **11 integration** + **1 e2e** under
+- Backend: **60 unit test files** + **11 integration** + **1 e2e** under
   `backend/tests/` (pytest). Fakes live in the single module
   `backend/tests/fakes.py` (e.g. `FakeSession`).
-- Suite total: **827 passed, 4 skipped, 9 deselected** for `pytest` (which
-  already excludes e2e via `addopts`).
-- Frontend: **25 Vitest test files** under `frontend/src/test/` + **6 Playwright
-  specs** in `frontend/e2e/`.
+- Suite total: **909 passed, 4 skipped, 9 deselected** for `cd backend &&
+  uv run pytest` (which already excludes e2e via `addopts`). The 9 deselected
+  are the e2e markers; the `integration` marker is unregistered, so those 11
+  files run by default and need Docker up.
+- Frontend: **29 Vitest test files** under `frontend/src/test/` (253 tests) +
+  **6 Playwright specs** in `frontend/e2e/`.
 - Batch A–D test files: `test_batch_a_wiring.py`, `test_batch_b_memory.py`,
   `test_batch_c_correctness.py`, `test_batch_d_research.py`,
-  `test_batch_d_spend.py`, `test_memory_lifecycle_schema.py`.
+  `test_batch_d_spend.py`, `test_batch_d3_artifact.py`,
+  `test_batch_d3_run_events.py`, `test_memory_lifecycle_schema.py`.
 - `walkthrough.md` once claimed "82 tests" — that is stale. Current counts: see
   above.
 - Backend pyproject: `addopts = -v -m 'not e2e'` — plain `pytest` skips e2e.
@@ -384,6 +446,18 @@ way that the fixes alone would have hidden, including an `UnboundLocalError`
 where a budget stop mid-revision-loop 500'd the request, and two cases where a
 wiring test was only a source-grep and passed even with the call's result
 discarded.
+
+**A killed revert run leaves a real source file reverted.** The `finally` that
+restores it does not run if the process dies, so the next run fails its own
+baseline and looks like a genuine test failure. Snapshot the pristine sources
+up front and restore them unconditionally when the baseline is red — then say so
+rather than debugging a phantom regression. But a snapshot of an *already
+reverted* tree restores the damage instead of undoing it, so the harness now
+runs a preflight that reports which reverts it finds already applied and
+refuses to touch anything. And never run two harnesses against one tree: two
+were live at once here, each reverting files the other was restoring, and the
+symptoms (a red baseline, then a red suite, then green, then red again with
+different tests) looked like three unrelated bugs instead of one.
 
 ## 8. Common operations
 
@@ -448,6 +522,31 @@ discarded.
 12. **`nodes.py` contains corrupted box-drawing bytes** on some lines, so `edit`
     anchors containing em-dashes fail there. Use ASCII-only anchors or a
     Python script. In revert scripts use `rindex()` for trailing anchors.
+13. **A test can pass for the wrong reason, and a green suite cannot tell you.**
+    The most dangerous version is a fixture that never reaches the condition it
+    is named for: the single-fence test proved the "code must be dominant" rule
+    while the snippet in it was too *short* to be substantial, so deleting the
+    dominance check entirely changed nothing. When a test asserts a compound
+    condition, build the fixture so each half is independently load-bearing, and
+    assert in the fixture that it really is (e.g. `assert len(code) >= 400` and
+    `assert share < 0.25`). Three such gaps were found and closed in D3 alone.
+14. **Mocking a collaborator hides its logic.** Every node test replaced
+    `ArtifactRepository` with a fake, so `find_by_conversation_title`'s actual
+    filter never executed — inverting its title predicate passed all of them.
+    Fakes are right for the *caller*; when the collaborator's own behaviour
+    matters, record the statement it builds. But recording it is not the end of
+    it: `str(stmt)` and `stmt.compile().params` together pin the *columns* and
+    the *values*, and inverting `==` to `!=` changes neither. The comparison
+    operator is the third axis and it has to be asserted on its own — walk the
+    `whereclause` for `BinaryExpression`s and check `operator is operators.eq`.
+    That gap survived one round of "fix the weak assertion", which is the
+    point: the first version of a test for a compound property is rarely the
+    one that is actually load-bearing.
+15. **A test that never asks the framework whether it accepts your object is
+    testing the object, not the integration.** All 18 checkpointer tests
+    exercised `ResilientPostgresSaver` directly and passed, while LangGraph was
+    throwing it away at `compile()`. When a fix exists to satisfy a *caller's*
+    validation, at least one test has to make that call.
 
 ## 9b. Already solved — do not re-propose
 
@@ -471,6 +570,7 @@ were all re-verified against source during the Batch A–D work.
 
 ---
 
-_Last updated: 2026-10-01. Regenerate counts (tables/endpoints/tests) from
-code rather than trusting any static number here — and verify code-shape
-claims with `ast`, not regex, since this repo has CRLF checkouts._
+_Last updated: 2026-10-01 (Batches A–D, including D3 artifact generation).
+Regenerate counts (tables/endpoints/tests) from code rather than trusting any
+static number here — and verify code-shape claims with `ast`, not regex, since
+this repo has CRLF checkouts._

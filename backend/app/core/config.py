@@ -422,6 +422,64 @@ class Settings(BaseSettings):
         description="Cumulative token ceiling for one graph run; the cheapest way to stop is to refuse to start the next step",
     )
 
+    # ── Artifact generation (D3) ─────────────────────────────────────────────
+    # When a finished turn is a durable document, save it as a versioned
+    # artifact so the canvas and SavedArtifacts list have something to show.
+    # Costs at most one small classifier call, and only on turns where the two
+    # free signals are both silent -- the body is never regenerated, because
+    # the synthesizer already paid for that text.
+    ARTIFACT_GENERATION_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Master switch for saving document-shaped answers as artifacts. "
+            "Set False to make the feature record-only (the decision is still "
+            "computed and logged, nothing is written)."
+        ),
+    )
+    ARTIFACT_MIN_DOCUMENT_CHARS: int = Field(
+        default=1200,
+        description=(
+            "Minimum answer length before the structural document signal can "
+            "fire. Length alone never decides it -- document headings must be "
+            "present too, or a long chat reply would become a file."
+        ),
+    )
+    ARTIFACT_MIN_CODE_CHARS: int = Field(
+        default=400,
+        description=(
+            "Separate, lower floor for the code-block signal. A code file is "
+            "worth keeping well before it reaches prose length, so holding it "
+            "to the document floor would lose the clearest case in the feature."
+        ),
+    )
+    ARTIFACT_MIN_CODE_SHARE: float = Field(
+        default=0.25,
+        description=(
+            "What fraction of an answer must be fenced code before it counts as "
+            "a code artifact rather than an explanation that quotes code. This "
+            "is the main false-positive guard in the feature: without it, 'use "
+            "`%` to test evenness: ```x % 2 == 0```' becomes a source file. "
+            "Raise it to be stricter about what counts as a file."
+        ),
+    )
+    ARTIFACT_MIN_CLASSIFIER_CHARS: int = Field(
+        default=200,
+        description=(
+            "Below this answer length the LLM tie-breaker never runs. A "
+            "two-line answer is not a document under any reading, so asking "
+            "about it is pure spend."
+        ),
+    )
+    ARTIFACT_ALLOW_CLASSIFIER: bool = Field(
+        default=True,
+        description=(
+            "Allow the one small typed LLM call that breaks the tie when the "
+            "two free signals are silent. Turning this off leaves the free "
+            "signals deciding alone, which is how the thresholds above were "
+            "tuned -- keep it off if LLM spend matters more than recall."
+        ),
+    )
+
     # ── Candidate feature sweep (CRAG / confidence / bandit / optimizer) ──────
     # Knobs for the industry-aligned features landed in the "8 candidates"
     # milestone. Each is fail-open: wrong tuning degrades gracefully, never

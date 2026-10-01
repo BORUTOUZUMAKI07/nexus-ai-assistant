@@ -34,6 +34,34 @@ class ArtifactRepository(BaseRepository[Artifact]):
         result = await self.session.exec(statement)
         return list(result.all())
 
+    async def find_by_conversation_title(
+        self, user_id: UUID, conversation_id: UUID, title: str
+    ) -> Artifact | None:
+        """Find the artifact a regeneration of ``title`` would revise.
+
+        Scoped to (user, conversation, title) on purpose. The agent node runs
+        *inside* the graph, which finishes before the assistant message row
+        exists, so ``message_id`` is not available to key on -- and keying on
+        the title alone would let a document in one conversation collide with
+        an unrelated document of the same name in another.
+
+        The title is derived deterministically from the content
+        (``artifact_intent.derive_title``), so regenerating the same document
+        lands on the same title and becomes a new *version* instead of a
+        duplicate. That is what keeps ``artifact_versions`` reachable: without
+        this lookup every regeneration would silently orphan the history the
+        table exists to hold.
+        """
+        statement = (
+            select(Artifact)
+            .where(Artifact.user_id == user_id)
+            .where(Artifact.conversation_id == conversation_id)
+            .where(Artifact.title == title)
+            .order_by(Artifact.updated_at.desc())
+        )
+        result = await self.session.exec(statement)
+        return result.first()
+
     async def list_versions(self, artifact_id: UUID) -> list[ArtifactVersion]:
         statement = (
             select(ArtifactVersion)

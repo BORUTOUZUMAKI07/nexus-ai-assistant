@@ -59,12 +59,24 @@ export interface HITLRequestAnnotation {
   };
 }
 
+export interface ArtifactAnnotation {
+  type: "artifact";
+  data: {
+    artifact_id: string;
+    title: string;
+    version: number;
+    /** false when an existing artifact was re-versioned rather than created. */
+    created: boolean;
+  };
+}
+
 export type NexusAnnotation =
   | ToolCallAnnotation
   | ToolResultAnnotation
   | ReasoningAnnotation
   | CitationAnnotation
-  | HITLRequestAnnotation;
+  | HITLRequestAnnotation
+  | ArtifactAnnotation;
 
 export interface NexusMessage {
   id: string;
@@ -84,6 +96,18 @@ export interface UseNexusChatOptions {
   model?: string;
   /** Called once when the backend assigns a real UUID to a newly-created conversation. */
   onConversationCreated?: (newConversationId: string) => void;
+  /**
+   * Called when a turn is saved as a durable artifact, so the page can open the
+   * canvas without polling. Fires at most once per turn, and not at all on the
+   * overwhelmingly common turn that was just a chat reply.
+   *
+   * A callback rather than message state on purpose: the annotation array is
+   * rebuilt from reasoning/citations/tool-calls on every patch, so an artifact
+   * entry placed there would be dropped by the next text delta. The artifact
+   * itself is durable server-side, so this is a live signal only -- reloading
+   * the page re-fetches it from the artifacts API.
+   */
+  onArtifactSaved?: (artifact: ArtifactAnnotation["data"]) => void;
 }
 
 export interface SendMessageOptions {
@@ -116,10 +140,14 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   const abortRef = useRef<AbortController | null>(null);
   // Stable ref for the conversation-created callback — avoids re-binding sendMessage.
   const onConversationCreatedRef = useRef(options.onConversationCreated);
+  // Same reason: read inside the stream loop, which is created long before the
+  // latest render, so a direct capture would fire a stale closure.
+  const onArtifactSavedRef = useRef(options.onArtifactSaved);
 
   useEffect(() => {
     optionsRef.current = options;
     onConversationCreatedRef.current = options.onConversationCreated;
+    onArtifactSavedRef.current = options.onArtifactSaved;
   }, [options]);
 
   useEffect(() => {
@@ -319,6 +347,13 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
               } else if (typed.type === "hitl_request") {
                 setPendingHITL(typed.data);
                 annotations.push(typed);
+              } else if (typed.type === "artifact") {
+                // Not pushed into `annotations`: the array is rebuilt from
+                // reasoning/citations/tool-calls on the next patch, so an entry
+                // here would be dropped by the very next text delta. The
+                // callback is the durable signal; the artifact itself lives in
+                // the database.
+                onArtifactSavedRef.current?.(typed.data);
               } else if (
                 (ann as { type: string; data?: { thread_id?: string } }).type === "conversation_created"
               ) {

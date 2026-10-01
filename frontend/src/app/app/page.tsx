@@ -33,6 +33,7 @@ import {
   createArtifact,
   deleteArtifact,
   fetchArtifacts,
+  fetchArtifact,
   addArtifactVersion,
   fetchPlans,
   PlanItem as APIPlanItem,
@@ -196,6 +197,25 @@ export default function AppPage() {
 
   const chat = useNexusChat({
     conversationId: activeConversationId || undefined,
+    onArtifactSaved: (saved) => {
+      // The stream told us a document was persisted. Fetch it rather than
+      // carrying the body over SSE: the canvas needs the full content and the
+      // versions list, and a 120k-char document in an event frame would be held
+      // in memory twice for no benefit.
+      //
+      // Fire-and-forget on purpose. The reply is already on screen; if this
+      // fetch fails the artifact is still in the database and still reachable
+      // through the switcher, so surfacing an error here would trade a working
+      // answer for a scary banner.
+      void (async () => {
+        try {
+          const detail = await fetchArtifact(saved.artifact_id);
+          handleOpenArtifact({ ...detail, isActiveVersion: true });
+        } catch (err) {
+          console.warn("Failed to open generated artifact:", err);
+        }
+      })();
+    },
     onConversationCreated: (newId: string) => {
       // Backend auto-created a conversation for the first message.
       // Update state so all subsequent messages continue this same thread.
