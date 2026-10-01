@@ -893,6 +893,41 @@ export interface SsoAuthorizationUrl {
   provider: string;
 }
 
+export interface SsoProviderInfo {
+  name: string;
+  configured: boolean;
+}
+
+/**
+ * Which SSO providers this deployment can actually complete a login with.
+ *
+ * Asked for before the user has a session, so a failure here is not an auth
+ * problem and must not be surfaced as one: it resolves to an empty list, which
+ * hides the SSO section entirely. That is the right degradation — a sign-in
+ * page offering an IdP the server has no client secret for turns one failed
+ * click into a support ticket.
+ */
+export async function listSsoProviders(): Promise<SsoProviderInfo[]> {
+  const res = await nexusFetch(`${API_BASE}/auth/oauth/providers`, {
+    method: "GET",
+  });
+  // Status first, shape second. The shape check alone covers every failure the
+  // app itself generates, because `backendFetch` answers a dead socket or a
+  // timeout with `{detail: "..."}` and no `providers` key. What it cannot cover
+  // is a status failure that still carries a valid body — a reverse proxy or
+  // CDN replaying a cached 200 while reporting 502. Reading that as a provider
+  // list would put SSO buttons on the page because a request *failed*.
+  if (!res.ok) {
+    return [];
+  }
+  try {
+    const body = (await res.json()) as { providers?: SsoProviderInfo[] };
+    return Array.isArray(body.providers) ? body.providers : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Asks the server-side proxy for a provider's authorize URL. The page then
  * sends the whole browser to `authorization_url`; the provider bounces back to
