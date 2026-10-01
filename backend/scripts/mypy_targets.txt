@@ -27,3 +27,4 @@ backend/app/services/observability/metrics.py
 backend/app/api/v1/metrics.py
 backend/app/services/usage_service.py
 backend/app/services/hook_service.py
+backend/app/services/artifact_intent.py

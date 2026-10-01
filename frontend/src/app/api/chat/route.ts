@@ -239,6 +239,21 @@ export async function POST(req: NextRequest) {
                   data,
                 });
                 controller.enqueue(encoder.encode(`8:[${annotation}]\n`));
+              } else if (eventType === "artifact") {
+                // The turn was saved as a durable artifact. Only the id crosses
+                // the wire: the canvas fetches the content itself, so a 120k-char
+                // document is never duplicated into an SSE frame the client then
+                // has to hold in memory twice.
+                const annotation = JSON.stringify({
+                  type: "artifact",
+                  data: {
+                    artifact_id: parsed.artifact_id,
+                    title: parsed.title ?? "",
+                    version: parsed.version ?? 1,
+                    created: parsed.created !== false,
+                  },
+                });
+                controller.enqueue(encoder.encode(`8:[${annotation}]\n`));
               } else if (eventType === "error") {
                 const errorChunk = `3:${JSON.stringify(parsed.message)}\n`;
                 controller.enqueue(encoder.encode(errorChunk));

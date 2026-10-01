@@ -73,3 +73,14 @@ class AgentState(TypedDict):
     loop_steps: int
     tokens_used: int
     spend_stop_reason: str
+
+    # Artifact generation (D3). Set by the `artifact` node when the finished
+    # turn is a durable document. The stream route reads these off the
+    # checkpoint to emit the SSE event, so the frontend learns about the
+    # artifact without polling. Absent keys mean "no artifact this turn", which
+    # is the normal case and must stay silent.
+    artifact_id: str | None
+    artifact_title: str
+    artifact_version: int
+    artifact_created: bool
+    artifact_reason: str

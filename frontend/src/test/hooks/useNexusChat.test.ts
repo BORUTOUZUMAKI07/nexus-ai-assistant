@@ -215,6 +215,93 @@ describe("useNexusChat", () => {
     expect(result.current.pendingHITL?.thread_id).toBe("thread-9")
   })
 
+  it("reports a generated artifact through onArtifactSaved", async () => {
+    // The event that makes the canvas open by itself. Without it a document
+    // lands in the database and the user is never told, which is the same
+    // invisible state the artifact list had before the backend re-fetched it.
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse(
+          chatStreamBody(["Here is the report."], [
+            {
+              type: "artifact",
+              data: {
+                artifact_id: "art-77",
+                title: "Q3 Report",
+                version: 1,
+                created: true,
+              },
+            },
+          ]),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        )
+      )
+    )
+    const onArtifactSaved = vi.fn()
+    const { result } = renderHook(() => useNexusChat({ onArtifactSaved }))
+
+    await act(async () => {
+      await result.current.sendMessage("write me a report on Q3")
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(onArtifactSaved).toHaveBeenCalledTimes(1)
+    expect(onArtifactSaved).toHaveBeenCalledWith({
+      artifact_id: "art-77",
+      title: "Q3 Report",
+      version: 1,
+      created: true,
+    })
+  })
+
+  it("does not fire onArtifactSaved on a plain chat turn", async () => {
+    // The overwhelmingly common case. A callback that fired on every turn would
+    // train the page to open an empty canvas constantly, so silence here is the
+    // property that matters, not the happy path.
+    const onArtifactSaved = vi.fn()
+    const { result } = renderHook(() => useNexusChat({ onArtifactSaved }))
+
+    await act(async () => {
+      await result.current.sendMessage("Hello!")
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(onArtifactSaved).not.toHaveBeenCalled()
+  })
+
+  it("keeps the artifact out of message annotations", async () => {
+    // The annotation array is rebuilt from reasoning/citations/tool-calls on
+    // every patch, so an artifact entry placed there would be erased by the
+    // next text delta. It is a callback-only signal, and this pins that.
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse(
+          chatStreamBody(["Report body."], [
+            {
+              type: "artifact",
+              data: {
+                artifact_id: "art-1",
+                title: "T",
+                version: 1,
+                created: true,
+              },
+            },
+          ]),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        )
+      )
+    )
+    const { result } = renderHook(() => useNexusChat())
+
+    await act(async () => {
+      await result.current.sendMessage("write a report")
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    const assistant = result.current.messages.find((m) => m.role === "assistant")
+    expect(assistant?.annotations ?? []).toEqual([])
+  })
+
   it("records an error state when the chat endpoint fails", async () => {
     server.use(
       http.post("/api/chat", () =>
