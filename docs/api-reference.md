@@ -1,9 +1,15 @@
 # Nexus AI Assistant — API & FastMCP Reference
 
 > Generated from the **live OpenAPI schema** (`app.openapi()` at commit
-> `1f43c89`): **97 paths · 114 operations**, all under `/api/v1` except
+> `9b6181a`): **99 paths · 116 operations**, all under `/api/v1` except
 > where noted. This is a hand-maintained summary; the interactive Swagger UI
 > at `/docs` is always authoritative.
+>
+> Regenerate the counts rather than trusting them: `app.openapi()["paths"]`.
+> Note that `api_router.routes` is useless for this — on this FastAPI version
+> `include_router` leaves `_IncludedRouter` objects with no `.path`, so
+> `{r.path for r in api_router.routes}` yields `{""}` and a check built on it
+> passes for the wrong reason.
 
 ## Base URLs
 
@@ -29,10 +35,17 @@
 - `POST /auth/forgot-password` · `POST /auth/reset-password`
 - 2FA (TOTP): `POST /auth/2fa/setup`, `POST /auth/2fa/enable`,
   `POST /auth/2fa/disable`, `POST /auth/2fa/verify`, `GET /auth/2fa/status`
-- OAuth (PKCE): `GET /auth/oauth/{provider}` (`google` | `github`) → returns
-  the provider authorization URL; `POST /auth/oauth/{provider}/callback` →
-  exchanges the provider code for a session (both 404 while that provider is
-  unconfigured)
+- OAuth (PKCE): `GET /auth/oauth/providers` → **unauthenticated** list of the
+  providers this deployment can actually complete a login with, so the sign-in
+  page renders exactly those buttons instead of a hardcoded pair. Declared
+  *before* `/oauth/{provider}` on purpose: FastAPI matches in registration
+  order, and a literal path registered after a catch-all is captured as a
+  provider named `providers` and answered with the "unconfigured" 404 —
+  indistinguishable from SSO being off, with no test red. Returns names and a
+  boolean only.
+- `GET /auth/oauth/{provider}` (`google` | `github`) → returns the provider
+  authorization URL; `POST /auth/oauth/{provider}/callback` → exchanges the
+  provider code for a session (both 404 while that provider is unconfigured)
 
 ## Conversations & messages
 
@@ -107,7 +120,10 @@
 
 ## Admin (`get_current_admin` required)
 
-- **Users**: `GET /admin/users`, `POST /admin/users/{user_id}/toggle-status`
+- **Users**: `GET /admin/users`, `POST /admin/users/{user_id}/toggle-status`,
+  `DELETE /admin/users/{user_id}` (delegates to the same dependency-ordered
+  cascade as `DELETE /account`; refuses self-deletion and refuses to remove the
+  last *active* admin; audit is fail-open)
 - **Hooks**: `GET/POST /admin/hooks`, `PUT/DELETE /admin/hooks/{policy_id}`,
   `POST /admin/hooks/reload`
 - **Monitoring**: `GET /admin/monitoring/{drift,observability,viewer,viewer-data,slices,fairness,bandits}`
