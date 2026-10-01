@@ -72,6 +72,17 @@ These were each confirmed first-hand and are intentional:
   shadowed by the wrong order. The endpoint is **unauthenticated** by
   necessity — the sign-in page has no session yet, and that is the only moment
   it needs this — and returns names plus a boolean, nothing else.
+- **"SSO" in this codebase is a name for OAuth, not a second auth system.**
+  Single sign-on is the *outcome* ("you were already signed in to Google, so
+  you are signed in here"); OAuth 2.0 / OIDC is the *protocol* that produces
+  it. Google and GitHub OAuth **are** SSO. So `SSOProviderRegistry` and
+  `SSO_LABELS` in `services/oauth_service.py` and
+  `frontend/src/app/signin/page.tsx` describe the same two providers as
+  `/auth/oauth/google` and `/auth/oauth/github` — there is no separate SSO
+  mechanism, no SAML, no third provider. The naming is redundant, not wrong;
+  **do not "fix" it by introducing a second auth path**, and do not rename it
+  casually — the registry name is referenced from tests and the frontend label
+  tables.
 - **8 `except` handlers in `backend/app/` have `pass` as their entire body,
   and are deliberate** — each is a fail-open or fail-silent seam (e.g.,
   telemetry, non-critical caches). Don't blanket-remove them. A ~64 more are
@@ -120,6 +131,21 @@ These were each confirmed first-hand and are intentional:
   were deleted; **do not recreate them**. Code comments that once cited
   "§x.y of AI_Engineering_Complete_Notes" have been rewritten to describe the
   pattern inline.
+- **`backend/config/model_routing.yaml` was deleted (2026-10-01) and must not
+  come back.** Nothing read it: `Router(...)` in `litellm_client.py` is built
+  from Python literals with no `config_path`. It had already drifted
+  (`fast_chat` llama-3.1-8b-instant vs the code's qwen3.8-27b, an
+  `audio_transcription` group that does not exist, cooldown 60 vs 30). A dead
+  YAML is worse than no file: it parses, it looks plausible, and an editor
+  would believe they were changing routing.
+  `tests/test_no_dead_router_config.py` guards it — but note it enumerates
+  **git-tracked** YAML, not `rglob`, because this checkout holds an untracked
+  `.kilo/worktrees/debonair-redcurrant/` worktree with a full copy of the
+  project and a filesystem scan fails on that copy.
+  Two siblings in the same directory are also unread and were **left alone**
+  pending a decision: `task_contracts.yaml` (cited only by
+  `skills/critic.md`, which is not loaded at runtime) and `eval_criteria.yaml`
+  (zero references).
 
 ## 3. Architecture (what goes where)
 
@@ -467,13 +493,18 @@ Windows shell gotchas (learned the hard way):
   possible; notebooks/scripts importing backend code should add the repo root
   to `sys.path`.
 - Use `app.openapi()` (not `app.routes`) for endpoint introspection.
+- **`api_router.routes` does not list paths on this FastAPI version.**
+  `include_router` leaves `_IncludedRouter` objects that have no `.path`, so
+  `{getattr(r, "path", "") for r in api_router.routes}` yields `{""}` and a
+  test asserting a route was registered passes for the wrong reason. Use
+  `app.openapi()["paths"]`.
 
-## 7. Testing inventory (verified counts at the D3 commit)
+## 7. Testing inventory (verified counts)
 
-- Backend: **61 unit test files** + **11 integration** + **1 e2e** under
+- Backend: **65 unit test files** + **11 integration** + **3 e2e** under
   `backend/tests/` (pytest). Fakes live in the single module
   `backend/tests/fakes.py` (e.g. `FakeSession`).
-- Suite total: **940 passed, 4 skipped, 9 deselected** for `cd backend &&
+- Suite total: **953 passed, 4 skipped, 9 deselected** for `cd backend &&
   uv run pytest` (which already excludes e2e via `addopts`). The 9 deselected
   are the e2e markers; the `integration` marker is unregistered, so those 11
   files run by default and need Docker up.
@@ -636,7 +667,7 @@ were all re-verified against source during the Batch A–D work.
 
 | Concern | Source of truth |
 |---|---|
-| API endpoints | live FastAPI `app.openapi()` (98 paths, 115 ops) — regenerate `docs/api-reference.md` from it |
+| API endpoints | live FastAPI `app.openapi()` (99 paths, 116 ops) — regenerate `docs/api-reference.md` from it |
 | Tables | `backend/app/domain/**/models.py` (35) |
 | Keyboard shortcuts | `frontend/src/components/{CommandPalette,ArtifactCanvas,ChatInput}.tsx` |
 | Frontend design system | `frontend/src/app/globals.css` + `frontend/src/lib/theme.ts` + `docs/frontend-design.md` |
@@ -647,7 +678,9 @@ were all re-verified against source during the Batch A–D work.
 
 ---
 
-_Last updated: 2026-10-01 (Batches A–D, including D3 artifact generation).
+_Last updated: 2026-10-01 (Batches A–D incl. D3 artifacts; then migration-graph
+linearization, `/auth/oauth/providers` + sign-in wiring, model remap, Makefile
+gates, dead `model_routing.yaml` removal, admin user-erasure endpoint).
 Regenerate counts (tables/endpoints/tests) from code rather than trusting any
 static number here — and verify code-shape claims with `ast`, not regex, since
 this repo has CRLF checkouts._
