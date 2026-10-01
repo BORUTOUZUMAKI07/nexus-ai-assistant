@@ -25,12 +25,18 @@ litellm.suppress_debug_info = True
 # warnings at startup. Provider-prefixed variants all appear in responses/cost
 # lookups depending on the call path.
 _DEPLOYED_MODEL_COSTS: dict[str, tuple[float, float]] = {
-    "openrouter/nex-agi/nex-n2.5-mini:free": (0.0, 0.0),
-    "openrouter/nex-agi/nex-n2.5-pro:free": (0.0, 0.0),
+    "groq/qwen/qwen3.8-27b": (0.0, 0.0),
+    "groq/openai/gpt-oss-120b": (0.0, 0.0),
+    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": (0.0, 0.0),
     "openrouter/liquid/lfm-2.5-2.6b:free": (0.0, 0.0),
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free": (0.0, 0.0),
-    "openrouter/inclusionai/ling-3.0-flash-sante:free": (0.0, 0.0),
-    "openrouter/google/gemma-4-31b-it:free": (0.0, 0.0),
+    # Router responses report the model WITHOUT the provider prefix
+    # (`response.model == "qwen/qwen3.8-27b"`), and that unprefixed string is
+    # what `completion_cost` looks up. Registering only the prefixed form makes
+    # every Groq call log a `completion_cost_lookup_failed` warning.
+    "qwen/qwen3.8-27b": (0.0, 0.0),
+    "openai/gpt-oss-120b": (0.0, 0.0),
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": (0.0, 0.0),
+    "liquid/lfm-2.5-2.6b:free": (0.0, 0.0),
 }
 litellm.register_model(
     {
@@ -45,7 +51,38 @@ litellm.register_model(
     }
 )
 
-# Construct model deployment list for LiteLLM Router.
+# Every slug below is a LIVE model verified with an actual completion request
+# rather than assumed, and the groups deliberately span TWO providers:
+#
+#   * Groq (`groq/*`) is primary. Its free tier is independent of OpenRouter's
+#     and measures ~10x lower time-to-first-token (84-730ms vs 870ms+) on the
+#     same kind of request.
+#   * OpenRouter `:free` models are the fallback layer. They share one
+#     `free-models-per-day` pool, so putting every group on them creates a
+#     single point of failure: exhausting that daily cap takes out all traffic.
+#     They also lose free tiers without warning (`nex-agi/nex-n2.5-{mini,pro}`
+#     started returning HTTP 404 "unavailable for free"), which silently pushed
+#     all traffic onto one 2.6B model and made every request take a minute.
+#
+# Two hard constraints shape the group assignment:
+#
+#   1. `fast_chat` must return a tight, clean answer for a small output budget.
+#      It serves the ARQ route (`_run_arq`, which asks for bare JSON and parses
+#      it with `json.loads` under `max_tokens=80`) plus every subagent via
+#      settings.FAST_MODEL. Reasoning-tuned models are unusable here: the gpt-oss
+#      pair spent all 80 tokens on internal reasoning and returned empty or
+#      half-written JSON, which is exactly what produces the retry storm and the
+#      `arq_constraint_check_failed_open` fail-open. Note that no caller ever
+#      passes a `tools` parameter — `pending_tool_calls` is assembled in Python
+#      (see orchestrator/nodes.py), so tool-calling support is NOT the
+#      requirement here; JSON discipline under a token cap is.
+#   2. Each group points at a DISTINCT model wherever the provider allows it.
+#      They once shared two slugs (one already dead), so a single provider outage
+#      took out every fallback at the same moment. `large_context` is the one
+#      deliberate repeat, documented at its definition.
+#
+# Re-verify with a live completion request before assuming a slow response is a
+# code problem — free-tier churn is the usual culprit.
 _CACHE_COST_FIELDS = {
     "input_cost_per_token": 0.0,  # nosec B105
     "output_cost_per_token": 0.0,  # nosec B105
@@ -57,8 +94,9 @@ model_list = [
     {
         "model_name": "fast_chat",
         "litellm_params": {
-            "model": "openrouter/nex-agi/nex-n2.5-mini:free",
-            "api_key": settings.OPENROUTER_API_KEY,
+            "model": "groq/qwen/qwen3.8-27b",
+            "api_key": settings.GROQ_API_KEY,
+            "api_base": "https://api.groq.com/openai/v1",
             "max_tokens": 4096,
             "temperature": 0.7,
             "timeout": 25,
@@ -68,8 +106,9 @@ model_list = [
     {
         "model_name": "complex_reasoning",
         "litellm_params": {
-            "model": "openrouter/nex-agi/nex-n2.5-pro:free",
-            "api_key": settings.OPENROUTER_API_KEY,
+            "model": "groq/openai/gpt-oss-120b",
+            "api_key": settings.GROQ_API_KEY,
+            "api_base": "https://api.groq.com/openai/v1",
             "max_tokens": 4096,
             "temperature": 0.5,
             "timeout": 30,
@@ -79,8 +118,16 @@ model_list = [
     {
         "model_name": "large_context",
         "litellm_params": {
-            "model": "openrouter/nex-agi/nex-n2.5-pro:free",
-            "api_key": settings.OPENROUTER_API_KEY,
+            # Deliberately the same model as `fast_chat`. Groq serves only three
+            # chat models and the other two (gpt-oss-20b/120b) cannot satisfy the
+            # ARQ route: they spend the whole 80-token budget on reasoning and
+            # return empty or truncated content. Both groups sit in the ARQ
+            # fallback chain, so a synthesis-tuned model here would silently
+            # reintroduce the ~6s retry storm. Provider-level redundancy comes
+            # from `vision_analysis`/`liquid_fallback` living on OpenRouter.
+            "model": "groq/qwen/qwen3.8-27b",
+            "api_key": settings.GROQ_API_KEY,
+            "api_base": "https://api.groq.com/openai/v1",
             "max_tokens": 8192,
             "temperature": 0.5,
             "timeout": 30,
@@ -90,7 +137,7 @@ model_list = [
     {
         "model_name": "vision_analysis",
         "litellm_params": {
-            "model": "openrouter/nex-agi/nex-n2.5-mini:free",
+            "model": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
             "api_key": settings.OPENROUTER_API_KEY,
             "max_tokens": 4096,
             "temperature": 0.2,
@@ -113,10 +160,29 @@ model_list = [
 
 # Model group aliases: bare model names and provider-prefixed strings used
 # throughout the codebase, mapped to the Router model_group they belong to.
-_MODEL_GROUP_ALIASES = {
-    "qwen3.8-27b": "complex_reasoning",
-    "qwen/qwen3.8-27b": "complex_reasoning",
-    "groq/qwen3.8-27b": "complex_reasoning",
+#
+# Split in two because the two halves mean different things and only one of them
+# is a promise. A name in `_CURRENT_MODEL_ALIASES` is a model the router actually
+# calls, so the group it points at must be the group running that model -- that is
+# checked by `test_model_routing_contract.py`, and it is why `qwen3.8-27b`
+# resolves to `fast_chat` and not to `complex_reasoning`: both groups serve it,
+# but only one of them is its primary, and cost and usage are attributed through
+# whichever group this map names. A name in `_LEGACY_MODEL_ALIASES` is a model we
+# used to deploy; it is kept so a stale `FAST_MODEL=...` in someone's .env keeps
+# resolving instead of falling through the router as an unknown model, and the
+# group it points at no longer runs it.
+_CURRENT_MODEL_ALIASES = {
+    "qwen3.8-27b": "fast_chat",
+    "qwen/qwen3.8-27b": "fast_chat",
+    "groq/qwen/qwen3.8-27b": "fast_chat",
+    "gpt-oss-120b": "complex_reasoning",
+    "openai/gpt-oss-120b": "complex_reasoning",
+    "groq/openai/gpt-oss-120b": "complex_reasoning",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": "vision_analysis",
+    "liquid/lfm-2.5-2.6b:free": "liquid_fallback",
+}
+
+_LEGACY_MODEL_ALIASES = {
     "compound-mini": "fast_chat",
     "groq/compound-mini": "fast_chat",
     "llama-3.1-8b-instant": "fast_chat",
@@ -125,23 +191,31 @@ _MODEL_GROUP_ALIASES = {
     "google/gemini-flash-1.5:free": "fast_chat",
     "openrouter_llama_8b": "fast_chat",
     "openrouter_gemini_flash": "fast_chat",
-    "gpt-oss-120b": "complex_reasoning",
-    "openai/gpt-oss-120b": "complex_reasoning",
     "llama-3.3-70b-versatile": "complex_reasoning",
     "openrouter_qwen_7b": "complex_reasoning",
     "openai/gpt-oss-20b": "large_context",
     "mixtral-8x7b-32768": "large_context",
-    "gemma-4-26b-a4b-it": "openrouter_gemma",
-    "gemma-4-31b-it": "openrouter_gemma",
-    "llama-3.2-11b-vision-preview": "openrouter_gemma",
+    # These three used to resolve to an `openrouter_gemma` group that no longer
+    # exists in `model_list`. A dangling group name is not a no-op: it makes
+    # `resolve_model_group` return something the router has never heard of, so
+    # the request leaves the fallback chain entirely instead of falling back.
+    # `vision_analysis` is the vision group that replaced it.
+    "gemma-4-26b-a4b-it": "vision_analysis",
+    "gemma-4-31b-it": "vision_analysis",
+    "llama-3.2-11b-vision-preview": "vision_analysis",
 }
 
-# Router model_group → provider/model string for direct litellm calls (tokens, cost).
+_MODEL_GROUP_ALIASES = {**_CURRENT_MODEL_ALIASES, **_LEGACY_MODEL_ALIASES}
+
+# Router model_group → provider/model string for direct litellm calls (tokens,
+# cost). Must stay in lockstep with the `model` field of each entry in
+# `model_list` above — if these drift, usage/cost is attributed to a model that
+# was never actually called.
 _GROUP_TO_MODEL = {
-    "fast_chat": "openrouter/nex-agi/nex-n2.5-mini:free",
-    "complex_reasoning": "openrouter/nex-agi/nex-n2.5-pro:free",
-    "large_context": "openrouter/nex-agi/nex-n2.5-pro:free",
-    "vision_analysis": "openrouter/nex-agi/nex-n2.5-mini:free",
+    "fast_chat": "groq/qwen/qwen3.8-27b",
+    "complex_reasoning": "groq/openai/gpt-oss-120b",
+    "large_context": "groq/qwen/qwen3.8-27b",
+    "vision_analysis": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
     "liquid_fallback": "openrouter/liquid/lfm-2.5-2.6b:free",
 }
 
