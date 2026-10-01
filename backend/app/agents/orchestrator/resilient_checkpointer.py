@@ -46,6 +46,19 @@ checkpoint write has already failed.
 The wrapper is deliberately transparent: it exposes the async methods
 LangGraph's Pregel loop actually calls, and records counters so reconnects are
 observable in logs rather than silent.
+
+Why it subclasses ``BaseCheckpointSaver``
+─────────────────────────────────────────
+It has to. LangGraph validates a checkpointer with ``isinstance(x,
+BaseCheckpointSaver)`` while compiling a graph, and the ``except TypeError`` in
+``lifespan_graph`` turns a rejection into a warning plus an ``InMemorySaver``
+fallback. A duck-typed wrapper with every right method therefore compiles
+happily, raises ``TypeError`` at the one moment it matters, and is discarded --
+leaving the graph with no persistence while every test in
+``test_resilient_checkpointer.py`` still passed, because those tests exercise
+the wrapper directly and never ask LangGraph whether it accepts it. Subclassing
+is not the fix for a hypothetical; it is the difference between a checkpointer
+and an object that looks like one.
 """
 from __future__ import annotations
 
@@ -54,6 +67,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import structlog
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from psycopg import AsyncConnection, OperationalError
 from psycopg.rows import dict_row
 
@@ -64,13 +78,25 @@ logger = structlog.get_logger(__name__)
 # fails loudly here (AttributeError at import of this module's setup step)
 # instead of silently becoming a 500 on the first stream. `setup` is included
 # because lifespan_graph creates the checkpoint tables through it.
+#
+# The list is the *whole* async surface of BaseCheckpointSaver, not just the
+# methods the loop happens to call today. Once this class subclasses the base --
+# which it must, see below -- any method it does not define inherits the base's
+# NotImplementedError stub, so an incomplete list would trade one silent failure
+# for a louder one. `test_every_forwarded_method_exists_on_the_real_saver`
+# checks the names against the installed AsyncPostgresSaver, so this cannot rot
+# against a LangGraph upgrade without a test going red.
 FORWARDED_METHODS = (
     "setup",
+    "aget",
     "aget_tuple",
+    "alist",
     "aput",
     "aput_writes",
-    "alist",
     "adelete_thread",
+    "adelete_for_runs",
+    "acopy_thread",
+    "aprune",
     "aget_delta_channel_history",
 )
 
@@ -89,13 +115,21 @@ def connection_is_dead(conn: AsyncConnection | None) -> bool:
     return bool(conn.closed or conn.broken)
 
 
-class ResilientPostgresSaver:
+class ResilientPostgresSaver(BaseCheckpointSaver):
     """
     A checkpointer that transparently replaces its connection when it dies.
 
     Construct with an already-open ``AsyncConnection``; ``aclose()`` releases
     it. Reconnects create their own connections, which ``aclose()`` also
     releases.
+
+    The ``BaseCheckpointSaver`` base is not decoration. LangGraph validates a
+    checkpointer with ``isinstance(x, BaseCheckpointSaver)`` before compiling a
+    graph, and this module's own ``lifespan_graph`` catches the resulting
+    ``TypeError`` and falls back to ``InMemorySaver``. So a plain class with the
+    right methods is not a checkpointer that reconnects -- it is a checkpointer
+    that is silently discarded, leaving the graph with no persistence at all and
+    the reconnect logic below never once executed in production.
     """
 
     def __init__(
@@ -105,11 +139,17 @@ class ResilientPostgresSaver:
         saver_factory: Callable[..., Any],
         connector: Callable[..., Awaitable[Any]] | None = None,
     ) -> None:
+        super().__init__()
         self._dsn = dsn
         self._conn: AsyncConnection | None = conn
         self._saver_factory = saver_factory
         self._saver: Any = saver_factory(conn=conn)
         self._lock = asyncio.Lock()
+        # `self.serde` comes from BaseCheckpointSaver.__init__ and is the same
+        # JsonPlusSerializer AsyncPostgresSaver defaults to. Left alone rather
+        # than copied off the inner saver: the inner one is built with no serde
+        # argument, so a copy would be indistinguishable from the default and
+        # would only add a coupling to test fakes.
         # Injectable so tests can exercise reconnection without a live database.
         # Defaults to the real driver; production never passes this.
         self._connector = connector or AsyncConnection.connect

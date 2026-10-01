@@ -190,6 +190,54 @@ def test_forwarded_methods_are_all_coroutines():
     assert not_coro == [], f"forwarded methods must be awaitable: {not_coro}"
 
 
+# ── LangGraph has to accept it, or none of the above runs ────────────────────
+#
+# Every test above exercises the wrapper directly, which is exactly why a wrapper
+# that LangGraph *rejects* could pass all of them. `StateGraph.compile` calls
+# `ensure_valid_checkpointer`, which raises TypeError for anything that is not a
+# BaseCheckpointSaver, and `lifespan_graph` catches that TypeError and falls
+# back to InMemorySaver. The result would have been a graph with no persistence
+# at all, in production, with a fully green test file.
+
+
+def test_langgraph_recognises_the_wrapper_as_a_checkpointer():
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
+    wrapper, _ = _build(FakeConn())
+    assert isinstance(wrapper, BaseCheckpointSaver), (
+        "a duck-typed wrapper is discarded by LangGraph at compile() time; "
+        "it has to subclass BaseCheckpointSaver"
+    )
+
+
+def test_a_graph_compiles_with_the_wrapper_installed():
+    """The exact call `lifespan_graph` makes, and the one that used to raise."""
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import ensure_valid_checkpointer
+    from typing_extensions import TypedDict
+
+    class _S(TypedDict, total=False):
+        value: str
+
+    def _node(state: _S) -> _S:
+        return {"value": "ok"}
+
+    wrapper, _ = _build(FakeConn())
+
+    # First, the validator on its own: this is the call whose TypeError was
+    # being swallowed into a silent InMemorySaver fallback.
+    assert ensure_valid_checkpointer(wrapper) is wrapper
+
+    # Then the real thing. compile() is where the check actually happens, and a
+    # graph that fails to compile falls back to memory, so the assertion that
+    # matters is "no exception", not anything about the returned object.
+    graph = StateGraph(_S).add_node("n", _node).add_edge(START, "n").add_edge("n", END)
+    compiled = graph.compile(checkpointer=wrapper)
+    assert isinstance(compiled.checkpointer, BaseCheckpointSaver)
+    assert compiled.checkpointer is wrapper, "compile() must keep our wrapper, not substitute"
+
+
 async def test_aget_tuple_passes_arguments_through():
     wrapper, _ = _build(FakeConn())
     result = await wrapper.aget_tuple({"configurable": {"thread_id": "t1"}})
