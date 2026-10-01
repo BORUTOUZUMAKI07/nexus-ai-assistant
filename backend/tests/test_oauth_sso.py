@@ -15,6 +15,9 @@ Covers, all offline (the provider never hears from these tests):
     rejection, TOTP preauth gating, collision-safe username allocation.
   * /auth/oauth/{provider} + /auth/oauth/{provider}/callback routes: 404 while
     disabled, and the full happy path wiring through the DI override seam.
+  * GET /auth/oauth/providers: which providers this deployment can use, and the
+    route-ordering fact that keeps it from being swallowed by the {provider}
+    catch-all declared after it.
 """
 import asyncio
 import base64
@@ -844,3 +847,101 @@ async def test_oauth_callback_route_issues_tokens():
     finally:
         app.dependency_overrides.pop(deps.get_oauth_service, None)
         app.dependency_overrides.pop(deps.get_auth_service, None)
+
+
+# ─── GET /auth/oauth/providers ────────────────────────────────────────────
+#
+# The sign-in page needs to know which SSO buttons to render. A hardcoded list
+# is wrong in both directions: a deployment with only GitHub configured still
+# shows Google, and a deployment with neither still shows both -- and the user
+# only discovers it after a round trip to the IdP.
+
+@pytest.mark.asyncio
+async def test_providers_route_lists_every_registered_provider():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/auth/oauth/providers")
+    assert resp.status_code == 200
+    names = {p["name"] for p in resp.json()["providers"]}
+    assert names == set(SSOProviderRegistry.providers), (
+        f"route reported {names} but the registry holds {set(SSOProviderRegistry.providers)}"
+    )
+    assert {"google", "github"} <= names
+
+
+@pytest.mark.asyncio
+async def test_providers_route_needs_no_session():
+    """Unauthenticated on purpose: the sign-in page has no session yet.
+
+    Asserted explicitly because "add auth to it" is the obvious future edit and
+    would break the only caller this endpoint exists for.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/auth/oauth/providers")
+    assert resp.status_code == 200
+    assert "detail" not in resp.json(), "the route started requiring credentials"
+
+
+@pytest.mark.asyncio
+async def test_providers_route_reports_real_configuration_state(monkeypatch):
+    """`configured` must reflect this process, not a constant.
+
+    A route that always answered `true` would be indistinguishable, from the
+    sign-in page, from one that is correct -- right up until someone clicks a
+    button for an IdP this deployment has no client secret for.
+    """
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_ID", "configured-id")
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_SECRET", "configured-secret")
+    monkeypatch.setattr(settings, "GITHUB_OAUTH_CLIENT_ID", None)
+    monkeypatch.setattr(settings, "GITHUB_OAUTH_CLIENT_SECRET", None)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/auth/oauth/providers")
+    assert resp.status_code == 200
+    by_name = {p["name"]: p["configured"] for p in resp.json()["providers"]}
+    assert by_name["google"] is True
+    assert by_name["github"] is False
+
+
+@pytest.mark.asyncio
+async def test_providers_route_is_not_swallowed_by_the_provider_catch_all():
+    """The route-ordering bug this endpoint is most likely to reintroduce.
+
+    FastAPI matches in registration order. If `/oauth/providers` is ever
+    declared *after* `/oauth/{provider}`, the catch-all claims the request,
+    `for_provider("providers")` returns a never-enabled stub, and the caller
+    gets the "not configured" 404 -- which looks exactly like SSO being
+    unavailable, so the sign-in page would quietly render no buttons and no test
+    anywhere would be red.
+    """
+    from backend.app.api.v1 import auth as auth_module
+
+    paths = [
+        route.path
+        for route in auth_module.router.routes
+        if getattr(route, "path", "").startswith("/auth/oauth")
+    ]
+    literal = paths.index("/auth/oauth/providers")
+    catch_all = paths.index("/auth/oauth/{provider}")
+    assert literal < catch_all, (
+        f"/auth/oauth/providers is registered after /auth/oauth/{{provider}} and "
+        f"is therefore unreachable; order is {paths}"
+    )
+
+
+def test_describe_providers_agrees_with_each_adapter_is_configured():
+    """The registry-level helper the route delegates to.
+
+    Checked against the adapters directly rather than against a snapshot,
+    because a snapshot is a second list to keep in step -- which is the bug
+    being fixed, one level down.
+    """
+    described = {d["name"]: d["configured"] for d in SSOProviderRegistry.describe_providers()}
+    for name in SSOProviderRegistry.providers:
+        adapter = SSOProviderRegistry.get(name)
+        assert described[name] == adapter.is_configured(), (
+            f"describe_providers disagrees with {name}.is_configured()"
+        )
+    assert set(described) == set(SSOProviderRegistry.providers)

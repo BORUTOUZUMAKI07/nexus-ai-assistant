@@ -50,6 +50,30 @@ class OAuthLoginResponse(BaseModel):
     provider: str
 
 
+class OAuthProviderInfo(BaseModel):
+    """One SSO provider, and whether this deployment can actually use it.
+
+    ``configured`` is about *this server*, not about the provider: a provider
+    with no client id/secret registered cannot complete a login here, so
+    advertising it would send the user to an IdP only for the callback to 404.
+    """
+
+    name: str
+    configured: bool
+
+
+class OAuthProvidersResponse(BaseModel):
+    """Every registered SSO provider and its usability.
+
+    The sign-in page needs this to decide which buttons to render. Guessing is
+    the failure mode worth avoiding: a hardcoded list means a deployment with
+    only GitHub configured still shows a Google button, and one with neither
+    still shows both.
+    """
+
+    providers: list[OAuthProviderInfo]
+
+
 # ── Two-Factor Authentication (TOTP) ────────────────────────────────────────
 
 class TwoFactorChallengeResponse(BaseModel):
