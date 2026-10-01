@@ -131,21 +131,44 @@ These were each confirmed first-hand and are intentional:
   were deleted; **do not recreate them**. Code comments that once cited
   "§x.y of AI_Engineering_Complete_Notes" have been rewritten to describe the
   pattern inline.
-- **`backend/config/model_routing.yaml` was deleted (2026-10-01) and must not
-  come back.** Nothing read it: `Router(...)` in `litellm_client.py` is built
-  from Python literals with no `config_path`. It had already drifted
-  (`fast_chat` llama-3.1-8b-instant vs the code's qwen3.8-27b, an
-  `audio_transcription` group that does not exist, cooldown 60 vs 30). A dead
-  YAML is worse than no file: it parses, it looks plausible, and an editor
-  would believe they were changing routing.
-  `tests/test_no_dead_router_config.py` guards it — but note it enumerates
-  **git-tracked** YAML, not `rglob`, because this checkout holds an untracked
-  `.kilo/worktrees/debonair-redcurrant/` worktree with a full copy of the
-  project and a filesystem scan fails on that copy.
-  Two siblings in the same directory are also unread and were **left alone**
-  pending a decision: `task_contracts.yaml` (cited only by
-  `skills/critic.md`, which is not loaded at runtime) and `eval_criteria.yaml`
-  (zero references).
+- **The injection guardrail canonicalizes before it matches, and the fold is
+  lossy on purpose.** `guardrail_service.canonicalize_for_detection()` folds
+  NFKC, invisible characters, Cyrillic/Greek homoglyphs and per-token leetspeak,
+  because the raw-ASCII regexes were measured to miss 5 of 9 substitution
+  variants. It is used **only** to build a string to match against — never to
+  rewrite stored or user-visible text. That boundary is load-bearing: the fold
+  mangles Russian prose into word soup, which is fine in a discarded copy and
+  would be a serious bug on a persistence path.
+  The guardrails we already had, in case they look absent: PII redaction +
+  injection detection (`guardrail_service.py`), the evidence gate
+  (`evidence_gate.py`), a permission ladder with approval-required tools
+  (`tool_gateway.py` + `config/permissions.yaml`), untrusted-data wrapping of all
+  RAG/web/tool output (`nodes.py::_wrap_untrusted`), SSRF blocking, and
+  role-gated admin routes.
+  **`r"jailbreak"` is not a trigger on its own** — it blocked anyone naming the
+  topic, including security engineers asking how to defend against it, and a
+  guardrail like that gets switched off. It matches the actor position
+  ("enable jailbreak", "jailbreak mode", "you are now jailbroken"). No profanity
+  filter exists and one is deliberately not wanted; a keyword screen cannot
+  catch novel slurs while producing the false positives that get it disabled.
+- **`backend/config/` contains exactly one file, `permissions.yaml`, and it is
+  the only one with a reader** (`tool_gateway.py:50`). Three dead files were
+  deleted 2026-10-01 and must not come back:
+  - `model_routing.yaml` — `Router(...)` in `litellm_client.py` is built from
+    Python literals with no `config_path`; the yaml had drifted (fast_chat
+    llama-3.1-8b-instant vs the code's qwen3.8-27b, an `audio_transcription`
+    group that does not exist, cooldown 60 vs 30).
+  - `task_contracts.yaml` — describes critic contracts (`constraints` /
+    `done_when` / `escalate_when`) and three context-budget tiers (0.60/0.85/
+    0.95). `critic.py:14-25` checks a different four-part rubric; `context_
+    compiler.py:41` has a single ratio, 0.75. Six numbers, zero live.
+  - `eval_criteria.yaml` — G-Eval rubrics (a **deepeval** metric, removed from
+    dependencies over CVEs) and a profanity sanitize tier that no code
+    implements.
+  `tests/test_no_dead_router_config.py` guards the router case only — it
+  enumerates **git-tracked** YAML, not `rglob`, because this checkout holds an
+  untracked `.kilo/worktrees/debonair-redcurrant/` worktree with a full copy of
+  the project and a filesystem scan fails on that copy.
 
 ## 3. Architecture (what goes where)
 
@@ -504,7 +527,7 @@ Windows shell gotchas (learned the hard way):
 - Backend: **65 unit test files** + **11 integration** + **3 e2e** under
   `backend/tests/` (pytest). Fakes live in the single module
   `backend/tests/fakes.py` (e.g. `FakeSession`).
-- Suite total: **953 passed, 4 skipped, 9 deselected** for `cd backend &&
+- Suite total: **980 passed, 4 skipped, 9 deselected** for `cd backend &&
   uv run pytest` (which already excludes e2e via `addopts`). The 9 deselected
   are the e2e markers; the `integration` marker is unregistered, so those 11
   files run by default and need Docker up.
@@ -680,7 +703,8 @@ were all re-verified against source during the Batch A–D work.
 
 _Last updated: 2026-10-01 (Batches A–D incl. D3 artifacts; then migration-graph
 linearization, `/auth/oauth/providers` + sign-in wiring, model remap, Makefile
-gates, dead `model_routing.yaml` removal, admin user-erasure endpoint).
+gates, admin user-erasure endpoint, all three dead config files removed,
+guardrail Unicode-evasion fix).
 Regenerate counts (tables/endpoints/tests) from code rather than trusting any
 static number here — and verify code-shape claims with `ast`, not regex, since
 this repo has CRLF checkouts._
