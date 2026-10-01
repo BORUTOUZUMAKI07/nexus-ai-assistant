@@ -48,7 +48,27 @@ from typing import Sequence, Union
 from alembic import op
 
 revision: str = "b1c2d3e4f5a6"
-down_revision: Union[str, None] = "f6a7b8c9d0e1"
+# a7b8c9d0e1f2 (the RLS revision), NOT f6a7b8c9d0e1.
+#
+# This file and a7b8c9d0e1f2 were both written against f6a7b8c9d0e1 and committed
+# as two independent revisions, which left the repository with two heads. Alembic
+# refuses to resolve `head` when there is more than one, so `alembic upgrade
+# head` — the documented first-boot command, and what `make migrate` runs — died
+# with "Multiple head revisions are present" before executing a statement. Both
+# revisions were therefore unreachable in practice: nothing that ran `upgrade
+# head` could have applied the memory columns or the row-level security.
+#
+# a7b8c9d0e1f2 is the parent because it was committed first (4dc638e, 2026-09-30)
+# and carries the earlier Create Date, so this keeps the chain in the order the
+# work actually happened. The two revisions are independent — one adds columns
+# to user_memories, the other sets a table attribute and creates an event
+# trigger — so the order has no effect on the resulting schema.
+#
+# A database already stamped `b1c2d3e4f5a6` under the old chain picks this up
+# cleanly: its version row already matches, and the newly-reachable
+# a7b8c9d0e1f2 is idempotent (ALTER TABLE ... ENABLE, REVOKE, CREATE OR REPLACE
+# FUNCTION, and DROP EVENT TRIGGER IF EXISTS before CREATE).
+down_revision: Union[str, None] = "a7b8c9d0e1f2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
