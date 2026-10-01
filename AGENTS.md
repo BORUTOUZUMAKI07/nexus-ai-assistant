@@ -58,6 +58,20 @@ These were each confirmed first-hand and are intentional:
   `services/oauth_service.py` (`SSOProviderRegistry` with
   `GoogleOAuthProvider`/`GitHubOAuthProvider`); there is **no** flat
   `/auth/oauth/login` route.
+- **`GET /auth/oauth/providers` is declared BEFORE `/oauth/{provider}`, and it
+  has to be.** It reports which IdPs this deployment can actually complete a
+  login with (`SSOProviderRegistry.describe_providers()`), so the sign-in page
+  can render exactly those buttons instead of a hardcoded pair. FastAPI matches
+  in registration order, so a literal path registered *after* the catch-all is
+  captured as a provider named `providers` and answered with the "unconfigured"
+  404 — indistinguishable from SSO being off, with no test anywhere red. The
+  same ordering rule applies twice more on the way out: Next's
+  `app/api/auth/oauth/providers/route.ts` sits beside `[provider]/route.ts`, and
+  the MSW mock at `src/test/mocks/handlers.ts` sits above the `:provider`
+  handler. `:provider` matches the string `"providers"`, so all three would be
+  shadowed by the wrong order. The endpoint is **unauthenticated** by
+  necessity — the sign-in page has no session yet, and that is the only moment
+  it needs this — and returns names plus a boolean, nothing else.
 - **8 `except` handlers in `backend/app/` have `pass` as their entire body,
   and are deliberate** — each is a fail-open or fail-silent seam (e.g.,
   telemetry, non-critical caches). Don't blanket-remove them. A ~64 more are
@@ -297,10 +311,45 @@ webhook_deliveries, webhook_endpoints`
 - ORM: SQLModel (SQLAlchemy under the hood); async via `asyncpg`, sync via
   `psycopg2`/`psycopg3`.
 - Migrations: Alembic (`backend/migrations/`, head `b1c2d3e4f5a6` —
-  8 revisions: `0001_initial_schema` → `9290fa24428d` → `a1b2c3d4e5f6` →
+  **9** revisions: `0001_initial_schema` → `9290fa24428d` → `a1b2c3d4e5f6` →
   `c1d2e3f4a5b6` → `d3e4f5a6b7c8` → `e5f6a7b8c9d0` → `f6a7b8c9d0e1` (closes a
-  pre-existing drift) → `b1c2d3e4f5a6` (Batch B memory lifecycle columns)).
+  pre-existing drift) → `a7b8c9d0e1f2` (row-level security) →
+  `b1c2d3e4f5a6` (Batch B memory lifecycle columns)).
   `alembic upgrade head` before first boot.
+- **The graph is linear and `tests/test_migration_graph.py` enforces it.** It
+  was not, and nothing noticed: `a7b8c9d0e1f2` and `b1c2d3e4f5a6` were both
+  written against `f6a7b8c9d0e1` and committed independently, giving two heads.
+  Alembic refuses to resolve `head` with more than one, so `alembic upgrade
+  head` — the documented first-boot command *and* what `make migrate` runs —
+  died with "Multiple head revisions are present" before executing a single
+  statement. No test touched `migrations/`, and a branched graph is not an
+  error at import time, so 940 backend tests stayed green. Both revisions had
+  to be applied by naming them explicitly.
+- **Alembic must run from `backend/`, and `alembic.ini` depends on it.**
+  `script_location = migrations` and `prepend_sys_path` are both resolved
+  against the *current working directory*, not against the ini file. So:
+  - from the repo root, `script_location` does not resolve ("Path doesn't
+    exist: migrations");
+  - from `backend/`, `prepend_sys_path` must be `..` (the repo root) so that
+    `from backend.app.domain...` — which every revision uses so autogenerate
+    compares against the app's own metadata — resolves. With `.` it means
+    `backend/`, the path gains `backend.app` instead of `backend`, and **all
+    nine revisions fail identically** with `No module named 'backend'` before
+    Alembic inspects a statement.
+  - **`backend/.env` `DATABASE_URL` points at hosted Supabase, not the local
+    container.** Run `docker compose up -d postgres` and export
+    `DATABASE_URL=postgresql+asyncpg://nexus:nexus@localhost:5432/nexus_dev`
+    before touching alembic, or you will migrate the live database. (This is
+    not hypothetical — see §9.16.)
+- **Row-level security is on.** `a7b8c9d0e1f2` enables RLS on every `public`
+  table and revokes the blanket grants Supabase gives `anon`/`authenticated`,
+  closing the Shield advisories `rls_disabled_in_public` and
+  `sensitive_columns_exposed`. It deliberately does **not** set `FORCE ROW
+  LEVEL SECURITY`: the backend connects as the table owner, which bypasses its
+  own RLS, and storage calls use `service_role`, which carries `BYPASSRLS`.
+  Denying `anon`/`authenticated` removes no capability the app has. A
+  `ddl_command_end` trigger covers tables created later, which matters because
+  `infrastructure/database/engine.py` calls `create_all` at startup.
 - **Index-name convention**: `index=True` on a model column makes SQLModel
   auto-name the index `ix_<table>_<col>`. The migration must use that exact
   name, not merely avoid colliding with it — otherwise autogenerate reports
@@ -421,14 +470,14 @@ Windows shell gotchas (learned the hard way):
 
 ## 7. Testing inventory (verified counts at the D3 commit)
 
-- Backend: **60 unit test files** + **11 integration** + **1 e2e** under
+- Backend: **61 unit test files** + **11 integration** + **1 e2e** under
   `backend/tests/` (pytest). Fakes live in the single module
   `backend/tests/fakes.py` (e.g. `FakeSession`).
-- Suite total: **909 passed, 4 skipped, 9 deselected** for `cd backend &&
+- Suite total: **940 passed, 4 skipped, 9 deselected** for `cd backend &&
   uv run pytest` (which already excludes e2e via `addopts`). The 9 deselected
   are the e2e markers; the `integration` marker is unregistered, so those 11
   files run by default and need Docker up.
-- Frontend: **29 Vitest test files** under `frontend/src/test/` (253 tests) +
+- Frontend: **29 Vitest test files** under `frontend/src/test/` (260 tests) +
   **6 Playwright specs** in `frontend/e2e/`.
 - Batch A–D test files: `test_batch_a_wiring.py`, `test_batch_b_memory.py`,
   `test_batch_c_correctness.py`, `test_batch_d_research.py`,
@@ -547,6 +596,34 @@ different tests) looked like three unrelated bugs instead of one.
     exercised `ResilientPostgresSaver` directly and passed, while LangGraph was
     throwing it away at `compile()`. When a fix exists to satisfy a *caller's*
     validation, at least one test has to make that call.
+16. **`alembic` in this repo talks to hosted Supabase unless you stop it.**
+    `backend/.env` carries a real `DATABASE_URL` pointing at
+    `aws-0-ap-south-1.pooler.supabase.com`, and `migrations/env.py` reads the
+    app settings, so `uv run alembic upgrade head` from `backend/` migrates the
+    **live** database. On 2026-10-01 an `upgrade head` intended for the local
+    container was pointed at Supabase and applied `a7b8c9d0e1f2 ->
+    b1c2d3e4f5a6` there. It was additive and idempotent (`ADD COLUMN IF NOT
+    EXISTS`, `CREATE INDEX IF NOT EXISTS`, bounded UPDATEs), no rows were lost,
+    and it turned out to be a revision the committed Batch B code already
+    required — but it was an unauthorised change to a production database, and
+    the right response is to escalate, not to reason about whether it was
+    harmless. **Before any alembic command: print the host.** If it is not
+    localhost, stop.
+    - The pooler also rejects asyncpg prepared statements, so a read-only
+      inspection script needs
+      `create_async_engine(url, connect_args={"statement_cache_size": 0})` or
+      it dies with `DuplicatePreparedStatementError`.
+17. **A reverted "test" that changes nothing is not a test.** The first attempt
+    at the `!res.ok` revert in `listSsoProviders` replaced `return []` with
+    `return [] as never[]` and the suite stayed green — correct, because the
+    edit was semantically inert. The second attempt (delete the guard) *also*
+    stayed green, and that was the real finding: with `Array.isArray` and a
+    `try/catch` already in place, the guard was unreachable for every failure
+    the app itself produces, so the test was passing for the wrong reason. It
+    only became load-bearing once a test served a **503 carrying a valid
+    provider list** — the proxy-replays-a-cached-200 case that `Array.isArray`
+    cannot filter. Read the revert and ask what it actually changes before
+    believing a pass or a miss.
 
 ## 9b. Already solved — do not re-propose
 
@@ -559,7 +636,7 @@ were all re-verified against source during the Batch A–D work.
 
 | Concern | Source of truth |
 |---|---|
-| API endpoints | live FastAPI `app.openapi()` (97 paths, 114 ops) — regenerate `docs/api-reference.md` from it |
+| API endpoints | live FastAPI `app.openapi()` (98 paths, 115 ops) — regenerate `docs/api-reference.md` from it |
 | Tables | `backend/app/domain/**/models.py` (35) |
 | Keyboard shortcuts | `frontend/src/components/{CommandPalette,ArtifactCanvas,ChatInput}.tsx` |
 | Frontend design system | `frontend/src/app/globals.css` + `frontend/src/lib/theme.ts` + `docs/frontend-design.md` |
