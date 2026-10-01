@@ -320,6 +320,20 @@ export const handlers = [
     return HttpResponse.json({ ok: true })
   }),
 
+  // MUST stay above the `:provider` handler below. MSW matches in registration
+  // order, exactly like the App Router and like FastAPI, so a literal path
+  // registered after a `:param` sibling is shadowed. Both the backend route and
+  // this mock are ordered for the same reason; putting this one lower would
+  // make the sign-in page believe the IdP is called "providers".
+  http.get("/api/auth/oauth/providers", () =>
+    HttpResponse.json({
+      providers: [
+        { name: "google", configured: true },
+        { name: "github", configured: true },
+      ],
+    })
+  ),
+
   http.get("/api/auth/oauth/:provider", () =>
     HttpResponse.json({
       authorization_url:

@@ -4,8 +4,33 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, Lock, Mail, User, ArrowRight, Sparkles } from "lucide-react";
-import { registerUser, loginUser, ssoLogin, type OAuthProviderName } from "@/lib/api";
+import { registerUser, loginUser, ssoLogin, listSsoProviders, type OAuthProviderName } from "@/lib/api";
 import { checkAuth } from "@/lib/auth";
+
+/**
+ * Display name per provider. Also the whitelist the fetched list is filtered
+ * against: a backend that gains a provider before this file learns to draw it
+ * drops the entry instead of rendering a button with no glyph and a blank
+ * label. `Object.prototype.hasOwnProperty` rather than `in`, so a provider
+ * literally named "constructor" cannot smuggle itself through the check and
+ * read a function off the prototype.
+ */
+const SSO_LABELS: Record<OAuthProviderName, string> = {
+  google: "Google",
+  github: "GitHub",
+};
+
+/**
+ * Provider mark per provider, keyed in step with `SSO_LABELS` so the two tables
+ * can never disagree about which providers this page can draw.
+ *
+ * Safe to build at module scope even though the glyph components are declared
+ * further down: both are hoisted `function` declarations.
+ */
+const SSO_GLYPHS: Record<OAuthProviderName, React.ReactNode> = {
+  google: <GoogleGlyph />,
+  github: <GitHubGlyph />,
+};
 
 export default function SignInPage() {
   const router = useRouter();
@@ -17,6 +42,11 @@ export default function SignInPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ssoProvider, setSsoProvider] = useState<OAuthProviderName | null>(null);
+  // null means "not known yet", which is treated the same as "none": the SSO
+  // section stays hidden until the server has said what it supports. Rendering
+  // the buttons optimistically and hiding them a moment later would be the
+  // wrong direction to flicker.
+  const [ssoProviders, setSsoProviders] = useState<OAuthProviderName[] | null>(null);
 
   useEffect(() => {
     // The access cookie is httpOnly, so session presence is verified against
@@ -51,6 +81,29 @@ export default function SignInPage() {
       setLoading(false);
     }
   };
+
+  // The list of SSO providers is server-side configuration, not a build-time
+  // constant, so it is fetched rather than assumed. `listSsoProviders` resolves
+  // to [] on any failure, which lands here as "this deployment offers no SSO"
+  // and hides the section instead of offering a button that would 404.
+  useEffect(() => {
+    let live = true;
+    void listSsoProviders().then((providers) => {
+      if (!live) return;
+      const usable = providers
+        .filter((p) => p.configured)
+        // A name this UI has no glyph or label for is dropped rather than
+        // rendered as a blank button: the backend can gain a provider before
+        // the frontend learns to draw it.
+        .map((p) => p.name)
+        .filter((name): name is OAuthProviderName =>
+          Object.prototype.hasOwnProperty.call(SSO_LABELS, name));
+      setSsoProviders(usable);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const handleSso = async (provider: OAuthProviderName) => {
     setError(null);
@@ -176,41 +229,36 @@ export default function SignInPage() {
           </button>
         </form>
 
-        <div className="mt-4 flex items-center gap-3 text-xs text-[var(--text-faint)]">
-          <span className="h-px flex-1 bg-[var(--border-subtle)]" />
-          or continue with
-          <span className="h-px flex-1 bg-[var(--border-subtle)]" />
-        </div>
+        {ssoProviders !== null && ssoProviders.length > 0 && (
+          <>
+            <div className="mt-4 flex items-center gap-3 text-xs text-[var(--text-faint)]">
+              <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+              or continue with
+              <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+            </div>
 
-        <div className="mt-4 grid gap-2">
-          <button
-            type="button"
-            onClick={() => handleSso("google")}
-            disabled={ssoProvider !== null}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:border-[var(--accent)] hover:text-[var(--accent-ink)] disabled:opacity-50"
-          >
-            {ssoProvider === "google" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <GoogleGlyph />
-            )}
-            {ssoProvider === "google" ? "Redirecting…" : "Continue with Google"}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleSso("github")}
-            disabled={ssoProvider !== null}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:border-[var(--accent)] hover:text-[var(--accent-ink)] disabled:opacity-50"
-          >
-            {ssoProvider === "github" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <GitHubGlyph />
-            )}
-            {ssoProvider === "github" ? "Redirecting…" : "Continue with GitHub"}
-          </button>
-        </div>
+            <div className="mt-4 grid gap-2">
+              {ssoProviders.map((provider) => (
+                <button
+                  key={provider}
+                  type="button"
+                  onClick={() => handleSso(provider)}
+                  disabled={ssoProvider !== null}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:border-[var(--accent)] hover:text-[var(--accent-ink)] disabled:opacity-50"
+                >
+                  {ssoProvider === provider ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    SSO_GLYPHS[provider]
+                  )}
+                  {ssoProvider === provider
+                    ? "Redirecting…"
+                    : `Continue with ${SSO_LABELS[provider]}`}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <div className="mt-5 text-center text-sm text-[var(--text-muted)]">
           {mode === "login" ? (
