@@ -84,7 +84,7 @@ class RetrievalGuardService:
                 break
             # Refine the query: prefer a rewritten variant over the raw query so
             # the corrective pass searches different phrasing, not the same one.
-            variants = self._rewriter.rewrite(query)
+            variants = await self._rewriter.rewrite(query)
             if not variants:
                 break
             refined = next((v for v in variants if v.strip().lower() != query.strip().lower()), variants[-1])

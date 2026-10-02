@@ -76,7 +76,7 @@ class RAGService:
 
         async with trace_span("rag_query", {"query": query, "user_id": str(user_id), "top_k": top_k}):
             # 1. Query rewriting (multi-query expansion + conditional HyDE)
-            queries = self._rewriter.rewrite(query)
+            queries = await self._rewriter.rewrite(query)
 
             # 2. Multi-query hybrid search with Dense MMR (child→parent resolved & diversified)
             candidates = await self._retriever.retrieve_multi(
