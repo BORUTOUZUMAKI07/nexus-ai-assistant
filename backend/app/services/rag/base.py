@@ -125,9 +125,14 @@ class IRewriter(ABC):
     """Abstract query rewriting / expansion contract."""
 
     @abstractmethod
-    def rewrite(self, query: str) -> list[str]:
+    async def rewrite(self, query: str) -> list[str]:
         """
         Expand a user query into 2-3 retrieval variants.
         Optionally Conditionally produce a HyDE hypothesis.
+
+        Async because producing a real HyDE hypothesis is a model call. It was
+        sync while the hypothesis was a fixed string template, and became async
+        when it stopped being one -- see `RAGService.query`, the only production
+        caller on the hot path.
         """
         pass

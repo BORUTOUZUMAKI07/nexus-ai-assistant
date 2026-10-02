@@ -123,13 +123,15 @@ def test_multi_query_expansion_is_deterministic():
     assert len(set(v.lower() for v in variants)) == len(variants)  # no duplicates
 
 
-def test_hyde_generated_for_short_abstract_query():
-    variants = rewriter.rewrite("How does RAG work?")
+@pytest.mark.asyncio
+async def test_hyde_generated_for_short_abstract_query():
+    variants = await rewriter.rewrite("How does RAG work?")
     assert any("overview of" in v for v in variants)
 
 
-def test_hyde_skipped_for_keyword_code_query():
-    variants = rewriter.rewrite("import FastAPI from fastapi")
+@pytest.mark.asyncio
+async def test_hyde_skipped_for_keyword_code_query():
+    variants = await rewriter.rewrite("import FastAPI from fastapi")
     assert not any("overview of" in v for v in variants)
     assert rewriter.should_generate_hyde("DELETE FROM users WHERE id = 5") is False
     assert rewriter.should_generate_hyde("src/app/main.py") is False
@@ -415,10 +417,10 @@ async def test_retrieve_multi_merges_and_caps_top_k(monkeypatch):
 
 class _FakeRewriter(IRewriter):
     def __init__(self):
-        self.called = False
+        self.calls = 0
 
-    def rewrite(self, query: str) -> list[str]:
-        self.called = True
+    async def rewrite(self, query: str) -> list[str]:
+        self.calls += 1
         return [query, f"{query} rephrased"]
 
 
@@ -454,7 +456,7 @@ async def test_rag_service_uses_rewriter_and_multi_query_retrieval():
     )
     result = await svc.query(query="What is chunking?", user_id=uuid.uuid4(), top_k=5)
 
-    assert rewriter_fake.called is True
+    assert rewriter_fake.calls == 1
     assert retriever_fake.queries == ["What is chunking?", "What is chunking? rephrased"]
     assert result.query_variants == retriever_fake.queries
     assert result.total_retrieved == 1

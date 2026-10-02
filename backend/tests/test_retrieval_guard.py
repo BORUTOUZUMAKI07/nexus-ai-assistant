@@ -28,7 +28,9 @@ class FakeRewriter:
     def __init__(self, variants: list[str]):
         self.variants = variants
 
-    def rewrite(self, query: str) -> list[str]:
+    async def rewrite(self, query: str) -> list[str]:
+        # Async because IRewriter.rewrite became async when HyDE hypothesis
+        # generation became a model call; the corrective re-query awaits it.
         return self.variants
 
 

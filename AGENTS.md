@@ -455,6 +455,13 @@ Sensible defaults exist for everything; `.env` overrides. Highlights:
   `ARTIFACT_ALLOW_CLASSIFIER` off leaves the free signals deciding alone — that
   is how the thresholds were tuned, and it is the setting to reach for if LLM
   spend matters more than recall.
+- **HyDE (retrieval)** — `RAG_HYDE_MODE=llm|template|off` (default `llm`),
+  `RAG_HYDE_MODEL=fast_chat`, `RAG_HYDE_MAX_TOKENS=220`,
+  `RAG_HYDE_TIMEOUT_SECONDS=6.0`. The model call is per *abstract* query only —
+  `should_generate_hyde` skips code, path, and keyword lookups before any spend.
+  `template`/`off` exist so the cost/benefit is measurable by flipping one
+  variable; see §9.19 for why the template is a fallback rather than the
+  implementation.
 - `JWT_ALGORITHM=HS256`, refresh tokens, `oauth2_scheme` tokenUrl=auth/login.
 - `REDIS_URL=redis://localhost:6379/0` (local Redis from docker-compose).
 - `SENTRY_DSN`, `NEW_RELIC_ENABLED` + `NEW_RELIC_OTLP_ENDPOINT` (optional OTLP
@@ -533,15 +540,15 @@ Windows shell gotchas (learned the hard way):
 
 ## 7. Testing inventory (verified counts)
 
-- Backend: **66 unit test files** + **11 integration** + **3 e2e** under
+- Backend: **67 unit test files** + **11 integration** + **3 e2e** under
   `backend/tests/` (pytest). Fakes live in the single module
   `backend/tests/fakes.py` (e.g. `FakeSession`).
-- Suite total: **1042 passed, 4 skipped, 9 deselected** for `cd backend &&
+- Suite total: **1073 passed, 4 skipped, 9 deselected** for `cd backend &&
   uv run pytest` (which already excludes e2e via `addopts`). The 9 deselected
   are the e2e markers; the `integration` marker is unregistered, so those 11
   files run by default and need Docker up. **If Docker Desktop is not running
   those 11 files produce ~113 `DockerException` setup errors** and the total
-  drops to ~915 — that is the environment, not a regression. Verify with
+  drops to ~946 — that is the environment, not a regression. Verify with
   `docker info` before investigating.
 - Frontend: **29 Vitest test files** under `frontend/src/test/` (260 tests) +
   **6 Playwright specs** in `frontend/e2e/`.
@@ -549,6 +556,7 @@ Windows shell gotchas (learned the hard way):
   `test_batch_c_correctness.py`, `test_batch_d_research.py`,
   `test_batch_d_spend.py`, `test_batch_d3_artifact.py`,
   `test_batch_d3_run_events.py`, `test_memory_lifecycle_schema.py`.
+  RAG: `test_hyde_generation.py` (31 tests, 15-revert harness — see §9.19).
 - `walkthrough.md` once claimed "82 tests" — that is stale. Current counts: see
   above.
 - Backend pyproject: `addopts = -v -m 'not e2e'` — plain `pytest` skips e2e.
@@ -723,6 +731,46 @@ different tests) looked like three unrelated bugs instead of one.
       in no test. The tests inject a `context` stub instead — a parameter that
       overrides the value under test is a second source of truth for it.
 
+19. **HyDE is a real model call, and it is fail-open towards the template.**
+    `services/rag/query_rewriter.py` used to return a fixed string,
+    `"An overview of <query>, including definition, key concepts, workflows, ..."`,
+    which is HyDE's *shape* with none of its *mechanism*. A question and its
+    answer share little wording ("how do I stop the model looping" versus "add a
+    per-run step ceiling and a token budget"), so the entire value of HyDE is
+    that the *imagined answer* carries the answer's vocabulary. The template
+    carries none of it, embeds close to the original query -- which is already
+    variant #1 -- and spent a full hybrid search re-finding chunks that
+    `resolve_children_to_parents` dedupes moments later. It survives as
+    `RAG_HYDE_MODE="template"` and as the fail-open fallback, because "free,
+    instant, always returns text" is the right answer when generation is
+    unavailable.
+    - `IRewriter.rewrite` is now **`async`**, because producing a hypothesis is a
+      model call; it was sync while the hypothesis was a constant. Two
+      production call sites: `rag_service.py:79` and `retrieval_guard.py:87` (the
+      CRAG corrective pass, already inside an `async def`, so it may spend a call
+      too -- bounded by `CRAG_MAX_REVISIONS`).
+    - **`asyncio.CancelledError` must not be swallowed by the fail-open handler.**
+      It is how a client disconnect and a shutdown reach this code, and it
+      inherits `BaseException` precisely so a broad `except Exception` cannot eat
+      it. It is caught, documented, and re-raised.
+    - **Call `ai_client.completion()`, never `complete()` or the raw router.**
+      `charge_tokens` is called in exactly one place, `litellm_client.py:453`,
+      chosen so that no call site has to remember to. Reaching past it produces a
+      HyDE call that costs money and is invisible to the per-run ceiling in
+      `core/spend.py` (see 9.10).
+    - **The singleton must be constructed with a real client.**
+      `QueryRewriterService()` with no client degrades to the template silently
+      and is indistinguishable from working from outside -- which is exactly what
+      makes the rest of the module testable without a network, and means an
+      unwired `query_rewriter_service` would pass every other test.
+      `test_the_production_singleton_is_actually_wired_to_a_client` is the only
+      test that can catch it. Same shape as 9.14.
+    - `RAG_HYDE_MODE` is `llm` | `template` | `off`; the other two exist so the
+      cost/benefit is measurable by flipping one variable rather than by
+      reverting code. `RAG_HYDE_MAX_TOKENS` (220) and
+      `RAG_HYDE_TIMEOUT_SECONDS` (6.0) are ceilings, not suggestions -- this runs
+      in front of every abstract query.
+
 ## 9b. Already solved — do not re-propose
 
 Bounded revision loop with force-accept; LLM retry/empty-response handling +
@@ -751,7 +799,8 @@ gates, admin user-erasure endpoint, all three dead config files removed,
 guardrail Unicode-evasion fix, `docs/api-reference.md` resync; then the
 database-target guard — `.env.example`/config/compose DSNs reconciled and
 `alembic upgrade`/`downgrade` made to refuse a non-local host without
-`ALLOW_REMOTE_MIGRATIONS`).
+`ALLOW_REMOTE_MIGRATIONS`; then LLM-backed HyDE — `IRewriter.rewrite` made
+`async`, the fixed template demoted to a mode and a fail-open fallback).
 Regenerate counts (tables/endpoints/tests) from code rather than trusting any
 static number here — and verify code-shape claims with `ast`, not regex, since
 this repo has CRLF checkouts._

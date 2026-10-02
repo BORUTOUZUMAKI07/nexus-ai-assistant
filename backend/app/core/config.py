@@ -336,6 +336,31 @@ class Settings(BaseSettings):
     # ── RAG ────────────────────────────────────────────────────────────────────
     RAG_TOP_K: int = Field(default=20)
     RAG_RERANK_TOP_N: int = Field(default=5)
+
+    # HyDE (Hypothetical Document Embeddings). "llm" asks the model to imagine
+    # the answer and searches THAT, which is the whole point: a real answer
+    # contains the vocabulary a question does not ("how do I stop the model
+    # looping" -> "add a per-run step ceiling and a token budget"). The previous
+    # implementation emitted a fixed template, "An overview of <query>,
+    # including definition, key concepts, ...", which embeds close to the query
+    # itself and re-retrieves what variant #1 already found.
+    #
+    # "template" keeps that old behaviour with no model call, and "off" skips
+    # HyDE entirely. Both exist so the cost/benefit is measurable by flipping
+    # one variable, which is the only honest way to decide whether the extra
+    # model call earns its place.
+    RAG_HYDE_MODE: str = Field(default="llm", description="HyDE: 'llm', 'template', or 'off'")
+    RAG_HYDE_MODEL: str = Field(
+        default="fast_chat",
+        description="Model group for HyDE generation. Cheap on purpose: one short "
+        "hypothetical per abstract query, on the query path.",
+    )
+    RAG_HYDE_MAX_TOKENS: int = Field(default=220)
+    RAG_HYDE_TIMEOUT_SECONDS: float = Field(
+        default=6.0,
+        description="Hard ceiling on the HyDE call. Retrieval must not wait on "
+        "generation, so this fails to the template rather than to an error.",
+    )
     CHUNK_SIZE: int = Field(default=512)
     CHUNK_OVERLAP: int = Field(default=64)
     PARENT_CHUNK_SIZE: int = Field(default=512, description="Parent chunk target tokens")
