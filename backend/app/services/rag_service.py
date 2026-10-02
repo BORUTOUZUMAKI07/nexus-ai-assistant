@@ -2,7 +2,8 @@
 RAG Application Service.
 Owns the end-to-end RAG query workflow (SRP):
 Query Rewriting (+ conditional HyDE) -> Multi-Query Hybrid Search -> Child→Parent
-Resolution -> Cross-Encoder / FlashRank Rerank -> Citation & Context Generation.
+Resolution -> Cross-Encoder / FlashRank Rerank -> Answer-Coverage Grading ->
+Citation & Context Generation.
 
 Route handlers depend on this abstraction, never directly on retrieval,
 reranker, rewriter, or citation singletons (DIP).
@@ -14,6 +15,7 @@ import structlog
 from backend.app.core.config import settings
 from backend.app.domain.file.schemas import RAGCitation, RAGQueryResult
 from backend.app.services.observability.tracing import trace_span
+from backend.app.services.rag.answer_coverage import grade_answer_coverage
 from backend.app.services.rag.base import IReranker, IRetriever, IRewriter
 from backend.app.services.rag.citation import CitationService
 from backend.app.services.rag.citation import (
@@ -42,11 +44,21 @@ class RAGService:
         reranker: IReranker = _default_reranker,
         rewriter: IRewriter = _default_rewriter,
         citation_service: CitationService = _default_citation_service,
+        decision_client: object | None = None,
     ) -> None:
         self._retriever = retriever
         self._reranker = reranker
         self._rewriter = rewriter
         self._citation = citation_service
+        # Left as None by default rather than importing ai_client here. The
+        # decision layer must not be able to make module import order
+        # significant, and an absent client is a meaningful value: answer
+        # coverage then declines to grade and every chunk survives, which is the
+        # safe direction. Wired at composition time in `_build_default_service`
+        # below, and that line is the only thing standing between this feature
+        # and a permanent no-op -- asserted by
+        # `test_the_default_rag_service_has_a_decision_client_wired`.
+        self._decision_client = decision_client
 
     async def query(
         self,
@@ -96,6 +108,18 @@ class RAGService:
                 top_n=top_k,
             )
 
+            # 3b. Answer coverage. Every stage above ranks by similarity, so a
+            # passage about the wrong version of the right thing scores well and
+            # reaches the synthesizer as evidence. This is the one check that
+            # asks whether a passage states the answer. Off by default; see
+            # RAG_ANSWER_COVERAGE_ENABLED for why, and answer_coverage.py for
+            # why a chunk is only ever dropped on a real measurement.
+            reranked, coverage_report = await grade_answer_coverage(
+                query,
+                reranked,
+                client=self._decision_client,
+            )
+
             # 4. Format citations
             context_text, citations = self._citation.format_citations(reranked)
 
@@ -104,6 +128,8 @@ class RAGService:
             query_variants=len(queries),
             candidates_retrieved=len(candidates),
             citations_generated=len(citations),
+            coverage_dropped=coverage_report["dropped"],
+            coverage_measured=coverage_report["measured"],
         )
 
         return RAGQueryResult(
@@ -129,5 +155,27 @@ class RAGService:
         return self._citation.verify_grounding(response_text, citations)
 
 
+def _build_default_service() -> RAGService:
+    """Compose the module-level singleton with a real decision client.
+
+    The client is resolved lazily and defensively for the same reason the HyDE
+    rewriter's is (`query_rewriter._get_ai_client`): importing the LiteLLM router
+    at module scope would make this module's import order significant, and a
+    client that cannot be imported must leave the pipeline running rather than
+    break it at startup.
+    """
+    client: object | None = None
+    try:
+        from backend.app.infrastructure.ai.litellm_client import ai_client
+
+        client = ai_client
+    except Exception as exc:  # pragma: no cover - import-time environment fault
+        logger.warning(
+            "rag_service_decision_client_unavailable",
+            error_type=type(exc).__name__,
+        )
+    return RAGService(decision_client=client)
+
+
 # Singleton instance wired with default components (DIP defaults applied in __init__)
-rag_service = RAGService()
+rag_service = _build_default_service()

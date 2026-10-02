@@ -30,3 +30,5 @@ backend/app/services/hook_service.py
 backend/app/services/artifact_intent.py
 backend/app/core/db_target.py
 backend/app/services/rag/query_rewriter.py
+backend/app/services/decision.py
+backend/app/services/rag/answer_coverage.py

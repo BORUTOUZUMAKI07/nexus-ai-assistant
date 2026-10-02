@@ -361,6 +361,55 @@ class Settings(BaseSettings):
         description="Hard ceiling on the HyDE call. Retrieval must not wait on "
         "generation, so this fails to the template rather than to an error.",
     )
+
+    # ── Typed decisions (services/decision.py) ─────────────────────────────────
+    # A decision reads the model's real per-token scores over a closed set of
+    # answers. It must never ask a chat model how sure it is: that returns a
+    # number the model invented, and it is indistinguishable from a measured
+    # one. Where a provider cannot supply logprobs the decision layer returns
+    # None -- a heuristic that may not be promoted into a probability.
+    DECISION_MODEL: str = Field(
+        default="fast_chat",
+        description="Cheap model group for decisions. One word out, so latency "
+        "and cost both stay negligible.",
+    )
+    DECISION_MAX_TOKENS: int = Field(
+        default=8,
+        description="Enough for one label and slack. The distribution is read at "
+        "the first token, so anything beyond that is charged and never read.",
+    )
+    DECISION_TIMEOUT_SECONDS: float = Field(default=6.0)
+    DECISION_TOP_LOGPROBS: int = Field(
+        default=20,
+        description="Alternatives requested per token. Providers cap this and drop "
+        "the request if it is out of range; 20 is the widest commonly accepted.",
+    )
+
+    # ── Answer coverage (the one retrieval check similarity cannot make) ───────
+    # Every retrieval stage in this app measures *similarity*, so a passage
+    # about the wrong version of the right thing scores well and gets cited.
+    # This grades whether a passage actually *answers* the question.
+    # OFF by default, and that is a cost decision, not a correctness one: it
+    # adds one cheap model call per graded chunk on the query path, and whether
+    # that buys more than it costs is measurable only against real queries. Set
+    # this to true to find out.
+    RAG_ANSWER_COVERAGE_ENABLED: bool = Field(default=False)
+    RAG_ANSWER_COVERAGE_TOP_N: int = Field(
+        default=5,
+        description="Only the best reranked chunks are graded. Grading all 20 "
+        "candidates would cost four times as much to change the same answer.",
+    )
+    RAG_ANSWER_COVERAGE_DROP_BELOW: float = Field(
+        default=0.6,
+        description="A graded chunk whose measured probability for 'answers' is "
+        "below this is dropped before it can be cited. Only applies when a real "
+        "distribution was read; a rule-based decision never drops anything.",
+    )
+    RAG_ANSWER_COVERAGE_CHARS: int = Field(
+        default=1200,
+        description="Passage characters sent for grading. A decision needs the "
+        "claim being judged, not the whole parent chunk.",
+    )
     CHUNK_SIZE: int = Field(default=512)
     CHUNK_OVERLAP: int = Field(default=64)
     PARENT_CHUNK_SIZE: int = Field(default=512, description="Parent chunk target tokens")
