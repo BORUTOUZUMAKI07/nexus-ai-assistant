@@ -37,7 +37,10 @@ a dead app.
 - **Rollback first.** Revert to the previous known-good build.
 - **Database schema drift:** if a new migration (e.g. `backend/migrations`)
   isn't applied, `init_db` may fail against prod. Apply the migration head:
-  `alembic upgrade head` before restarting.
+  `ALLOW_REMOTE_MIGRATIONS=1 alembic upgrade head` before restarting. The flag
+  is required because this runbook's whole purpose is to change a *remote*
+  schema — the guard exists to catch the case where that is not what you meant
+  (see `docs/deployment-guide.md` §3).
 - **Secrets:** `.env` present? `JWT_SECRET_KEY` / `DATABASE_URL` / Redis URL
   valid? A secret resolution failure aborts startup.
 

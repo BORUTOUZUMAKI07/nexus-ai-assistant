@@ -389,7 +389,16 @@ webhook_deliveries, webhook_endpoints`
     container.** Run `docker compose up -d postgres` and export
     `DATABASE_URL=postgresql+asyncpg://nexus:nexus@localhost:5432/nexus_dev`
     before touching alembic, or you will migrate the live database. (This is
-    not hypothetical — see §9.16.)
+    not hypothetical — see §9.16.) **`alembic upgrade`/`downgrade` now refuse a
+    non-local host outright** unless `ALLOW_REMOTE_MIGRATIONS=1`, so the
+    accidental case is stopped rather than merely documented — see §9.18.
+- **The three database DSNs now agree.** `backend/.env.example`,
+  `app/core/config.py`'s `DATABASE_URL` default, and the `postgres` service in
+  `docker-compose.yml` all resolve to `nexus:nexus@localhost:5432/nexus_dev`.
+  They did not: `.env.example` said `postgres:postgres@/nexus_db`, which cannot
+  reach the container the same file tells you to start, so copying the example
+  to `.env` failed and leaving `.env` alone silently kept the production DSN.
+  `tests/test_db_target_guard.py` parses all three and fails if they drift.
 - **Row-level security is on.** `a7b8c9d0e1f2` enables RLS on every `public`
   table and revokes the blanket grants Supabase gives `anon`/`authenticated`,
   closing the Shield advisories `rls_disabled_in_public` and
@@ -524,13 +533,16 @@ Windows shell gotchas (learned the hard way):
 
 ## 7. Testing inventory (verified counts)
 
-- Backend: **65 unit test files** + **11 integration** + **3 e2e** under
+- Backend: **66 unit test files** + **11 integration** + **3 e2e** under
   `backend/tests/` (pytest). Fakes live in the single module
   `backend/tests/fakes.py` (e.g. `FakeSession`).
-- Suite total: **980 passed, 4 skipped, 9 deselected** for `cd backend &&
+- Suite total: **1042 passed, 4 skipped, 9 deselected** for `cd backend &&
   uv run pytest` (which already excludes e2e via `addopts`). The 9 deselected
   are the e2e markers; the `integration` marker is unregistered, so those 11
-  files run by default and need Docker up.
+  files run by default and need Docker up. **If Docker Desktop is not running
+  those 11 files produce ~113 `DockerException` setup errors** and the total
+  drops to ~915 — that is the environment, not a regression. Verify with
+  `docker info` before investigating.
 - Frontend: **29 Vitest test files** under `frontend/src/test/` (260 tests) +
   **6 Playwright specs** in `frontend/e2e/`.
 - Batch A–D test files: `test_batch_a_wiring.py`, `test_batch_b_memory.py`,
@@ -661,8 +673,7 @@ different tests) looked like three unrelated bugs instead of one.
     and it turned out to be a revision the committed Batch B code already
     required — but it was an unauthorised change to a production database, and
     the right response is to escalate, not to reason about whether it was
-    harmless. **Before any alembic command: print the host.** If it is not
-    localhost, stop.
+    harmless. **This is now enforced, not just documented** — see §9.18.
     - The pooler also rejects asyncpg prepared statements, so a read-only
       inspection script needs
       `create_async_engine(url, connect_args={"statement_cache_size": 0})` or
@@ -678,6 +689,39 @@ different tests) looked like three unrelated bugs instead of one.
     provider list** — the proxy-replays-a-cached-200 case that `Array.isArray`
     cannot filter. Read the revert and ask what it actually changes before
     believing a pass or a miss.
+18. **`alembic upgrade`/`downgrade` now refuse a non-local database.**
+    `migrations/env.py::assert_migration_target_allowed` parses the DSN via
+    `core/db_target.py::describe_database_target` and raises unless the host is
+    local (`localhost`, loopback, the compose service names) or
+    `ALLOW_REMOTE_MIGRATIONS=1` is set. The incident in §9.16 happened because
+    nothing in the toolchain looked; this is the looking.
+    - **The gate is on the migration command, not on app boot.** Booting against
+      a remote database is how the deployed app runs, so refusing there would
+      break production and protect nothing. `main.py` logs the resolved target
+      (`database_target_resolved`, plus `database_target_is_not_local`) before
+      `init_db()` — before, because `init_db` runs `create_all`, which is itself
+      a schema write.
+    - **Read-only commands are not gated** (`history`, `current`, `heads`,
+      `revision --autogenerate`) — inspecting a remote database is legitimate,
+      and gating it would only teach people to set the opt-in and leave it set.
+      Offline mode (`--sql`) is exempt because it never opens a connection;
+      blocking the preview is how people run the real command unread.
+    - **`describe_database_target` treats an unparseable port as remote.**
+      `urlsplit("postgresql://u:p@localhost:5432.evil.com/db").hostname` still
+      returns `localhost` while `.port` raises, so catching that error and
+      keeping the host would report a malformed DSN as confidently local and wave
+      it past the gate. `is_local` is true only on a positive match.
+    - **Two source-shape assertions were wrong and the revert harness caught
+      both.** `assert "database_target_is_not_local" in source` passed after the
+      event was renamed to `..._removed`, because the original is a *prefix* of
+      it — match the closing quote. And reading a signature with
+      `.split("def f", 1)[1].split(":", 1)[0]` yields `"(url"`, so a guard
+      against the word `offline` could never fire and reported green against the
+      exact edit it was written to catch; use `ast` (§2).
+    - The `offline=` keyword argument was removed for the same reason: every test
+      passed it explicitly, so `context.is_offline_mode()` ran in production and
+      in no test. The tests inject a `context` stub instead — a parameter that
+      overrides the value under test is a second source of truth for it.
 
 ## 9b. Already solved — do not re-propose
 
@@ -701,10 +745,13 @@ were all re-verified against source during the Batch A–D work.
 
 ---
 
-_Last updated: 2026-10-01 (Batches A–D incl. D3 artifacts; then migration-graph
+_Last updated: 2026-10-02 (Batches A–D incl. D3 artifacts; then migration-graph
 linearization, `/auth/oauth/providers` + sign-in wiring, model remap, Makefile
 gates, admin user-erasure endpoint, all three dead config files removed,
-guardrail Unicode-evasion fix).
+guardrail Unicode-evasion fix, `docs/api-reference.md` resync; then the
+database-target guard — `.env.example`/config/compose DSNs reconciled and
+`alembic upgrade`/`downgrade` made to refuse a non-local host without
+`ALLOW_REMOTE_MIGRATIONS`).
 Regenerate counts (tables/endpoints/tests) from code rather than trusting any
 static number here — and verify code-shape claims with `ast`, not regex, since
 this repo has CRLF checkouts._

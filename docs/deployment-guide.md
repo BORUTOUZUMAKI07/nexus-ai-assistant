@@ -79,6 +79,36 @@ cd backend
 uv run alembic upgrade head
 ```
 
+**A deployed database needs an explicit opt-in.** `upgrade` and `downgrade`
+resolve `DATABASE_URL` from the environment (including `backend/.env`) and will
+refuse any non-local host, exiting non-zero with the target named:
+
+```
+RuntimeError: REFUSING to run `alembic upgrade` against a non-local database.
+  target:   db.example.com:5432/prod
+```
+
+That refusal is deliberate. On 2026-10-01 an `upgrade head` aimed at the local
+container was pointed at the hosted database by `backend/.env` and applied a
+revision to it; it turned out additive and idempotent, but nothing in the
+toolchain had looked at where it was connecting. Set the flag in the deploy job:
+
+```bash
+export ALLOW_REMOTE_MIGRATIONS=1
+uv run alembic upgrade head
+```
+
+Read-only commands (`history`, `current`, `heads`, `revision --autogenerate`)
+and offline SQL generation (`--sql`) are **not** gated — they never change a
+database. To migrate the local development database instead, start it and
+override the DSN:
+
+```bash
+docker compose up -d postgres
+DATABASE_URL=postgresql+asyncpg://nexus:nexus@localhost:5432/nexus_dev \
+  uv run alembic upgrade head
+```
+
 **All 35 SQLModel tables** are initialized with indexes automatically
 (verified: `SQLModel.metadata.tables` contains exactly 35 tables). New models
 must be imported in `backend/app/infrastructure/database/engine.py` and
