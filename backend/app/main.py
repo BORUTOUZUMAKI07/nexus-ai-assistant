@@ -21,6 +21,7 @@ from backend.app.agents.orchestrator.graph import lifespan_graph
 from backend.app.api.v1.api import api_router
 from backend.app.api.v1.metrics import router as metrics_router
 from backend.app.core.config import settings
+from backend.app.core.db_target import describe_database_target
 from backend.app.core.exceptions import NexusException
 from backend.app.core.logging import get_logger, setup_logging
 from backend.app.infrastructure.cache.redis_client import redis_client
@@ -85,6 +86,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("credential_validation_skipped", error_type=type(exc).__name__)
 
     # 1. Initialize Database Tables
+    #
+    # The target is logged BEFORE init_db(), never after: `init_db` runs
+    # `create_all`, which issues CREATE TABLE for anything missing, so this is a
+    # schema write against whatever DATABASE_URL points at. On 2026-10-01
+    # `backend/.env` was found carrying a hosted Supabase DSN, which made the
+    # production database the default target for every local run -- silently,
+    # because nothing in the boot path looked. This line is unconditional: the
+    # local case needs it as much as the remote one, since "it said localhost"
+    # is the only reason to trust the next command.
+    #
+    # Deliberately a warning and not a refusal. Booting against a remote
+    # database is legitimate -- that is how the deployed app runs -- and
+    # blocking it would break production while protecting nothing. The hard gate
+    # belongs on the command that changes schema, and lives in
+    # `migrations/env.py::assert_migration_target_allowed`.
+    _db_target = describe_database_target(settings.DATABASE_URL)
+    logger.info("database_target_resolved", **_db_target.as_log_kwargs())
+    if not _db_target.is_local:
+        logger.warning(
+            "database_target_is_not_local",
+            detail=(
+                f"Using the REMOTE database {_db_target.describe()}. Writes, "
+                f"including the create_all in init_db(), go to it. If you meant "
+                f"to work locally, set DATABASE_URL to "
+                f"postgresql+asyncpg://nexus:nexus@localhost:5432/nexus_dev "
+                f"(matches docker-compose) or remove DATABASE_URL from "
+                f"backend/.env to fall back to that default."
+            ),
+            **_db_target.as_log_kwargs(),
+        )
+
     try:
         await init_db()
         logger.info("database_tables_initialized")

@@ -5,6 +5,7 @@ Uses async engine for SQLModel + asyncpg compatibility.
 """
 import asyncio
 import os
+import sys
 from logging.config import fileConfig
 
 from alembic import context
@@ -12,6 +13,84 @@ from dotenv import load_dotenv
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
+
+from backend.app.core.db_target import (
+    ALLOW_REMOTE_MIGRATIONS_ENV,
+    describe_database_target,
+    migration_target_refusal,
+    remote_migrations_allowed,
+)
+
+# Commands that change a live schema, and therefore the only ones gated.
+# Read-only commands (`history`, `current`, `heads`, `revision --autogenerate`)
+# are deliberately NOT gated: inspecting a remote database is legitimate and
+# gating it would only teach people to reach for the opt-in.
+MUTATING_COMMANDS = frozenset({"upgrade", "downgrade"})
+
+
+def _requested_command() -> str | None:
+    """The Alembic subcommand from argv, or None if it is not a bare verb.
+
+    `context.config.cmd_opts` would be the typed route, but its shape varies by
+    Alembic version and this file must keep working across upgrades. argv is the
+    dispatch the CLI actually used: `alembic upgrade head` puts the verb at
+    index 1. Only an exact token counts, so `-x upgrade=1` and a revision message
+    reading "upgrade the table" cannot trip the gate.
+    """
+    for arg in sys.argv[1:]:
+        if arg in MUTATING_COMMANDS:
+            return arg
+    return None
+
+
+def assert_migration_target_allowed(url: str) -> None:
+    """Refuse to mutate a remote schema without an explicit opt-in.
+
+    This is the guard for the 2026-10-01 incident, in the one place that
+    actually caused it. `alembic upgrade head` read DATABASE_URL out of
+    `backend/.env`, which carried a hosted Supabase DSN, and applied a revision
+    to the live database. It turned out additive and idempotent, so nothing was
+    lost -- but that was a property of the specific revision, not of the tool.
+    The same command with a DROP would have been irreversible.
+
+    The fix is not "be careful". It is that a schema-changing command states
+    which database it is about to change and refuses when the answer is not the
+    one the operator typed, because the DSN is not something the operator typed.
+
+    Offline mode (`--sql`) is exempt: it prints statements to stdout and never
+    opens a connection, so there is nothing to protect. Gating it would block
+    the standard way to *preview* a migration, and blocking the preview is how
+    people end up running the real thing without reading it.
+
+    The mode is read from `context.is_offline_mode()` and takes no override
+    parameter. An earlier version took `offline: bool | None = None` "for
+    testability", and the revert harness proved the override was worse than
+    useless: every test passed the flag explicitly, so the line that reads the
+    real Alembic state ran in production and never in a test -- deleting it
+    entirely left the suite green. A second source of truth for a value the
+    framework already knows is a liability even when it is only there for tests.
+    """
+    if context.is_offline_mode():
+        return
+
+    command = _requested_command()
+    if command is None:
+        return
+
+    target = describe_database_target(url)
+    if target.is_local:
+        return
+
+    if remote_migrations_allowed():
+        opt_in = os.environ.get(ALLOW_REMOTE_MIGRATIONS_ENV, "")
+        sys.stderr.write(
+            f"WARNING: `alembic {command}` is migrating the REMOTE database "
+            f"{target.describe()} because {ALLOW_REMOTE_MIGRATIONS_ENV}={opt_in!r} "
+            f"is set. You asked for this.\n\n"
+        )
+        return
+
+    raise RuntimeError(migration_target_refusal(target, command))
 
 # Shared pgbouncer-safe asyncpg settings: the hosted Postgres (Supabase)
 # transaction-mode pooler conflicts with asyncpg's prepared-statement cache
@@ -100,6 +179,7 @@ def get_database_url() -> str:
 
 def run_migrations_offline() -> None:
     url = get_database_url()
+    assert_migration_target_allowed(url)
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -122,8 +202,10 @@ def do_run_migrations(connection):
 
 
 async def run_async_migrations() -> None:
+    url = get_database_url()
+    assert_migration_target_allowed(url)
     engine = create_async_engine(
-        get_database_url(),
+        url,
         poolclass=pool.NullPool,
         connect_args=PGBOUNCER_SAFE_CONNECT_ARGS,
     )

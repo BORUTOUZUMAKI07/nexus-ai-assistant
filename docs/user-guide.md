@@ -9,6 +9,10 @@
 1. Launch the stack (see [`deployment-guide.md`](deployment-guide.md)):
    - Infra: `docker compose up -d`
    - Backend: `cd backend && uv sync --group dev && uv run alembic upgrade head && uv run uvicorn backend.app.main:app --reload --port 8000`
+     (`alembic upgrade head` targets `localhost:5432/nexus_dev` per
+     `.env.example`; it refuses a non-local database unless
+     `ALLOW_REMOTE_MIGRATIONS=1`, so if you see that error your `DATABASE_URL`
+     points somewhere you did not intend.)
    - Frontend: `cd frontend && npm install && npm run dev`
 2. Open `http://localhost:3000`.
 3. Create an account (**Sign Up**) or sign in (**Sign In**). SSO (OAuth) is
