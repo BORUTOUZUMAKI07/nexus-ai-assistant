@@ -94,7 +94,7 @@ These were each confirmed first-hand and are intentional:
   `ast.walk(tree)`, not a regex: on CRLF checkouts a `\s*\n\s*` pattern
   matches nothing and you will conclude the seams were removed.
 - **No mutable default arguments** anywhere in `backend/app/` (verified).
-- **mypy is NOT a gate on the full tree.** It only runs over the 18-file
+- **mypy is NOT a gate on the full tree.** It only runs over the 22-file
   allowlist in `backend/scripts/mypy_targets.txt`, and the command needs those
   paths passed explicitly (`--follow-imports=silent`, `backend/` prefix
   stripped) — bare `uv run mypy` has no target and exits 2. The full app has
@@ -462,6 +462,15 @@ Sensible defaults exist for everything; `.env` overrides. Highlights:
   `template`/`off` exist so the cost/benefit is measurable by flipping one
   variable; see §9.19 for why the template is a fallback rather than the
   implementation.
+- **Typed decisions / answer coverage** — `DECISION_MODEL=fast_chat`,
+  `DECISION_MAX_TOKENS=8` (a hard ceiling: the distribution is read at the first
+  token), `DECISION_TIMEOUT_SECONDS=6.0`, `DECISION_TOP_LOGPROBS=20`;
+  `RAG_ANSWER_COVERAGE_ENABLED=false` (off by default — it is genuine new cost on
+  the query path), `RAG_ANSWER_COVERAGE_TOP_N=5`,
+  `RAG_ANSWER_COVERAGE_DROP_BELOW=0.6`, `RAG_ANSWER_COVERAGE_CHARS=1200`.
+  See §9.20 for why a probability here is `None` unless it was measured, and
+  §9.21 for why coverage is a drop-only-on-measurement stage with an
+  empty-evidence guard.
 - `JWT_ALGORITHM=HS256`, refresh tokens, `oauth2_scheme` tokenUrl=auth/login.
 - `REDIS_URL=redis://localhost:6379/0` (local Redis from docker-compose).
 - `SENTRY_DSN`, `NEW_RELIC_ENABLED` + `NEW_RELIC_OTLP_ENDPOINT` (optional OTLP
@@ -540,10 +549,10 @@ Windows shell gotchas (learned the hard way):
 
 ## 7. Testing inventory (verified counts)
 
-- Backend: **67 unit test files** + **11 integration** + **3 e2e** under
+- Backend: **70 unit test files** + **11 integration** + **3 e2e** under
   `backend/tests/` (pytest). Fakes live in the single module
   `backend/tests/fakes.py` (e.g. `FakeSession`).
-- Suite total: **1073 passed, 4 skipped, 9 deselected** for `cd backend &&
+- Suite total: **1143 passed, 4 skipped, 9 deselected** for `cd backend &&
   uv run pytest` (which already excludes e2e via `addopts`). The 9 deselected
   are the e2e markers; the `integration` marker is unregistered, so those 11
   files run by default and need Docker up. **If Docker Desktop is not running
@@ -771,6 +780,94 @@ different tests) looked like three unrelated bugs instead of one.
       `RAG_HYDE_TIMEOUT_SECONDS` (6.0) are ceilings, not suggestions -- this runs
       in front of every abstract query.
 
+20. **`services/decision.py` is a typed-decision layer, and its whole design is
+    the refusal to invent a number.** A "decision" here is a closed set of labels
+    plus a state, and the result is either a real distribution or nothing.
+    - **It reads logprobs; it never asks the model how sure it is.** Prompting a
+      chat model for its confidence returns a number it fabricated, and it looks
+      exactly like a measured one. The trick is mechanical: ask for one label,
+      read that token's per-token scores, softmax over *only* the labels that
+      appear. LiteLLM is configured with `drop_params=True`, so providers that
+      cannot supply logprobs drop the request silently -- that is the normal path,
+      not an error, and `complete()` surfaces it as `None` (never `[]`, because
+      empty-list means "a token with no alternatives", which is a different and
+      much stronger claim).
+    - **`Decision.probability` is `None` unless a real distribution exists.** A
+      caller that wants a number is *forced* to handle its absence. This is the
+      load-bearing part: it is what makes a deterministic rule impossible to
+      promote into a calibrated-looking 0.93. There is deliberately no
+      `SOURCE_MODEL_SELF_REPORT` constant.
+    - **Fewer than two matched labels returns `None`.** One survivor renormalises
+      to 1.0, which is a certainty wearing a disguise. The renormalisation over
+      matched labels only is the standard constrained-decoding approximation
+      and is documented as one -- it is not a calibration guarantee.
+    - **Fail-open in one direction: `None`, never an exception and never a
+      default.** No client, no logprobs, timeout, provider error, unusable
+      output, no rule, a rule that raises, a rule that returns a label outside the
+      set -- all `None`. `asyncio.CancelledError` is caught, documented and
+      re-raised, exactly as in 9.19.
+    - **Calls `complete()`, never `completion()` or the raw router**, so
+      `charge_tokens` (`litellm_client.py:542`) sees it and `core/spend.py`
+      accounts for it -- the same trap HyDE hit (9.19). `temperature=0.0`,
+      `DECISION_MAX_TOKENS=8`: the distribution is read at the first token, so
+      everything past it is charged and never read.
+    - **`litellm_client.complete()` gained `logprobs` / `top_logprobs` kwargs**
+      and a `_extract_logprobs` helper. Both default off and forward only when
+      requested, so **no existing call site changes behaviour or pays for it**;
+      the result key is always present so a caller cannot mistake a missing key
+      for an absent feature. This is the only file on the hot path that was
+      touched, and it was verified to have the same 11 pre-existing mypy errors
+      before and after (the count is stable; line numbers shift).
+
+21. **Answer coverage is the one retrieval check similarity cannot make, and it
+    is off by default for a cost reason.** `services/rag/answer_coverage.py`,
+    wired between FlashRank reranking and citation formatting in
+    `rag_service.py`. Every other stage ranks by *similarity* -- hybrid
+    dense+sparse RRF, FlashRank, MMR -- and similarity is blind to version,
+    edition and configuration, so a passage about the previous release of
+    something scores well and is cited as though it answered the question. That
+    is not hypothetical here: `docs/architecture.md` said "Next.js 14" while the
+    app was on 16.3.4, and nothing in retrieval would have caught it.
+    - **Three labels, not two.** `answers` / `partially` / `does_not_answer`.
+      The middle case is the one that matters most, and a binary forces a wrong
+      choice between "answers" and "does not answer". The prompt names the
+      version failure explicitly, because without that clause the model answers
+      "is this about the same subject?" -- which is what every other stage in
+      the pipeline already asks.
+    - **A chunk is dropped only on a measurement.** `_should_drop` has exactly
+      one guard, `probability is None` -> keep, and that covers both a
+      rule-based decision and a failed call. There was briefly a second
+      `source != SOURCE_LOGPROBS` check as well; the revert harness correctly
+      reported it not load-bearing (the `None` check already covered it) and it
+      was collapsed, because an unreachable second guard is a second place to be
+      wrong. `does_not_answer` drops regardless of threshold (it is a
+      distractor, not thin evidence); `partially` must clear
+      `RAG_ANSWER_COVERAGE_DROP_BELOW`.
+    - **The empty-evidence guard restores the top chunk if everything graded was
+      dropped.** All-measured-non-answers means the grader and the retriever
+      disagree, which is a fact about the grader. Discarding the lot would hand
+      the synthesizer nothing and let it answer from its own priors while the
+      citations panel sits empty -- the exact ungrounded answer the stage exists
+      to prevent. `report["empty_guard_fired"]` says it happened.
+    - **Only the top `RAG_ANSWER_COVERAGE_TOP_N` chunks are graded** and only they
+      are eligible for removal; the tail is ungraded, so it survives by never
+      being examined rather than by being found wanting.
+    - **The report is the measurement instrument**, and it has to be able to
+      distinguish: `measured` (logprobs), `undecided` (no decision at all, no
+      rule), `decisions[].source`, and an *absent* `probability` key rather than
+      `0.0`. With `measured == 0` a deployment where every decision failed
+      reports a clean run, which is why the counter exists. Compare the measured
+      hits against whether answers actually improved before considering a
+      default-on flip.
+    - **Off by default.** This adds one cheap model call per graded chunk on the
+      query path. Unlike HyDE (which replaced an existing always-on behaviour and
+      so cost nothing new), this is genuinely new cost, and whether it buys more
+      than it costs is measurable only against real queries. `_decision_client`
+      defaults to `None` and the singleton is built by `_build_default_service()`;
+      an unwired client is invisible from outside, so
+      `test_the_default_rag_service_has_a_decision_client_wired` is the only test
+      that catches it -- same shape as 9.14.
+
 ## 9b. Already solved — do not re-propose
 
 Bounded revision loop with force-accept; LLM retry/empty-response handling +
@@ -800,7 +897,10 @@ guardrail Unicode-evasion fix, `docs/api-reference.md` resync; then the
 database-target guard — `.env.example`/config/compose DSNs reconciled and
 `alembic upgrade`/`downgrade` made to refuse a non-local host without
 `ALLOW_REMOTE_MIGRATIONS`; then LLM-backed HyDE — `IRewriter.rewrite` made
-`async`, the fixed template demoted to a mode and a fail-open fallback).
+`async`, the fixed template demoted to a mode and a fail-open fallback; then the
+typed-decision layer — `services/decision.py` reading real logprobs and
+refusing to invent a probability, `services/rag/answer_coverage.py` as its first
+consumer, and `complete()` gaining opt-in `logprobs` plumbing).
 Regenerate counts (tables/endpoints/tests) from code rather than trusting any
 static number here — and verify code-shape claims with `ast`, not regex, since
 this repo has CRLF checkouts._

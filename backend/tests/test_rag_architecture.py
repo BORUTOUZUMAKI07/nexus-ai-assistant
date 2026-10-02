@@ -7,6 +7,7 @@ Tests for the new RAG architecture:
   - Critic/Grader verdict labels
   - CRAG loop (insufficient/unrelated → web search → synthesis)
 """
+import math
 import uuid
 from typing import Any
 from unittest.mock import MagicMock
@@ -461,6 +462,129 @@ async def test_rag_service_uses_rewriter_and_multi_query_retrieval():
     assert result.query_variants == retriever_fake.queries
     assert result.total_retrieved == 1
     assert result.citations[0].filename == "doc.txt"
+
+
+@pytest.mark.asyncio
+async def test_rag_service_grades_answer_coverage_before_formatting_citations():
+    """Coverage grading runs on the reranked set, and its drops reach citations.
+
+    Two things have to hold at once, and a test that only checks the first will
+    pass while the pipeline quietly sends ungraded chunks to the synthesizer:
+    the stage is reached, and what it removes is what the citation formatter is
+    given. The citation fake records its input for exactly that reason.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(settings, "RAG_ANSWER_COVERAGE_ENABLED", True)
+    monkey.setattr(settings, "RAG_ANSWER_COVERAGE_TOP_N", 4)
+    try:
+        seen: dict[str, Any] = {}
+
+        class _RecordingCitations(citation_service.__class__):
+            def format_citations(self, chunks):  # type: ignore[override]
+                seen["chunks"] = [c.get("point_id") for c in chunks]
+                return super().format_citations(chunks)
+
+        class _CoverageClient:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            async def complete(self, **kwargs: Any) -> dict[str, Any]:
+                self.prompts.append(kwargs["messages"][-1]["content"])
+                # First chunk is a measured non-answer, rest are measured answers.
+                label = "does_not_answer" if len(self.prompts) == 1 else "answers"
+                weights = {label: 0.9, "answers": 0.05, "partially": 0.05}
+                return {
+                    "content": label,
+                    "logprobs": [
+                        {
+                            "token": label,
+                            "logprob": -0.01,
+                            "top": [(name, math.log(value)) for name, value in weights.items()],
+                        }
+                    ],
+                }
+
+        client = _CoverageClient()
+        service = RAGService(
+            retriever=_FakeRetriever(),
+            reranker=_FakeReranker(),
+            rewriter=_FakeRewriter(),
+            citation_service=_RecordingCitations(),
+            decision_client=client,
+        )
+
+        result = await service.query(query="What is chunking?", user_id=uuid.uuid4(), top_k=4)
+
+        assert client.prompts, "coverage grading never reached the client"
+        # The formatter must not have been handed the chunk coverage dropped.
+        assert 0 not in seen["chunks"]
+        assert all(point != 0 for point in seen["chunks"])
+        assert result.total_retrieved == len(seen["chunks"])
+    finally:
+        monkey.undo()
+
+
+@pytest.mark.asyncio
+async def test_rag_service_coverage_is_a_no_op_when_the_flag_is_off():
+    """Disabled must be free, not merely harmless.
+
+    Asserted by counting client calls: a wiring that called the stage and then
+    discarded its result would look identical to this from the outside, and
+    would put a model call on every query for no benefit.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(settings, "RAG_ANSWER_COVERAGE_ENABLED", False)
+    try:
+        class _CountingClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def complete(self, **kwargs: Any) -> dict[str, Any]:
+                self.calls += 1
+                return {"content": "answers", "logprobs": None}
+
+        client = _CountingClient()
+        service = RAGService(
+            retriever=_FakeRetriever(),
+            reranker=_FakeReranker(),
+            rewriter=_FakeRewriter(),
+            citation_service=citation_service,
+            decision_client=client,
+        )
+
+        result = await service.query(query="What is chunking?", user_id=uuid.uuid4(), top_k=4)
+
+        assert client.calls == 0
+        assert result.total_retrieved == 1
+    finally:
+        monkey.undo()
+
+
+def test_the_default_rag_service_has_a_decision_client_wired():
+    """The only thing standing between coverage grading and a permanent no-op.
+
+    `_decision_client` defaults to None, which is the safe direction -- nothing is
+    graded, nothing is dropped -- and is also invisible from the outside. A
+    service built with the default constructor and no client would pass every
+    other test in this file while coverage never once ran in production.
+    """
+    from backend.app.services.rag_service import rag_service
+
+    assert rag_service._decision_client is not None
+
+
+def test_the_default_rag_service_can_still_be_built_without_a_client():
+    """Injection must remain optional.
+
+    Answer coverage is off by default, so a caller that wants the pipeline and
+    not the grader should not have to import the LLM client to get it.
+    """
+    service = RAGService(
+        retriever=_FakeRetriever(),
+        reranker=_FakeReranker(),
+        rewriter=_FakeRewriter(),
+    )
+    assert service._decision_client is None
 
 
 # ─── 8. CRAG Loop (critic node routing) ───────────────────────────────────────

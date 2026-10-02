@@ -241,6 +241,72 @@ def _normalize_messages(messages: list[Any]) -> list[dict[str, str]]:
     return cleaned
 
 
+def _extract_logprobs(response: Any) -> list[dict[str, Any]] | None:
+    """Flatten a provider response's per-token logprobs into plain dicts.
+
+    Returns None -- not an empty list -- when the provider did not supply them.
+    The distinction is the whole point: an empty list would read as "the model
+    produced a token with no alternatives", whereas None means "this provider
+    does not do logprobs, or dropped the request", and the typed-decision layer
+    treats those differently (it falls back rather than reporting a fabricated
+    probability).
+
+    LiteLLM exposes these as objects, but coverage varies by provider and some
+    return plain dicts, so both are handled rather than assuming one shape.
+    """
+    try:
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            return None
+        logprobs = getattr(choices[0], "logprobs", None)
+        content = getattr(logprobs, "content", None) if logprobs is not None else None
+        if content is None and isinstance(logprobs, dict):
+            content = logprobs.get("content")
+        if not content:
+            return None
+
+        tokens: list[dict[str, Any]] = []
+        for entry in content:
+            entry_token = getattr(entry, "token", None)
+            entry_logprob = getattr(entry, "logprob", None)
+            tops = getattr(entry, "top_logprobs", None)
+            if entry_token is None and isinstance(entry, dict):
+                entry_token = entry.get("token")
+                entry_logprob = entry.get("logprob")
+                tops = entry.get("top_logprobs")
+            if tops is None and isinstance(entry, dict):
+                tops = entry.get("top_logprobs")
+
+            alternatives: list[tuple[str, float]] = []
+            for alt in tops or []:
+                alt_token = getattr(alt, "token", None)
+                alt_logprob = getattr(alt, "logprob", None)
+                if alt_token is None and isinstance(alt, dict):
+                    alt_token = alt.get("token")
+                    alt_logprob = alt.get("logprob")
+                if alt_token is None or alt_logprob is None:
+                    continue
+                try:
+                    alternatives.append((str(alt_token), float(alt_logprob)))
+                except (TypeError, ValueError):
+                    # A provider that returns a non-numeric logprob is not
+                    # offering a usable distribution; skip it rather than
+                    # propagating a value we cannot reason about.
+                    continue
+
+            tokens.append(
+                {
+                    "token": str(entry_token) if entry_token is not None else "",
+                    "logprob": float(entry_logprob) if entry_logprob is not None else None,
+                    "top": alternatives,
+                }
+            )
+        return tokens or None
+    except Exception as exc:  # pragma: no cover - provider shape variation
+        logger.warning("llm_logprob_extract_failed", error_type=type(exc).__name__)
+        return None
+
+
 def resolve_model_group(model: str) -> str:
     """Return the Router model_group for any accepted model identifier."""
     if model in _GROUP_NAMES:
@@ -345,6 +411,8 @@ class LiteLLMService:
         session_name: str | None = None,
         enable_caching: bool = True,
         response_format: dict | None = None,
+        logprobs: bool = False,
+        top_logprobs: int = 0,
     ) -> dict[str, Any]:
         """Executes non-streaming completion with automatic fallbacks and cost tracking.
 
@@ -352,6 +420,17 @@ class LiteLLMService:
         (e.g. ``{"type": "json_object"}``) through to the router. Standard
         APIs drop it on providers that do not support it (``drop_params=True``),
         so callers must keep retry-with-repair / heuristic fallbacks afterwards.
+
+        ``logprobs`` asks the provider for per-token log-probabilities and, when
+        the provider returns them, surfaces them under ``"logprobs"`` in the
+        result. This exists for the typed-decision layer in
+        ``services/decision.py``, which needs the real score of each candidate
+        answer rather than a number a chat model made up when asked how sure it
+        was. It defaults off and is forwarded only when requested, so no
+        existing call site changes behaviour, pays for it, or depends on a
+        provider that cannot supply logprobs. Providers that ignore the request
+        return nothing here, which the caller must treat as "unavailable"
+        rather than "confident".
         """
         extra_headers: dict[str, str] = {}
         if enable_caching:
@@ -359,6 +438,16 @@ class LiteLLMService:
 
         group = resolve_model_group(model)
         import time as _time
+
+        # Provider-specific structured-output and logprob requests are forwarded
+        # as loose kwargs, which is how `drop_params=True` lets a provider that
+        # cannot do them ignore the request instead of failing the call.
+        _provider_kwargs: dict[str, Any] = dict(response_format) if response_format else {}
+        if logprobs:
+            _provider_kwargs["logprobs"] = True
+            # Providers cap this and drop the request if it is out of range;
+            # 20 is the widest commonly accepted window.
+            _provider_kwargs["top_logprobs"] = top_logprobs or 20
 
         _start = _time.perf_counter()
         # Groq free tier enforces ~1000 output tokens/min (OTPM) per model and
@@ -395,7 +484,7 @@ class LiteLLMService:
                         temperature=temperature,
                         max_tokens=_eff_tokens,
                         extra_headers=extra_headers if extra_headers else None,
-                        **(response_format if response_format else {}),
+                        **_provider_kwargs,
                     )
             except Exception as exc:
                 await self._breaker.record_failure(_attempt_group)
@@ -470,6 +559,10 @@ class LiteLLMService:
             "tokens_input": input_tokens,
             "tokens_output": output_tokens,
             "cost_usd": cost or 0.0,
+            # None unless asked for AND the provider supplied them. Always
+            # present so callers do not need a `.get()` guard that silently
+            # treats a missing key as an absent feature.
+            "logprobs": _extract_logprobs(response) if logprobs else None,
         }
 
     async def astream(
