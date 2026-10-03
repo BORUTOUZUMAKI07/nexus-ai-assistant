@@ -3,7 +3,6 @@ LangGraph Workflow Assembly.
 Assembles the complete state graph with:
   - AsyncPostgresSaver checkpointer for DURABLE short-term memory
     (survives server restarts, supports horizontal scaling)
-  - InMemoryStore for cross-thread long-term memory via mem0
   - HITL interrupt support via LangGraph Command/interrupt pattern
   - Conditional routing between planner → orchestrator → subagents/tools/synthesizer
 
@@ -38,17 +37,20 @@ from backend.app.agents.orchestrator.nodes import (
     tool_node,
 )
 from backend.app.agents.orchestrator.resilient_checkpointer import ResilientPostgresSaver
+from backend.app.agents.orchestrator.retry_policy import (
+    TIMEOUTS,
+    policy_for,
+    timeout_for,
+)
 from backend.app.agents.orchestrator.state import AgentState
 from backend.app.agents.orchestrator.tot_node import tree_of_thoughts_node
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.store.memory import InMemoryStore
 
 logger = structlog.get_logger(__name__)
 
 # ─── Module-level compiled graph (initialised at lifespan) ───────────────────
 _compiled_graph: Any | None = None
-_store: InMemoryStore | None = None
 
 
 def route_after_orchestrator(
@@ -96,23 +98,76 @@ def route_after_subagent(state: AgentState) -> Literal["tool_node", "synthesizer
     return "synthesizer"
 
 
+def _add(workflow: StateGraph, name: str, node: Any) -> None:
+    """Register `node` under `name` with its policy resolved from `name`.
+
+    Exists so the node name is written once. Stating it twice -- once in
+    `add_node` and once in `timeout_for(name)` -- is a silent-drift hazard: the
+    two would disagree, and the disagreement reads as "some nodes have no
+    timeout" rather than as a typo.
+
+    `timeout_for` raises `KeyError` for a name it does not know, so adding a
+    node without a ceiling fails here rather than shipping an unbounded one.
+    """
+    workflow.add_node(
+        name,
+        node,
+        retry_policy=policy_for(name),
+        timeout=timeout_for(name),
+    )
+
+
 def _build_workflow() -> StateGraph:
     """Assembles the node/edge structure without compiling (no checkpointer yet)."""
     workflow = StateGraph(AgentState)
 
+    # Deliberately no `set_node_defaults(retry_policy=...)` here.
+    #
+    # There was one, and a revert harness showed it changed nothing: every node
+    # is registered through `_add`, which passes an explicit `retry_policy`, so
+    # a graph-wide default is unreachable. Unreachable configuration is worse
+    # than no configuration -- it reads as a safety net that is not there. The
+    # per-node values below are the single source of truth, and the
+    # registration check at the bottom of this function is what actually
+    # guarantees no node slips through without a *ceiling* -- `_add` raises for
+    # any name `TIMEOUTS` does not know.
+    #
+    # `set_node_defaults` is also NOT inherited by subgraphs (documented
+    # upstream behaviour), so it would not have covered a subgraph anyway; a
+    # future subgraph needs its own `_add`-equivalent call.
+
     # Nodes
-    workflow.add_node("bootstrap", bootstrap_node)
-    workflow.add_node("planner", planner_node)
-    workflow.add_node("tree_of_thoughts", tree_of_thoughts_node)
-    workflow.add_node("orchestrator", orchestrator_node)
-    workflow.add_node("subagent_dispatcher", subagent_dispatcher_node)
-    workflow.add_node("tool_node", tool_node)
-    workflow.add_node("critic_grader", critic_grader_node)
-    workflow.add_node("synthesizer", synthesizer_node)
+    #
+    # Every node carries its own timeout and retry policy explicitly rather than
+    # leaning on a default, because "has a policy" and "was deliberately
+    # excluded from retry" are different facts and only one of them is safe to
+    # infer six months from now. `_add` states each name exactly once so the
+    # name passed to `add_node` and the name looked up in TIMEOUTS cannot drift,
+    # and `timeout_for` raises on an unknown name so a typo cannot silently mean
+    # "no ceiling".
+    #
+    # NO_RETRY_NODES and TIMEOUTS must both name every node here; the
+    # registration check at the bottom of this function enforces the first, and
+    # tests/test_node_policies.py enforces the second.
+    _add(workflow, "bootstrap", bootstrap_node)
+    _add(workflow, "planner", planner_node)
+    _add(workflow, "tree_of_thoughts", tree_of_thoughts_node)
+    _add(workflow, "orchestrator", orchestrator_node)
+    _add(workflow, "subagent_dispatcher", subagent_dispatcher_node)
+    _add(workflow, "tool_node", tool_node)
+    _add(workflow, "critic_grader", critic_grader_node)
+    # NO_RETRY: this node owns the bounded critic loop, so a retry re-runs the
+    # whole loop -- the single most expensive thing in the graph to repeat.
+    _add(workflow, "synthesizer", synthesizer_node)
     # After the synthesizer, never before: the artifact body is the finalized
     # post-critique, post-guardrail text. An artifact built from an earlier
     # draft would be a different document from the one the user is reading.
-    workflow.add_node("artifact", artifact_node)
+    #
+    # NO_RETRY because this node WRITES. It resolves identity by
+    # (user_id, conversation_id, title) and creates a new version, so a retry
+    # after a partial failure can leave two versions of one document and turn
+    # artifact_versions into noise rather than a history.
+    _add(workflow, "artifact", artifact_node)
 
     # Edges
     workflow.add_edge(START, "bootstrap")
@@ -154,6 +209,24 @@ def _build_workflow() -> StateGraph:
     workflow.add_edge("tool_node", "synthesizer")
     workflow.add_edge("synthesizer", "artifact")
     workflow.add_edge("artifact", END)
+
+    # Every registered node must have a policy entry. A node added without one
+    # would raise KeyError in `_add` above, so this is belt-and-braces -- but it
+    # is the assertion that catches the reverse mistake: a TIMEOUTS entry for a
+    # node that no longer exists, which is how a ceiling silently stops applying
+    # after a rename.
+    registered = set(workflow.nodes)
+    missing = registered - set(TIMEOUTS)
+    if missing:  # pragma: no cover - unreachable while _add resolves names
+        raise RuntimeError(f"nodes without a timeout policy: {sorted(missing)}")
+    stale = set(TIMEOUTS) - registered
+    if stale:
+        logger.warning(
+            "langgraph_node_timeout_policy_without_a_node",
+            stale=sorted(stale),
+            hint="TIMEOUTS names a node the graph no longer registers; its "
+            "ceiling is dead config. Remove the entry or restore the node.",
+        )
 
     return workflow
 
@@ -237,7 +310,7 @@ async def lifespan_graph() -> AsyncIterator[None]:
         async with lifespan_graph():
             yield
     """
-    global _compiled_graph, _store
+    global _compiled_graph
 
     pg_dsn = _resolve_checkpoint_dsn()
 
@@ -278,13 +351,19 @@ async def lifespan_graph() -> AsyncIterator[None]:
                 await checkpointer.setup()
                 logger.info("langgraph_checkpoint_tables_ready")
 
-                # Cross-thread store for long-term memory (backed by mem0 below the hood)
-                _store = InMemoryStore()
+                # NOTE: no `store=` here on purpose. LangGraph's BaseStore is
+                # the framework's cross-thread long-term memory, reached from a
+                # node via langgraph.config.get_store(). This repo has zero
+                # get_store() call sites -- long-term memory is mem0
+                # (services/memory.py) mirrored into the user_memories table
+                # (services/memory_lifecycle.py) and read through AgentState.
+                # Passing a store nothing reads was the same defect class as
+                # the ResilientPostgresSaver that LangGraph silently discarded
+                # at compile(): wired in, never used, invisible to every test.
 
                 workflow = _build_workflow()
                 _compiled_graph = workflow.compile(
                     checkpointer=checkpointer,
-                    store=_store,
                 )
                 logger.info("langgraph_agent_workflow_compiled_with_postgres_checkpointer")
 
@@ -308,11 +387,9 @@ async def lifespan_graph() -> AsyncIterator[None]:
                 error=str(exc),
                 hint="Using in-memory MemorySaver checkpointer for this session (non-production only).",
             )
-            _store = InMemoryStore()
             workflow = _build_workflow()
             _compiled_graph = workflow.compile(
                 checkpointer=MemorySaver(),
-                store=_store,
             )
             logger.info("langgraph_agent_workflow_compiled_with_inmemory_fallback")
 
@@ -328,18 +405,15 @@ async def lifespan_graph() -> AsyncIterator[None]:
             "langgraph_postgres_checkpointer_not_installed_using_inmemory",
             hint="langgraph-checkpoint-postgres not found. Using in-memory MemorySaver (non-production only).",
         )
-        _store = InMemoryStore()
         workflow = _build_workflow()
         _compiled_graph = workflow.compile(
             checkpointer=MemorySaver(),
-            store=_store,
         )
         logger.info("langgraph_agent_workflow_compiled_with_inmemory")
 
         yield
 
     _compiled_graph = None
-    _store = None
 
 
 def get_graph() -> Any:
