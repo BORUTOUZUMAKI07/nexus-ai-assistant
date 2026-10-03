@@ -39,10 +39,16 @@ dependencies = [
     "cryptography>=42.0.0",
     
     # Model Context Protocol & Agents
-    "fastmcp>=0.1.0",
-    "langgraph>=0.2.0",
-    "langgraph-checkpoint-postgres>=2.0.0",
-    "langchain-core>=0.2.0",
+    # Floors are the versions this code actually exercises, not the versions it
+    # was first written against. `langgraph>=1.2` is load-bearing: the per-node
+    # `retry_policy` / `timeout=` / `error_handler=` kwargs and `stream_mode=
+    # "custom"` all require 1.2 (see _build_workflow and api/v1/conversations).
+    # A lower floor does not fail at install -- it fails at compile() or at
+    # runtime, which is the expensive way to find out.
+    "fastmcp>=4.0.2",
+    "langgraph>=1.2.11",
+    "langgraph-checkpoint-postgres>=3.1.2",
+    "langchain-core>=1.6.1",
     
     # LLM Routing, Structured Output & Tools
     "litellm>=1.40.0",
