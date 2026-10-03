@@ -101,6 +101,47 @@ describe("ChatInput", () => {
     expect(screen.queryByTitle("Send message (Enter)")).not.toBeInTheDocument()
   })
 
+  it("allows submitting while loading so the turn can be queued", () => {
+    // The send button used to be absent while a run was in flight, so the
+    // message was unreachable. It is now present and labelled as a queue.
+    render(<ChatInput onSendMessage={onSendMessage} isLoading={true} onStop={onStop} />)
+    const textarea = screen.getByPlaceholderText(
+      "Ask Nexus anything, write code, search live web..."
+    )
+    fireEvent.change(textarea, { target: { value: "follow up" } })
+
+    const queueButton = screen.getByTitle("Queue message (Enter)")
+    expect(queueButton).not.toBeDisabled()
+    fireEvent.click(queueButton)
+
+    expect(onSendMessage).toHaveBeenCalledWith(
+      "follow up",
+      expect.objectContaining({ agentMode: "deep" })
+    )
+    expect((textarea as HTMLTextAreaElement).value).toBe("")
+  })
+
+  it("renders queued messages and cancels one", () => {
+    const onCancelQueued = vi.fn()
+    render(
+      <ChatInput
+        onSendMessage={onSendMessage}
+        isLoading={true}
+        onStop={onStop}
+        queuedMessages={[
+          { id: "q1", content: "queued one" },
+          { id: "q2", content: "queued two" },
+        ]}
+        onCancelQueued={onCancelQueued}
+      />
+    )
+    expect(screen.getByText("queued one")).toBeInTheDocument()
+    expect(screen.getByText("queued two")).toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByTitle("Remove queued message")[0])
+    expect(onCancelQueued).toHaveBeenCalledWith("q1")
+  })
+
   it("renders attachment chips and allows removing them", () => {
     render(<ChatInput onSendMessage={onSendMessage} isLoading={false} />)
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement

@@ -32,6 +32,13 @@ interface ChatInputProps {
   onSendMessage: (content: string, options: SendMessageOptions) => void;
   isLoading: boolean;
   onStop?: () => void;
+  /**
+   * Turns the user submitted while a run was in flight. They are shown here
+   * until the active run finishes and the queue advances.
+   */
+  queuedMessages?: { id: string; content: string }[];
+  /** Drop one queued turn before it starts. */
+  onCancelQueued?: (id: string) => void;
 }
 
 const PROMPT_TEMPLATES = [
@@ -74,6 +81,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
   isLoading,
   onStop,
+  queuedMessages = [],
+  onCancelQueued,
 }) => {
   const [content, setContent] = useState("");
   const [enableWeb, setEnableWeb] = useState(false);
@@ -158,7 +167,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   const handleSend = () => {
-    if ((!content.trim() && attachments.length === 0 && !imageDataUrl) || isLoading) return;
+    // Deliberately does NOT bail on `isLoading`. Sending during a run is how a
+    // follow-up gets queued -- the hook holds it and drains it when the run
+    // ends -- whereas the old `|| isLoading` guard discarded the message.
+    if (!content.trim() && attachments.length === 0 && !imageDataUrl) return;
     const options: SendMessageOptions = {
       enableWeb,
       enableCode,
@@ -389,6 +401,35 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                 >
                   <X className="w-3 h-3" />
                 </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Queued follow-ups — drained in order once the active run ends */}
+        {queuedMessages.length > 0 && (
+          <div className="mb-2 p-1.5 border-b border-[var(--border-subtle)] space-y-1">
+            <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider px-1">
+              Queued · {queuedMessages.length}
+            </div>
+            {queuedMessages.map((q, idx) => (
+              <div
+                key={q.id}
+                className="flex items-center gap-2 px-2 py-1 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-xs text-[var(--text-secondary)]"
+              >
+                <span className="flex items-center justify-center w-4 h-4 rounded-full bg-[var(--accent-soft)] text-[var(--accent-ink)] text-[10px] font-semibold shrink-0">
+                  {idx + 1}
+                </span>
+                <span className="truncate flex-1">{q.content}</span>
+                {onCancelQueued && (
+                  <button
+                    onClick={() => onCancelQueued(q.id)}
+                    className="hover:text-[var(--text-primary)] p-0.5 shrink-0"
+                    title="Remove queued message"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -639,8 +680,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
           </div>
 
           {/* Send / Stop Button */}
-          <div>
-            {isLoading ? (
+          <div className="flex items-center gap-1.5">
+            {isLoading && (
               <button
                 onClick={onStop}
                 className="p-2 rounded-lg bg-[var(--status-danger)] hover:opacity-90 text-white transition-all"
@@ -648,16 +689,15 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
               >
                 <StopCircle className="w-4 h-4" />
               </button>
-            ) : (
-              <button
-                onClick={handleSend}
-                disabled={!canSend}
-                className="p-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--accent-foreground)] transition-all active:scale-95 shadow-[0_0_12px_var(--accent-glow)]"
-                title="Send message (Enter)"
-              >
-                <Send className="w-4 h-4" />
-              </button>
             )}
+            <button
+              onClick={handleSend}
+              disabled={!canSend}
+              className="p-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--accent-foreground)] transition-all active:scale-95 shadow-[0_0_12px_var(--accent-glow)]"
+              title={isLoading ? "Queue message (Enter)" : "Send message (Enter)"}
+            >
+              <Send className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>
