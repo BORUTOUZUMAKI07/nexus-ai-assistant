@@ -358,6 +358,46 @@ async def stream_conversation(
         )
         try:
             async with trace_span("agentic_stream", {"thread_id": thread_id, "mode": body.mode, "user_id": str(current_user.id)}):
+                # ── Custom streams: you must ask for them, in string form. ──
+                #
+                # Measured against langgraph 1.2.11, one variable at a time in a
+                # fresh process (tests/test_stream_custom_event_trap.py runs the
+                # measurement; do not trust this comment over that test):
+                #
+                #   astream_events(v2)                        -> 0 payloads
+                #   astream_events(v2, stream_mode="custom")    -> payload, as an
+                #       `on_chain_stream` on the ROOT `LangGraph` run, with
+                #       data["chunk"] set to exactly what was written
+                #   astream_events(v2, stream_mode=["custom"])  -> 0 payloads  (!)
+                #   astream(stream_mode="custom")               -> payload, unwrapped
+                #   astream_events(v2, stream_mode="bogus")     -> no raise, AND
+                #       the root run's on_chain_stream is suppressed entirely
+                #
+                # Two traps in that table. The list form is what anyone writes
+                # when subscribing to more than one mode, and it delivers
+                # nothing. A typo is worse: it is accepted, and it silences the
+                # root deltas too, so the graph looks like it is producing less
+                # rather than more. Neither is self-announcing.
+                #
+                # `on_custom_event` is NOT an emitted event name. The string
+                # occurs once in the package, at langgraph/pregel/_retry.py:312,
+                # as an idle-timer touch handler on an internal scope class. A
+                # handler written against the tutorials is dead code that reads
+                # correct.
+                #
+                # The hazard that remains: the payload arrives as an
+                # `on_chain_stream`, which is the branch immediately below. It
+                # looks for `chunk["messages"]`, finds none, and no-ops -- right
+                # by accident, not by design. So a mid-run event added without
+                # the root-name check produces no error and reaches no user.
+                #
+                # Our own critique/quality/artifact frames are unaffected: they
+                # are read post-run via `aget_state` and rendered by
+                # `finished_run_events`, never streamed mid-run.
+                #
+                # To add a mid-run event here: pass stream_mode="custom" (string,
+                # not list), match on `event.get("name") == "LangGraph"`, and
+                # discriminate on the chunk's own shape.
                 async for event in orchestrator_graph.astream_events(
                     input={
                         "messages": graph_messages,
