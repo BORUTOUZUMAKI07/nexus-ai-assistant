@@ -239,6 +239,42 @@ export async function POST(req: NextRequest) {
                   data,
                 });
                 controller.enqueue(encoder.encode(`8:[${annotation}]\n`));
+              } else if (eventType === "critique" || eventType === "quality") {
+                // The critic's verdict and the evidence-quality score, emitted by
+                // the backend on a finished run (services/run_events.py).
+                //
+                // These were previously dropped on the floor: the backend emitted
+                // them, this chain had no branch for them, and the test named
+                // `test_leaves_critique_and_quality_events_untranslated` recorded
+                // the omission as a decision. The decision was wrong — the frames
+                // land in the database, the API contract holds, no test fails, and
+                // the user is simply never told the answer was critiqued. That is
+                // the exact failure AGENTS.md §2 warns about for a new backend
+                // event, and it is invisible from the backend side.
+                //
+                // Translated as annotations rather than text: the verdict is
+                // metadata about the turn, not part of the answer, and emitting it
+                // as a text delta would put it inside the model's own words.
+                // Field names mirror the backend contract exactly
+                // (services/run_events.py::finished_run_events): critique carries
+                // `critique` + `revision_count`; quality carries
+                // `evidence_score` + `evidence_gate_passed`. These are not
+                // invented here — a renamed field would translate cleanly into an
+                // annotation permanently missing its value.
+                const annotation = JSON.stringify({
+                  type: eventType,
+                  data:
+                    eventType === "critique"
+                      ? {
+                          critique: parsed.critique ?? "",
+                          revision_count: parsed.revision_count ?? 0,
+                        }
+                      : {
+                          evidence_score: parsed.evidence_score ?? null,
+                          evidence_gate_passed: parsed.evidence_gate_passed ?? null,
+                        },
+                });
+                controller.enqueue(encoder.encode(`8:[${annotation}]\n`));
               } else if (eventType === "artifact") {
                 // The turn was saved as a durable artifact. Only the id crosses
                 // the wire: the canvas fetches the content itself, so a 120k-char

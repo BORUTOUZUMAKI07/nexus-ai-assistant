@@ -27,6 +27,7 @@ import {
   GitBranch,
   ListChecks,
   Save,
+  Scale,
 } from "lucide-react";
 import { ArtifactItem } from "./ArtifactCanvas";
 
@@ -73,12 +74,29 @@ export interface PendingHITLRequest {
   arguments?: Record<string, unknown>;
 }
 
+/**
+ * The critic's verdict and the evidence-quality score for the run that just
+ * finished.
+ *
+ * Distinct from `MessageItem.annotations` because the backend emits these AFTER
+ * the assistant message row exists, so there is no message id to attach them
+ * to. Mirrors `TurnVerdict` in `hooks/useNexusChat.ts`.
+ */
+export interface TurnVerdict {
+  critique?: string;
+  revision_count: number;
+  evidence_score: number;
+  evidence_gate_passed: boolean | null;
+}
+
 export interface ChatAreaProps {
   messages: MessageItem[];
   isLoading: boolean;
   error?: string | null;
   onRetry?: () => void;
   pendingHITL?: PendingHITLRequest | null;
+  /** Critic verdict + evidence score for the run that just completed. */
+  turnVerdict?: TurnVerdict | null;
   onResolveHITL?: (
     action: "approve" | "reject" | "modify",
     data?: Record<string, unknown>
@@ -99,6 +117,33 @@ export interface ChatAreaProps {
 }
 
 const THOUGHT_STAGES = ["Planning", "Searching", "Analysing", "Synthesising"];
+
+/** Neutral glyph for the verdict row. It is metadata, not an alarm. */
+const ScaleIcon: React.FC<{ verdict: TurnVerdict }> = ({ verdict }) => (
+  <Scale
+    className={`w-4 h-4 shrink-0 ${
+      verdict.evidence_gate_passed === false
+        ? "text-[var(--status-warning)]"
+        : "text-[var(--text-muted)]"
+    }`}
+  />
+);
+
+/**
+ * Evidence score, as a percentage of the backend's 0..1 float.
+ *
+ * The `Number.isFinite` guard is not decoration: the value arrives from a JSON
+ * frame, and `NaN` renders as the literal text "NaN%" while still looking like
+ * a formatted number in a screenshot.
+ */
+const ScorePill: React.FC<{ score: number }> = ({ score }) => (
+  <span
+    className="px-2 py-0.5 rounded bg-[var(--bg-main)] text-[var(--text-secondary)] border border-[var(--border-subtle)]"
+    title="Evidence quality score reported by the run"
+  >
+    evidence {Number.isFinite(score) ? Math.round(score * 100) : 0}%
+  </span>
+);
 
 /** Live elapsed seconds counter – starts when mounted, stops when stopped=true */
 const LiveTimer: React.FC<{ stopped?: boolean }> = ({ stopped }) => {
@@ -623,6 +668,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onRetry,
   pendingHITL,
   onResolveHITL,
+  turnVerdict,
   onFeedback,
   onOpenArtifact,
   onSaveArtifact,
@@ -639,6 +685,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [resolving, setResolving] = useState(false);
   const [resolved, setResolved] = useState<"approve" | "reject" | "modify" | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  // Collapsed by default. The verdict is metadata about the turn, not the
+  // answer, and a permanently-open panel above the transcript would compete
+  // with the reply the user actually asked for. It is there for the case where
+  // the evidence gate failed and nothing else in the UI says so.
+  const [verdictOpen, setVerdictOpen] = useState(false);
 
   // Auto-scroll. Without this the transcript never follows a streamed answer:
   // tokens arrive one delta at a time, so the user had to scroll manually to
@@ -833,6 +884,57 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               >
                 Modify…
               </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Critic verdict / evidence score.
+          This block used not to exist at all: the backend emitted both frames
+          on every finished run, the BFF route dropped them, and the user was
+          never told. The gap was invisible from the backend because the frames
+          were written to the database and the API contract still held. */}
+      {turnVerdict && (
+        <div className="max-w-3xl mx-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3.5">
+          <button
+            onClick={() => setVerdictOpen((v) => !v)}
+            aria-expanded={verdictOpen}
+            className="w-full flex items-center justify-between gap-2 text-left"
+          >
+            <span className="flex items-center gap-2 text-xs font-semibold text-[var(--text-secondary)]">
+              <ScaleIcon verdict={turnVerdict} />
+              {turnVerdict.revision_count > 0
+                ? `Answer revised ${turnVerdict.revision_count}× before delivery`
+                : "Answer passed review on first draft"}
+            </span>
+            <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wide">
+              <ScorePill score={turnVerdict.evidence_score} />
+              {/* Three states, not two. `null` is the backend not reporting the
+                  gate at all, which is not the same as it passing, and
+                  rendering it as a green "passed" would be a claim nobody made. */}
+              {turnVerdict.evidence_gate_passed === false ? (
+                <span className="px-2 py-0.5 rounded bg-[var(--status-warning)]/10 text-[var(--status-warning)] border border-[var(--status-warning)]/30">
+                  Low evidence
+                </span>
+              ) : turnVerdict.evidence_gate_passed === true ? (
+                <span className="px-2 py-0.5 rounded bg-[var(--status-success)]/10 text-[var(--status-success)] border border-[var(--status-success)]/30">
+                  Evidence gate passed
+                </span>
+              ) : null}
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-[var(--text-muted)] transition-transform ${verdictOpen ? "rotate-180" : ""}`}
+              />
+            </span>
+          </button>
+
+          {verdictOpen && turnVerdict.critique && (
+            <div className="mt-3 pt-3 border-t border-[var(--border-subtle)]">
+              <p className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-muted)] mb-1">
+                What the reviewer flagged
+              </p>
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap">
+                {turnVerdict.critique}
+              </p>
             </div>
           )}
         </div>

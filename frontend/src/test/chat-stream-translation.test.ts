@@ -164,19 +164,71 @@ describe("/api/chat SSE translation", () => {
     }
   })
 
-  it("leaves critique and quality events untranslated", async () => {
-    // They are dropped today, and this is here so that stays a decision rather
-    // than an accident: if someone wires one up, this test fails and makes them
-    // also handle it in the hook.
+  it("translates the critic's verdict into an annotation", async () => {
+    // This test used to assert the opposite: that critique was DROPPED. The
+    // intent was to make the omission a decision rather than an accident, and
+    // it did — but the decision was wrong. The backend emitted this frame on
+    // every finished run that went through revision, the API contract held, no
+    // test anywhere failed, and the user was never told their answer had been
+    // critiqued. AGENTS.md §2 names this exact failure for a new backend event:
+    // the first integration point is invisible, because nothing on the backend
+    // side can observe it.
     const restore = stubBackend(
-      'data: {"type":"critique","critique":"too short"}\n\n' +
-        'data: {"type":"quality","evidence_score":0.4}\n\n'
+      'data: {"type":"critique","critique":"too short","revision_count":2}\n\n'
+    )
+    try {
+      const POST = await chatRoute()
+      const res = await POST(request(), {})
+      const ann = await annotation(res)
+      expect(ann.type).toBe("critique")
+      expect(ann.data).toEqual({ critique: "too short", revision_count: 2 })
+    } finally {
+      restore()
+    }
+  })
+
+  it("translates the evidence-quality score into an annotation", async () => {
+    // `evidence_gate_passed: false` is the one that matters to a user: it is
+    // the run saying its own answer was thin on evidence. Defaulting it to
+    // `true` or dropping it would turn an admission into silence.
+    const restore = stubBackend(
+      'data: {"type":"quality","evidence_score":0.4,"evidence_gate_passed":false}\n\n'
+    )
+    try {
+      const POST = await chatRoute()
+      const res = await POST(request(), {})
+      const ann = await annotation(res)
+      expect(ann.type).toBe("quality")
+      expect(ann.data).toEqual({
+        evidence_score: 0.4,
+        evidence_gate_passed: false,
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  it("never renders critique or quality as answer text", async () => {
+    // The failure mode of getting this wrong is worse than the old one. A `0:`
+    // frame puts the critic's verdict inside the model's own answer, so the
+    // user reads "too short" as though the assistant had said it. Both halves
+    // here are load-bearing independently: deleting the new `8:` branch fails
+    // the frame count, and changing it to `0:` fails the text assertion.
+    const restore = stubBackend(
+      'data: {"type":"text_delta","content":"Here it is."}\n\n' +
+        'data: {"type":"critique","critique":"too short","revision_count":2}\n\n' +
+        'data: {"type":"quality","evidence_score":0.4,"evidence_gate_passed":false}\n\n'
     )
     try {
       const POST = await chatRoute()
       const res = await POST(request(), {})
       const all = await frames(res)
-      expect(all.filter((l) => l.startsWith("8:")).length).toBe(0)
+      const text = all
+        .filter((l) => l.startsWith("0:"))
+        .map((l) => JSON.parse(l.slice(2)))
+        .join("")
+      expect(text).toBe("Here it is.")
+      expect(all.filter((l) => l.startsWith("8:")).length).toBe(2)
     } finally {
       restore()
     }
