@@ -229,10 +229,19 @@ def get_permissions_matrix() -> str:
 @mcp.resource("nexus://system/capabilities")
 def get_advanced_capabilities() -> str:
     """
-    Declare the server's advanced MCP primitive support:
-    Elicitations = supported (structured human input via the signed REST
-    bridge), Roots = declared scopes, Sampling = not supported (a
-    client-owned primitive this server never initiates).
+    Declare what this server actually supports.
+
+    Protocol primitives are reported as unsupported unless they are genuinely
+    exercised, because a client that reads ``supported: true`` here will build
+    on it:
+
+    * ``protocol_elicitations`` / ``roots`` / ``sampling`` -- all client-owned
+      in MCP, and none of them initiated by this server.
+    * ``human_input_bridge`` -- our own out-of-band mechanism, named for what
+      it is rather than borrowing the protocol's name.
+
+    A capabilities endpoint that overclaims is worse than one that admits a
+    limit: the failure surfaces in someone else's client, not in ours.
     """
     return json.dumps({
         # Same source as the FastMCP handshake identity above, so the two can
@@ -243,24 +252,45 @@ def get_advanced_capabilities() -> str:
             "tools": True,
             "resources": True,
             "prompts": True,
-            "elicitations": {
+            # MCP elicitation is a PROTOCOL capability: the server calls
+            # ctx.elicit() on the client mid-tool-call. This server does no
+            # such thing -- FastMCP 4 removed ctx.elicit() from the server API
+            # this app targets. `request_user_input` parks the question in our
+            # own table and returns immediately; the answer arrives out-of-band
+            # on a REST endpoint. Reporting protocol elicitations here would be
+            # a client-visible claim about a capability we do not have, so the
+            # key is named for what it actually is.
+            "human_input_bridge": {
                 "supported": True,
                 "description": "Structured human-input requests parked server-side; "
                                "answers are accepted only from the owning user via the "
                                "authenticated REST endpoint POST /api/v1/tools/elicitations/{id}/respond.",
             },
-            "roots": {
-                "supported": True,
-                "declared_roots": [
+            # Roots are CLIENT-declared in MCP: the client advertises which
+            # filesystem roots it exposes, and the server may read within them.
+            # A server cannot declare roots -- there is nothing for a client to
+            # act on. These are the data sources this server reads FROM, which is
+            # the opposite direction, so it is reported as a resource inventory.
+            "server_resources": {
+                "reads_from": [
                     {"uri": "database://conversations", "description": "Conversation/usage telemetry tables"},
                     {"uri": "qdrant://nexus_knowledge", "description": "Embedded document corpus"},
                     {"uri": "e2b://sandbox", "description": "Ephemeral code-execution microVMs (no filesystem persistence)"},
                 ],
-                "description": "Server declares the scopes it operates within; clients control what they expose.",
+                "description": "Backing data sources this server reads from. Not MCP roots: "
+                               "roots are declared by the client and constrain what the server may read.",
             },
             "sampling": {
                 "supported": False,
                 "description": "Sampling is a client-owned primitive; this server never delegates generation to a host LLM.",
+            },
+            "protocol_elicitations": {
+                "supported": False,
+                "description": "MCP protocol elicitations are not used; see human_input_bridge.",
+            },
+            "roots": {
+                "supported": False,
+                "description": "Roots are a client-owned primitive; this server declares none.",
             },
         },
     }, indent=2)
