@@ -844,6 +844,8 @@ export default function AppPage() {
                 onSendMessage={handleSendMessage}
                 isLoading={chat.isLoading}
                 onStop={handleStop}
+                queuedMessages={chat.queuedMessages}
+                onCancelQueued={chat.cancelQueued}
               />
             </div>
             {/* Dual-Pane Artifact Canvas */}
