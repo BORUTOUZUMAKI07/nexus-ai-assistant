@@ -826,6 +826,7 @@ export default function AppPage() {
                       : null
                   }
                   onResolveHITL={chat.resolveHITL}
+                  turnVerdict={chat.turnVerdict}
                   onFeedback={handleFeedback}
                   onOpenArtifact={handleOpenArtifact}
                   onSelectCitation={setActiveCitation}
