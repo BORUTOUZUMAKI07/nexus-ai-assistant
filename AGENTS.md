@@ -787,11 +787,26 @@ different tests) looked like three unrelated bugs instead of one.
       chat model for its confidence returns a number it fabricated, and it looks
       exactly like a measured one. The trick is mechanical: ask for one label,
       read that token's per-token scores, softmax over *only* the labels that
-      appear. LiteLLM is configured with `drop_params=True`, so providers that
-      cannot supply logprobs drop the request silently -- that is the normal path,
-      not an error, and `complete()` surfaces it as `None` (never `[]`, because
-      empty-list means "a token with no alternatives", which is a different and
-      much stronger claim).
+      appear.
+    - **The "provider cannot supply logprobs, so `drop_params=True` drops it
+      silently" story is WRONG for this app's routing table, and measured.**
+      `litellm.drop_params = True` is set (`litellm_client.py:12`), but it drops
+      a parameter only when litellm believes the provider does not accept it.
+      Groq *accepts* `logprobs` and then answers `400 logprobs is not supported
+      with this model`, so the param is forwarded and the call fails. Measured
+      2026-10-04, one token, direct call per model: `groq/qwen3.8-27b` and
+      `groq/openai/gpt-oss-120b` both 400; `openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`
+      and `openrouter/liquid/lfm-2.5-2.6b:free` return 200 with **no** logprobs.
+      **Zero of the four configured models can measure anything.** The
+      consequence is the expensive kind of failure: a non-supporting provider is
+      not one silent `None`, it is one 400 *per router group*, so a single graded
+      chunk walks `fast_chat` -> `large_context` -> `liquid_fallback` ->
+      `vision_analysis` and only then returns `None` via
+      `DECISION_TIMEOUT_SECONDS`. `complete()` still surfaces `None` (never `[]`,
+      because empty-list means "a token with no alternatives", which is a
+      different and much stronger claim) -- the layer is correct, the *cost* of
+      its correctness was the undocumented part. Re-measure with the probe in
+      the D1 notes before assuming any provider here can be measured against.
     - **`Decision.probability` is `None` unless a real distribution exists.** A
       caller that wants a number is *forced* to handle its absence. This is the
       load-bearing part: it is what makes a deterministic rule impossible to
@@ -867,6 +882,23 @@ different tests) looked like three unrelated bugs instead of one.
       an unwired client is invisible from outside, so
       `test_the_default_rag_service_has_a_decision_client_wired` is the only test
       that catches it -- same shape as 9.14.
+    - **MEASURED 2026-10-04, on: it cannot work in this deployment, so it stays
+      off.** A live run against the hosted Qdrant corpus with the flag on
+      produced `{"enabled": true, "graded": 2, "dropped": 0, "measured": 0,
+      "undecided": 2, "kept": 2, "decisions": []}` — the stage worked exactly as
+      designed (fail-open, nothing dropped, no probability invented) and
+      measured **nothing at all**, because of 9.20: no configured model returns
+      logprobs. Each graded chunk therefore costs up to four 400s/empty retries
+      plus a 6s timeout and returns a guaranteed `keep`. Enabling it here would
+      be a real cost for a guaranteed zero, so the default is not merely
+      cautious, it is currently the only correct setting. **Two limits on this
+      measurement, stated rather than glossed:** the corpus is 1 file / 2 chunks /
+      2 Qdrant points, so it can establish *whether the stage measures at all*
+      (it does not) but says nothing about whether grading improves answers;
+      and `rag_answer_coverage_graded` is a **structlog event name, not a metric
+      counter** — there is no `rag_answer_coverage_graded` counter to scrape.
+      Re-check the `measured` field after any change to `model_list` or
+      `DECISION_MODEL`; a routing change is what would make this viable.
     - **The question is asked as an ordinal `score`, not an unordered `choice`,
       and the label order is the scale.** `COVERAGE_LABELS` is
       `("does_not_answer", "partially", "answers")` — **ascending**, because
@@ -1037,6 +1069,57 @@ different tests) looked like three unrelated bugs instead of one.
     durable event log) and a GET stream that tails it from `Last-Event-ID`;
     until then, do not ship a "resume" that silently reproduces a truncated
     answer.
+
+26. **Two of the three observability switches are blocked on credentials, and
+    one of them was blocked in a way that looked like a working feature.**
+    Measured 2026-10-04 against the live deployment; both `backend/.env` flags
+    were flipped, exercised, and then put **back** where they were.
+    - **`LANGSMITH_TRACING`: every ingest POST returns 403.** Not a code fault.
+      The configured key is a *project* token (`lsv2_pt_...`, not `lsv2_sk_...`).
+      `POST /runs/multipart` → `403 {"error":"Forbidden"}` and
+      `GET /sessions` → `403 Forbidden`, **both with and without a
+      `project_name`**. `/info` answers 200, but that endpoint does not
+      authenticate, so it is not evidence the token has workspace access — the
+      honest claim is "this token cannot reach the workspace owning
+      `nexus-ai-assistant`", not "the key works but is read-only". The symptom
+      is nasty and worth naming: langchain logs the failure as a *warning*
+      (`Failed to multipart ingest runs`) and the run **completes normally**,
+      so a dashboard that stays empty looks identical to an app that produced
+      no spans. Anyone enabling this must first prove the upload is *accepted*
+      (`docs/observability/langsmith-trace-sample.md` has the one-line check);
+      leave the flag `false` until then, since on it only pays for rejected
+      requests.
+    - **`NEW_RELIC_LICENSE_KEY` is absent**, and the ingest key belongs on the
+      *collector* (`docker/otel-collector-config.yaml`), not the app. Bringing
+      New Relic live additionally requires deploying that collector to a
+      reachable endpoint. Neither is a code change; see
+      `docs/observability-deployment.md` for the remaining ops steps.
+    - **What *was* delivered instead:** `docs/observability/langsmith-trace-sample.md`
+      — a real run's complete span tree (`LangGraph → bootstrap → planner →
+      route_after_planner → orchestrator → route_after_critic → critic_grader →
+      synthesizer → artifact`, 10 spans, ~10.4s, per-node timings), captured
+      from the `astream_events` payloads. Real, not simulated; only the
+      *destination* is missing.
+    - **Two capture bugs worth remembering, because both produced a
+      confidently wrong document.** (a) The answer came out **repeated three
+      times**: the capture replicated the endpoint's `on_chain_stream`
+      fallback but not the `_streamed_tokens = True` flip that follows it
+      (`conversations.py:434`), so every later node's `on_chain_end`
+      re-appended the same final message. Replicating a fallback means
+      replicating the flag that stops it. (b) The first capture ran under
+      `asyncio.run` on Windows, i.e. the Proactor loop, so
+      `ResilientPostgresSaver` fell back to `InMemorySaver` — the artifact
+      would have documented a run with **no persistence**. Fixed by using the
+      app's own `event_loop_factory` (`infrastructure/common/event_loop.py`),
+      which is what uvicorn is launched with. **And even then the fallback
+      fired**, for a different reason worth recording: the DSN is rewritten
+      from the pooler's transaction port 6543 to session port 5432 for this one
+      consumer, and the pooler closed that session-mode connection
+      (`server closed the connection unexpectedly`). So on this machine the
+      graph compiles `langgraph_agent_workflow_compiled_with_inmemory_fallback`
+      and a run has no durability across a restart — an environment fact, not a
+      code defect, and one that would silently weaken any test relying on
+      checkpoints.
 
 ## 9b. Already solved — do not re-propose
 

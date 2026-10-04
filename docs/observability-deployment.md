@@ -78,3 +78,28 @@ NEW_RELIC_EXPORT_INTERVAL_SECONDS=30                 # default, optional
 - New Relic: check `Logs` and `Metrics` query tabs; errors/429s in collector
   logs mean the free-tier ingest quota was hit (by design, sampling keeps NR
   spend low: 100% of error spans, 10% of the rest).
+
+### 5a. Already verified without the credential (2026-10-04)
+
+The app half of this checklist is **code-complete and measured**, so the only
+remaining work is the ops half. Verified with `NEW_RELIC_ENABLED=true` and
+`NEW_RELIC_OTLP_ENDPOINT=http://127.0.0.1:4318` (deliberately unreachable):
+
+| Check | Result |
+|---|---|
+| handler attaches | yes — root handlers `['StreamHandler', 'LoggingHandler']` |
+| endpoint | `http://127.0.0.1:4318/v1/logs` (`base` + `/v1/logs`) |
+| startup event | `otlp_log_handler_wired` |
+| idempotent | second `setup_otlp_log_handler()` returns the same handler; handler count stays 2 |
+| fail-open | a log call raised nothing; export failure surfaces as a log line, and `shutdown_otlp_log_handler()` returns cleanly |
+
+**Not verified, and not verifiable from here:** anything requiring the ingest
+key or a deployed collector — the actual New Relic `Logs`/`Metrics` tabs, the
+free-tier quota behaviour, and sampling. Those need steps 1–4 done on an
+account this environment has no access to.
+
+One thing to know when you run this yourself: the wiring lives inside
+`setup_logging()` (`core/logging.py:183`), **not** at module import. A script
+that imports `core.logging` and inspects `logging.getLogger().handlers` without
+calling `setup_logging()` will see zero OTLP handlers and conclude the feature
+is broken. `main.py:40` calls it at import, so the real app is fine.
