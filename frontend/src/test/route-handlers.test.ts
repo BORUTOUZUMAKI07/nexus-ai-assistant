@@ -232,6 +232,22 @@ const SAMPLE_BODIES: Record<string, unknown> = {
 }
 
 /**
+ * A query string each GET route's own validation will accept.
+ *
+ * The sibling of SAMPLE_BODIES, for the same reason: a route that rejects a
+ * malformed query answers 400 without forwarding, so the sweep would report a
+ * false failure. `/api/chat` GET is the rejoin endpoint and validates both ids
+ * as UUIDs before it forwards anything, which means a probe without them proves
+ * nothing — so the sweep is given a real target and checks the call actually
+ * goes out, rather than the route being added to a skip list.
+ */
+const SAMPLE_SEARCHES: Record<string, string> = {
+  "/api/chat":
+    "?runId=11111111-1111-4111-8111-111111111111" +
+    "&conversationId=22222222-2222-4222-8222-222222222222",
+}
+
+/**
  * Spy on global fetch for the routes that bypass lib/proxy.
  *
  * This is where the security property lives: a route that reads the auth
@@ -306,7 +322,9 @@ describe("every route forwards to the backend under the correct path", () => {
     backendFetch.mockClear()
     const direct = isDirect(route) ? captureDirectFetch() : null
     try {
-      await invoke(nextRequest(route, "", SAMPLE_BODIES[route] ?? { probe: "body" }))
+      await invoke(
+        nextRequest(route, SAMPLE_SEARCHES[route] ?? "", SAMPLE_BODIES[route] ?? { probe: "body" }),
+      )
     } finally {
       direct?.restore()
     }

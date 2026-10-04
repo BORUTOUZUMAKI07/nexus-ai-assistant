@@ -496,6 +496,29 @@ class Settings(BaseSettings):
         description="Cumulative token ceiling for one graph run; the cheapest way to stop is to refuse to start the next step",
     )
 
+    # ── Durable run log ─────────────────────────────────────────────────────
+    # A run's frames go to connected clients the instant they are produced, and
+    # to the database in batches. The two are separated because a per-frame
+    # insert is one round-trip per token delta, which against a hosted pooler
+    # costs more than the model call that produced the token.
+    #
+    # The trade-off these two settings expose: the durable copy trails live
+    # streaming by at most RUN_EVENT_FLUSH_INTERVAL_SECONDS. Lower it and the
+    # trail shrinks but the insert rate rises; raise it and the write cost drops
+    # but a client that reconnects has more to replay. Nothing is lost either
+    # way -- a reader replays from the log, and the terminal `done` frame carries
+    # the full reply -- so this is latency against database load, not durability.
+    RUN_EVENT_FLUSH_INTERVAL_SECONDS: float = Field(
+        default=0.25,
+        ge=0.0,
+        description="Max seconds a run-event frame may sit unflushed before the batch is committed",
+    )
+    RUN_EVENT_BATCH_SIZE: int = Field(
+        default=64,
+        ge=1,
+        description="Frame count that forces a flush regardless of the interval",
+    )
+
     # ── Artifact generation (D3) ─────────────────────────────────────────────
     # When a finished turn is a durable document, save it as a versioned
     # artifact so the canvas and SavedArtifacts list have something to show.

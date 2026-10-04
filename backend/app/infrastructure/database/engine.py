@@ -17,6 +17,7 @@ try:
     import backend.app.domain.plan.models  # noqa: F401
     import backend.app.domain.prompt.models  # noqa: F401
     import backend.app.domain.redteam.models  # noqa: F401
+    import backend.app.domain.run.models  # noqa: F401
     import backend.app.domain.share.models  # noqa: F401
     import backend.app.domain.system.models  # noqa: F401
     import backend.app.domain.tool.models  # noqa: F401

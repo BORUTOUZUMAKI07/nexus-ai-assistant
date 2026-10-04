@@ -14,7 +14,7 @@ class QualityService:
 
     @staticmethod
     def evaluate_response_quality(
-        prompt: str, response: str, tokens_used: int, latency_ms: int
+        prompt: str, response: str, tokens_used: int, latency_ms: float
     ) -> dict[str, Any]:
         char_count = len(response)
         word_count = len(response.split())

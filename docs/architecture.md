@@ -35,7 +35,7 @@ graph TD
     end
 
     subgraph Storage
-        API --> PG[(PostgreSQL pgvector — 35 tables)]
+        API --> PG[(PostgreSQL pgvector - 37 tables)]
         RAG --> Qdrant[(Qdrant hybrid vector DB)]
         API --> RD[(Redis: cache, rate limit, Celery broker)]
         API --> Celery[Celery worker + beat]
@@ -71,15 +71,20 @@ One bounded context per folder, each with `models.py` (SQLModel tables),
 - `experiment` / `optimization` / `redteam` — bandits, prompt optimization
   runs, red-team probe runs.
 
-**35 tables** total (verified: `SQLModel.metadata.tables` contains exactly
-`api_keys, artifact_versions, artifacts, audit_logs, bandit_rewards,
+**37 tables** total (verified: `SQLModel.metadata.tables` contains exactly
+`agent_runs, api_keys, artifact_versions, artifacts, audit_logs, bandit_rewards,
 conversation_branches, conversation_shares, conversations, cost_logs,
 evaluation_logs, file_chunks, file_metadata, files, hook_policies,
 message_attachments, messages, organization_invites, organization_members,
 organizations, plans, prompt_optimization_runs, prompt_templates,
-prompt_versions, redteam_runs, skills, system_configs, tool_calls,
+prompt_versions, redteam_runs, run_events, skills, system_configs, tool_calls,
 tool_permissions, tools, usage_logs, user_memories, user_settings, users,
 webhook_deliveries, webhook_endpoints`).
+
+`agent_runs` + `run_events` are the durable run log: a run is a row and its
+frames are rows, so a browser that loses its connection re-attaches to the *same*
+run (`GET /conversations/{id}/runs/{run_id}/stream`) instead of starting a second
+one. See AGENTS.md §9.27.
 
 ### API layer (`backend/app/api/v1/`)
 
@@ -148,6 +153,12 @@ Checkpointing uses `AsyncPostgresSaver` + `InMemoryStore`, with full
 - **SSE** — `POST /conversations/{conversation_id}/messages/stream` streams
   assistant deltas, thinking/CoT blocks, tool events, and HITL interrupts.
   `POST /conversations/{id}/messages` is the single-shot synchronous variant.
+- **Rejoin** — `POST /conversations/{id}/stream` returns the run id in the
+  `X-Nexus-Run-Id` header and then *tails* a run's event log rather than owning
+  it. The graph runs in a background task, so a browser that refreshes
+  mid-answer re-attaches with `GET /conversations/{id}/runs/{run_id}/stream`
+  (honouring `Last-Event-ID`) and **replays** the frames it missed rather than
+  starting a second run — a resend would re-decide the answer and charge twice.
 - **Auth** — JWT (HS256 only; signed + verified by jose), refresh tokens,
   optional TOTP 2FA, email verification, per-provider OAuth (Google + GitHub;
   GET `/oauth/{provider}` for the provider URL, POST `/oauth/{provider}/callback`

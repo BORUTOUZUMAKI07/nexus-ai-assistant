@@ -10,6 +10,7 @@ Each test here fails if the corresponding wiring is reverted:
   * ``test_stream_route_*``          fail if the compiled prompt / skills are
                                      dropped from the graph input
 """
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from uuid import uuid4
@@ -307,7 +308,10 @@ async def test_stream_route_passes_compiled_prompt_and_skills(monkeypatch):
     from backend.app.api.v1 import conversations as conv_mod
     from backend.app.domain.user.models import User
     from backend.app.main import app
+    from backend.app.services import run_executor as run_exec_mod
     from httpx import ASGITransport, AsyncClient
+
+    from tests.fakes import FakeRunSession, FakeRunStore
 
     captured: dict = {}
 
@@ -345,8 +349,32 @@ async def test_stream_route_passes_compiled_prompt_and_skills(monkeypatch):
     monkeypatch.setattr(conv_mod, "orchestrator_graph", FakeGraph())
     monkeypatch.setattr(conv_mod, "prompt_compiler", FakePromptCompiler())
     monkeypatch.setattr(conv_mod, "load_active_skills", fake_skills)
-    monkeypatch.setattr(conv_mod, "trace_span", _null_span)
+    # `trace_span` moved to the executor, which is where the work happens: the
+    # span used to wrap the request, and with the run decoupled that would have
+    # measured only the time the route spent tailing frames. Same name, same
+    # attributes (`run_executor.py`), different owner -- so it is patched there
+    # now. Patching the route would have raised AttributeError and taken both
+    # tests with it, which is the only reason this surfaced at all.
+    monkeypatch.setattr(run_exec_mod, "trace_span", _null_span)
     monkeypatch.setattr(conv_mod, "OrganizationService", _NullOrg)
+    # A fake session for the run log, which the endpoint now owns.
+    #
+    # The route passes `conv_mod.async_session_factory` to the background
+    # executor, the tail reader reads through it, and the reply persistence
+    # opens its own session from it (AGENTS.md §9.27). Left unpatched, these two
+    # tests wrote to whatever `DATABASE_URL` points at -- hosted Supabase in this
+    # checkout -- and failed on `relation "agent_runs" does not exist`. That is a
+    # fact about which migrations someone has applied to someone else's database,
+    # not about the prompt-and-skills wiring these tests exist to check, and the
+    # right response to it is emphatically not to migrate the remote DB.
+    #
+    # One store shared by every session: the writer, the reader and the finisher
+    # each open their own, and a fresh store per call would give each an empty
+    # world of its own.
+    run_store = FakeRunStore()
+    monkeypatch.setattr(
+        conv_mod, "async_session_factory", lambda: FakeRunSession(run_store)
+    )
 
     transport = ASGITransport(app=app)
     try:
@@ -371,7 +399,10 @@ async def test_stream_route_survives_prompt_compile_failure(monkeypatch):
     from backend.app.api.v1 import conversations as conv_mod
     from backend.app.domain.user.models import User
     from backend.app.main import app
+    from backend.app.services import run_executor as run_exec_mod
     from httpx import ASGITransport, AsyncClient
+
+    from tests.fakes import FakeRunSession, FakeRunStore
 
     captured: dict = {}
 
@@ -402,8 +433,28 @@ async def test_stream_route_survives_prompt_compile_failure(monkeypatch):
     monkeypatch.setattr(conv_mod, "orchestrator_graph", FakeGraph())
     monkeypatch.setattr(conv_mod, "prompt_compiler", Boom())
     monkeypatch.setattr(conv_mod, "load_active_skills", lambda: _raise_async())
-    monkeypatch.setattr(conv_mod, "trace_span", _null_span)
+    # See the note in the sibling test: the span moved to the executor with the
+    # run, and kept its name and attributes.
+    monkeypatch.setattr(run_exec_mod, "trace_span", _null_span)
     monkeypatch.setattr(conv_mod, "OrganizationService", _NullOrg)
+    # A fake session for the run log, which the endpoint now owns.
+    #
+    # The route passes `conv_mod.async_session_factory` to the background
+    # executor, the tail reader reads through it, and the reply persistence
+    # opens its own session from it (AGENTS.md §9.27). Left unpatched, these two
+    # tests wrote to whatever `DATABASE_URL` points at -- hosted Supabase in this
+    # checkout -- and failed on `relation "agent_runs" does not exist`. That is a
+    # fact about which migrations someone has applied to someone else's database,
+    # not about the prompt-and-skills wiring these tests exist to check, and the
+    # right response to it is emphatically not to migrate the remote DB.
+    #
+    # One store shared by every session: the writer, the reader and the finisher
+    # each open their own, and a fresh store per call would give each an empty
+    # world of its own.
+    run_store = FakeRunStore()
+    monkeypatch.setattr(
+        conv_mod, "async_session_factory", lambda: FakeRunSession(run_store)
+    )
 
     transport = ASGITransport(app=app)
     try:
@@ -420,7 +471,107 @@ async def test_stream_route_survives_prompt_compile_failure(monkeypatch):
     assert "system_prompt" not in captured, "must omit the key, not send a broken one"
 
 
+# ── the route hands its own session factory to the background executor ───────
+
+
+async def test_stream_route_runs_the_executor_through_its_own_session_factory(monkeypatch):
+    """The fake session must be reached by the *executor*, not only by the reader.
+
+    Found by `backend/revert_c2.py` revert B9. Dropping
+    ``session_factory=async_session_factory`` from the ``execute_run`` call site
+    left both sibling tests above green, which looks like "the argument is
+    redundant" and is actually "nothing observes it": they assert on the graph
+    invocation (``captured["system_prompt"]``) and return as soon as the HTTP
+    response is in hand. The run is a *background* task, so it had not yet
+    reached its first `writer.flush()` -- the first thing that opens a session --
+    when the test ended and the loop tore the task down.
+
+    So the seam that exists specifically so these tests cannot write to hosted
+    Supabase (§9.27) was itself unverified. The next person to write a test that
+    waits for the run would have discovered it by writing a row to someone
+    else's database.
+
+    The signal is the end of the response body, not a sleep: the endpoint's
+    stream ends when the run reaches a terminal state, and the run can only
+    reach one after `_terminate` has called ``finish_run`` on a session. If the
+    executor used its import-time default instead, the fake store stays empty and
+    this fails -- after reaching for the real database, which is precisely why
+    the assertion is worth having.
+    """
+    from backend.app.api.deps import get_conversation_service, get_current_user
+    from backend.app.api.v1 import conversations as conv_mod
+    from backend.app.domain.user.models import User
+    from backend.app.main import app
+    from backend.app.services import run_executor as run_exec_mod
+    from httpx import ASGITransport, AsyncClient
+
+    from tests.fakes import FakeRunSession, FakeRunStore
+
+    class FakeGraph:
+        def astream_events(self, input, config=None, version=None):
+            return _aiter([{"event": "on_chain_end", "data": {"output": {"messages": []}}}])
+
+        async def aget_state(self, config):
+            return None
+
+    class FakePromptCompiler:
+        async def compile_system_prompt_cached(self, **kwargs):
+            return "COMPILED PROMPT"
+
+    class FakeConvSvc:
+        async def get_conversation(self, conv_id, user_id=None):
+            class C:
+                system_prompt = None
+            return C()
+
+        async def add_message(self, **kwargs):
+            return None
+
+    user = User(id=uuid4(), email="a@b.c", hashed_password="x")
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_conversation_service] = lambda: FakeConvSvc()
+    monkeypatch.setattr(conv_mod, "orchestrator_graph", FakeGraph())
+    monkeypatch.setattr(conv_mod, "prompt_compiler", FakePromptCompiler())
+    monkeypatch.setattr(conv_mod, "load_active_skills", lambda: _aiter_ok())
+    monkeypatch.setattr(run_exec_mod, "trace_span", _null_span)
+    monkeypatch.setattr(conv_mod, "OrganizationService", _NullOrg)
+    run_store = FakeRunStore()
+    monkeypatch.setattr(
+        conv_mod, "async_session_factory", lambda: FakeRunSession(run_store)
+    )
+
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/api/v1/conversations/{uuid4()}/stream",
+                json={"messages": [{"role": "user", "content": "hi"}], "mode": "normal"},
+            )
+            assert resp.status_code == 200, resp.text
+            # Reading to EOF is what forces the run to finish: the route's stream
+            # ends on the run's terminal status, not on its own timer.
+            body = await asyncio.wait_for(resp.aread(), timeout=10.0)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_conversation_service, None)
+
+    assert b"run_id" in body or resp.headers.get("X-Nexus-Run-Id"), (
+        "the stream must announce the run it is tailing"
+    )
+    assert len(run_store.runs) == 1, (
+        "the executor never opened the route's session factory"
+    )
+    assert run_store.runs[0].status in {"completed", "failed"}, (
+        f"run never reached a terminal status: {run_store.runs[0].status!r}"
+    )
+    assert [e.seq for e in run_store.events] == sorted(e.seq for e in run_store.events)
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+
+async def _aiter_ok():
+    return []
 
 
 async def _raise_async():

@@ -94,13 +94,20 @@ These were each confirmed first-hand and are intentional:
   `ast.walk(tree)`, not a regex: on CRLF checkouts a `\s*\n\s*` pattern
   matches nothing and you will conclude the seams were removed.
 - **No mutable default arguments** anywhere in `backend/app/` (verified).
-- **mypy is NOT a gate on the full tree.** It only runs over the 22-file
+- **mypy is NOT a gate on the full tree.** It only runs over the 28-file
   allowlist in `backend/scripts/mypy_targets.txt`, and the command needs those
   paths passed explicitly (`--follow-imports=silent`, `backend/` prefix
   stripped) — bare `uv run mypy` has no target and exits 2. The full app has
   ~466 pre-existing strict-mode errors (75 files). Do not attempt a full fix.
   New modules belong on the allowlist: check one with
   `uv run mypy --follow-imports=silent <module>` and append it if clean.
+  **Fix the errors rather than allowlisting the module away** — §9.27 is the
+  case where the only self-contradicting annotation in five new modules
+  (`frames.extend(list[str])` into a `list[dict]`) turned out to be a real
+  defect that had silently deleted three SSE frames, and no test found it.
+  Two diagnostics *cannot* be fixed without abandoning the repo idiom and carry
+  targeted `type: ignore[attr-defined]` comments instead: `AgentRun.created_at.desc()`
+  and `RunEvent.seq.asc()`.
 - **`ResilientPostgresSaver` must subclass `BaseCheckpointSaver`, and did
   not.** `StateGraph.compile()` calls `ensure_valid_checkpointer`, which is an
   `isinstance` check
@@ -346,25 +353,37 @@ detailed-keyboard list) **does not exist in the code** — the previous
 
 ## 4. Database
 
-**35 tables** (verified: `SQLModel.metadata.tables` at runtime). Full list:
+**37 tables** (verified: `SQLModel.metadata.tables` at runtime, 2026-10-04).
+Full list:
 
-`api_keys, artifact_versions, artifacts, audit_logs, bandit_rewards,
+`agent_runs, api_keys, artifact_versions, artifacts, audit_logs, bandit_rewards,
 conversation_branches, conversation_shares, conversations, cost_logs,
 evaluation_logs, file_chunks, file_metadata, files, hook_policies,
 message_attachments, messages, organization_invites, organization_members,
 organizations, plans, prompt_optimization_runs, prompt_templates,
-prompt_versions, redteam_runs, skills, system_configs, tool_calls,
+prompt_versions, redteam_runs, run_events, skills, system_configs, tool_calls,
 tool_permissions, tools, usage_logs, user_memories, user_settings, users,
 webhook_deliveries, webhook_endpoints`
 
+`agent_runs` and `run_events` are the run log added by §9.27 — the pair that
+makes a run durable and replayable, and the reason rejoin is a read rather than
+a resend.
+
 - ORM: SQLModel (SQLAlchemy under the hood); async via `asyncpg`, sync via
   `psycopg2`/`psycopg3`.
-- Migrations: Alembic (`backend/migrations/`, head `b1c2d3e4f5a6` —
-  **9** revisions: `0001_initial_schema` → `9290fa24428d` → `a1b2c3d4e5f6` →
+- Migrations: Alembic (`backend/migrations/`, head `c2a1b2c3d4e5` —
+  **10** revisions: `0001_initial_schema` → `9290fa24428d` → `a1b2c3d4e5f6` →
   `c1d2e3f4a5b6` → `d3e4f5a6b7c8` → `e5f6a7b8c9d0` → `f6a7b8c9d0e1` (closes a
   pre-existing drift) → `a7b8c9d0e1f2` (row-level security) →
-  `b1c2d3e4f5a6` (Batch B memory lifecycle columns)).
+  `b1c2d3e4f5a6` (Batch B memory lifecycle columns) →
+  `c2a1b2c3d4e5` (agent_runs + run_events, the durable run log — §9.27)).
   `alembic upgrade head` before first boot.
+  **`c2a1b2c3d4e5` has never been applied to any database**, including the
+  hosted one; it was verified offline only (`alembic upgrade
+  b1c2d3e4f5a6:c2a1b2c3d4e5 --sql`, exit 0). That is deliberate — §9.16/§9.18 —
+  and it is why any test that reaches a real session fails on
+  `relation "agent_runs" does not exist` until someone runs it against a local
+  container.
 - **The graph is linear and `tests/test_migration_graph.py` enforces it.** It
   was not, and nothing noticed: `a7b8c9d0e1f2` and `b1c2d3e4f5a6` were both
   written against `f6a7b8c9d0e1` and committed independently, giving two heads.
@@ -383,7 +402,7 @@ webhook_deliveries, webhook_endpoints`
     `from backend.app.domain...` — which every revision uses so autogenerate
     compares against the app's own metadata — resolves. With `.` it means
     `backend/`, the path gains `backend.app` instead of `backend`, and **all
-    nine revisions fail identically** with `No module named 'backend'` before
+    ten revisions fail identically** with `No module named 'backend'` before
     Alembic inspects a statement.
   - **`backend/.env` `DATABASE_URL` points at hosted Supabase, not the local
     container.** Run `docker compose up -d postgres` and export
@@ -549,22 +568,38 @@ Windows shell gotchas (learned the hard way):
 
 ## 7. Testing inventory (verified counts)
 
-- Backend: **70 unit test files** + **11 integration** + **3 e2e** under
+- Backend: **73 unit test files** + **11 integration** + **3 e2e** under
   `backend/tests/` (pytest). Fakes live in the single module
-  `backend/tests/fakes.py` (e.g. `FakeSession`).
-- Suite total: **1143 passed, 4 skipped, 9 deselected** for `cd backend &&
-  uv run pytest` (which already excludes e2e via `addopts`). The 9 deselected
-  are the e2e markers; the `integration` marker is unregistered, so those 11
-  files run by default and need Docker up. **If Docker Desktop is not running
-  those 11 files produce ~113 `DockerException` setup errors** and the total
-  drops to ~946 — that is the environment, not a regression. Verify with
-  `docker info` before investigating.
-- Frontend: **29 Vitest test files** under `frontend/src/test/` (260 tests) +
-  **6 Playwright specs** in `frontend/e2e/`.
+  `backend/tests/fakes.py` (e.g. `FakeSession`, and — since C2 —
+  `FakeRunStore`/`FakeRunSession`, which model the run log's own persistence
+  shape: ordered paging, `add_all` batches and an async context manager).
+- Suite total: **1133 passed, 4 skipped, 9 deselected, 1 error** for
+  `cd backend && uv run pytest --ignore=tests/integration` (2026-10-04, Docker
+  Desktop down). Without `--ignore`, the 11 integration files run by default —
+  the `integration` marker is unregistered, and `addopts` already excludes e2e,
+  which is where the 9 deselected come from. **If Docker Desktop is not running
+  those 11 files produce ~113 `DockerException` setup errors**; that is the
+  environment, not a regression. Verify with `docker info` before
+  investigating. The one remaining error is *not* one of those files:
+  `test_rate_limit.py::test_app_login_allowed_sets_headers` shares the
+  `client` fixture → `override_get_db` → `_testcontainers`, so it needs Docker
+  too (despite its own docstring saying otherwise). It fails at **fixture
+  setup**, so a Docker error there cannot have been caused by anything in
+  `app/`. With Docker up the figure is 1133 passed, 4 skipped, 9 deselected,
+  0 errors.
+- Frontend: **31 Vitest test files** under `frontend/src/test/` + **6 Playwright
+  specs** in `frontend/e2e/`.
 - Batch A–D test files: `test_batch_a_wiring.py`, `test_batch_b_memory.py`,
   `test_batch_c_correctness.py`, `test_batch_d_research.py`,
   `test_batch_d_spend.py`, `test_batch_d3_artifact.py`,
   `test_batch_d3_run_events.py`, `test_memory_lifecycle_schema.py`.
+  Run durability/rejoin: `test_run_rejoin.py` (49 tests, groups A–F, and
+  `backend/revert_c2.py` reverts each fix against it — see §9.27).
+  The route→executor seam has one test of its own in
+  `test_batch_a_wiring.py` (`..._runs_the_executor_through_its_own_session_factory`),
+  because the two prompt-wiring tests there finish before the background run
+  opens a session and so cannot observe it.
+  Stream-transport: `test_stream_custom_event_trap.py` (10 tests, §9.23).
   RAG: `test_hyde_generation.py` (31 tests, 15-revert harness — see §9.19).
 - `walkthrough.md` once claimed "82 tests" — that is stale. Current counts: see
   above.
@@ -1052,23 +1087,27 @@ different tests) looked like three unrelated bugs instead of one.
       (queued turns were composed against the answer being replaced). `ChatInput`
       no longer bails on `isLoading`; while loading it shows **both** Stop and a
       Send relabelled `"Queue message (Enter)"`, and renders the queued chips.
-    - Tests: `useNexusChat.test.ts` (28) and `chat-input.test.tsx` (9);
-      frontend suite **276 passing**.
+    - Tests: `useNexusChat.test.ts` (28) and `chat-input.test.tsx` (9); frontend
+      suite **276 passing** as of this change alone — **293** once C2's 17 rejoin
+      tests are counted (§9.27).
 
-25. **"Rejoin the stream after refresh" is backend work, and a frontend-only
-    version would be a lie — deferred, not faked.** The SSE endpoint
-    (`POST /conversations/{id}/stream`, `conversations.py:195`) runs the graph
-    *inside* its `StreamingResponse` async generator, so the run's lifetime is
-    the HTTP request's. There is no run id, no event log, and no attach
-    endpoint; the assistant message is persisted (on a fresh session, `:500`)
-    only when the generator reaches `:498`, so a disconnect yields at best the
-    partial `emitted_text` and then nothing. The per-thread slot
-    (`_active_stream_threads`, `:62`) only 409s a *concurrent* run; it is
-    released in the generator's `finally` and exposes no progress. A real
-    feature needs the run decoupled from the request (background task +
-    durable event log) and a GET stream that tails it from `Last-Event-ID`;
-    until then, do not ship a "resume" that silently reproduces a truncated
-    answer.
+25. **"Rejoin the stream after refresh" needed backend work, and a frontend-only
+    version would have been a lie. That work is now done — see §9.27.** The
+    analysis is kept because it is what established the backend as the only place
+    the fix could live, and because its conclusion still constrains what the
+    feature may claim. The SSE endpoint (`POST /conversations/{id}/stream`) ran
+    the graph *inside* its `StreamingResponse` async generator, so the run's
+    lifetime was the HTTP request's. There was no run id, no event log, and no
+    attach endpoint; the assistant message was persisted only when the generator
+    reached the end, so a disconnect yielded at best the partial `emitted_text`
+    and then nothing. The per-thread slot only 409s a *concurrent* run; it is
+    released in the generator's `finally` and exposes no progress. A real feature
+    needed the run decoupled from the request (background task + durable event
+    log) and a GET stream that tails it — which is exactly what §9.27 built. **The
+    original "do not ship a resume that silently reproduces a truncated answer"
+    is why the fix had to be a replay of the *same* run rather than a resend: a
+    resend would have produced a second, differently-worded answer and charged
+    for it.**
 
 26. **Two of the three observability switches are blocked on credentials, and
     one of them was blocked in a way that looked like a working feature.**
@@ -1121,6 +1160,230 @@ different tests) looked like three unrelated bugs instead of one.
       code defect, and one that would silently weaken any test relying on
       checkpoints.
 
+27. **§9.25 is no longer deferred. A run is now a row, and rejoin is two reads
+    of it — not a resend.** The SSE endpoint used to run the graph inside its own
+    `StreamingResponse` generator, so a run's lifetime was the HTTP request's.
+    Now `POST /conversations/{id}/stream` creates an `AgentRun`, hands the graph
+    to a background task (`services/run_executor.py`), and returns a stream that
+    *tails* the run's event log. `GET /conversations/{id}/runs/{run_id}/stream`
+    tails the same log. Both are the same reader with the same cursor.
+    - **The run log stores frame *objects*, and one layer here briefly stored wire
+      strings instead — which silently deleted the critique, the quality score
+      and the artifact notification.** `finished_run_events()` returns
+      pre-rendered SSE (`data: {...}\n\n`) because for its original only caller
+      — a generator writing straight to the HTTP response — that was exactly
+      right. The splice into the executor put those strings into the list of
+      frames the log persists, so each was stored as a JSON *string* and
+      `encode_frame` serialised it a second time:
+      `data: "data: {\"type\": \"quality\"}\n\n"`. The BFF translator parses that,
+      finds no `type`, and drops the frame — §2's failure mode one layer up.
+      **Four layers of tests stayed green:** `test_batch_d3_run_events.py` tests
+      the pure function, `test_batch_d3_artifact.py` is a source-grep for the
+      call, and *every* executor fixture left `aget_state` returning `None`, so
+      the post-run frames were never built at all. None of them spans the seam.
+      Fixed by splitting `finished_run_payloads(values) -> list[dict]` out of
+      `finished_run_events`, which is now `[sse_frame(p) for p in
+      finished_run_payloads(values)]` — one definition, two renderings, wire
+      format at the edge. **What found it was mypy**, not a test:
+      `frames.extend(list[str])` into a `list[dict[str, Any]]` is the only
+      annotation in the five new modules that disagreed with itself. The three
+      tests that now pin it build a snapshot carrying all three frames, and
+      assert each half separately — "no frame is a string" (a log of only
+      `text_delta` and `done` also satisfies it) from "all three survive" (which
+      is what a dropped frame breaks).
+    - **A type error in new code is a defect report, not a style note.** 30
+      strict-mode errors were reported across the five new modules and all 30
+      were fixed rather than allowlisted away; they are now clean and on
+      `scripts/mypy_targets.txt` (28 files). Two of them cannot be fixed
+      without abandoning the repo idiom: `AgentRun.created_at.desc()` and
+      `RunEvent.seq.asc()` are the same two errors nine other repositories in
+      `app/domain/` raise, because SQLModel types a column as its Python type.
+      They carry targeted `type: ignore[attr-defined]` comments (7 such comments
+      already exist in `app/`), which is what lets `run/repository.py` be gated
+      at all — worth more than silencing two diagnostics that are not about this
+      code.
+    - **PEP 695 `type X = ...` is a `SyntaxError` below 3.12, and
+      `requires-python = ">=3.11"`.** Used for one alias and caught before it
+      shipped. A plain assignment cannot be used in its place without ordering:
+      the alias is evaluated at import, so it has to sit *after* the class it
+      names, which is why `SubscriberItem` is declared below `_EndOfRun` with a
+      comment saying why.
+    - **The distinction that matters: a rejoin replays, a resend re-decides.** A
+      resend spends a second run, charges twice, and produces text that does not
+      match what the user already saw. That is why the run id travels as the
+      `X-Nexus-Run-Id` **response header** and not as a new SSE frame: a new
+      frame type needs a branch in the BFF translator
+      (`frontend/src/app/api/chat/route.ts`) or it is silently dropped (§2), and a
+      header needs one forwarded line. `test_the_bff_forwards_the_same_run_id_header_name_the_backend_sets`
+      is what makes a rename on either side a red build — the value crosses two
+      repos and nothing type-checks it.
+    - **`tail_run` holds a frame it has already consumed.** Rule 1 is contiguous
+      delivery only: a live frame whose predecessors are not yet durable is
+      *held*, not yielded, because yielding it would advance the cursor past the
+      hole and silently drop those frames forever. The earlier version `continue`d
+      after a catch-up, **discarding the frame it had just taken** — recoverable
+      only by a later catch-up that may never come if the run ends first. Holding
+      it and re-offering it at the top of the loop, only once
+      `cursor + 1 == pending.seq`, makes "no consumed frame is lost" true by
+      construction. The `queue.get()` wait is what paces the retry, so an
+      unclosable gap costs one DB read per `poll_seconds` rather than spinning.
+      (A first attempt that checked `pending` immediately after `catch_up()`
+      would have busy-looped the database; rejected.)
+    - **The writer flushes *before* the status flips, and the status flips
+      *before* `publish_end`.** Ordering is the whole correctness argument:
+      flush → `finish_run` → `publish_end`. Flipping `status` first would let a
+      reader see a finished run whose last frames were still buffered, and it
+      would then return on the terminal check and never read them.
+    - **Terminality is `AgentRun.status`, never the stream going quiet.** A
+      reader on a *running* run with nothing to say polls forever
+      (`wait_for(queue.get(), timeout=poll_seconds)`). "No frames for a while"
+      ending the read would make every quiet run look finished and the client
+      stop before the answer arrived — the failure this change exists to remove.
+    - **A run that dies mid-answer now persists the partial answer.** The
+      `except Exception` branch calls `_persist_reply` *before* emitting the error
+      frame and passes `message_id` to `_terminate(status="failed")`. Pre-refactor
+      that path returned without writing anything, so a run that died mid-answer
+      left text on the screen and nothing in the database — exactly the defect
+      being removed. `CancelledError` is deliberately left unchanged: it is the
+      shutdown path and would be re-cancelled anyway.
+    - **One translator, two entry points — on both sides of the proxy.** A
+      duplicated frame loop is a second source of truth, and the failure is
+      silent: a frame type the copy does not handle is *dropped*, so the answer is
+      quietly missing its citations or its verdict with no error anywhere (§2,
+      one layer up). So `translateFrame`/`streamTranslation`/`streamHeaders` are
+      extracted in the BFF, and the whole read loop is one `consumeChatStream` in
+      `frontend/src/lib/chatStream.ts`, parameterised by a `ChatStreamSink`. The
+      hook's live turn and the rejoin differ only in those callbacks. The test
+      that proves it feeds one backend SSE payload through `POST` and `GET` and
+      compares the outputs, because "they share a translator" cannot be asserted
+      by reading either file.
+    - **`patchMessage` is shared for a reason that is not tidiness.** It keeps
+      `annotations: annos.length > 0 ? annos : m.annotations`. An annotation-free
+      patch must not clear annotations an earlier patch installed, or a text delta
+      arriving between two annotation frames erases them.
+    - **The browser stores the run id, never the frames.** One localStorage entry
+      per conversation. Caching the answer in the browser would be a second
+      source of truth for it, stale the moment the backend appends a frame. It is
+      written on the response header and cleared **only when the stream reaches
+      the backend's end**: a dropped connection, a rejected fetch, or an abort all
+      jump past the clear, because a run the browser stopped watching for its own
+      reasons is still going and forgetting its id is precisely the case rejoin
+      exists to cover. `test_still_holds_the_run_id_while_the_turn_is_in_flight`
+      exists because asserting only the post-turn state would pass even if the
+      write never happened and the clear always ran — both leave `null`.
+    - **A 404 is the one rejoin failure that is not an error.** The client forgets
+      the id and removes the empty bubble; surfacing it would show the user an
+      error about their own conversation, and retrying it forever would be wrong.
+      The BFF returns a distinguishable `{"detail":"run_not_found"}` for exactly
+      this — collapsing it into the generic `backend_rejected_404` leaves the
+      client retrying a run that does not exist.
+    - **The hook sends no `Last-Event-ID`, deliberately.** The backend and the BFF
+      both honour the cursor and it is tested there, but after a reload the
+      in-memory frame list is empty, so the *first* frame is the one that needs
+      re-reading. Resuming from a cursor carried across the reload would skip
+      exactly the part of the answer the user is missing. A full replay is only
+      wasteful for a long answer; a wrong cursor is a hole in it.
+    - **What rejoin does *not* reconstruct, stated plainly:** the user turn. The
+      run log holds frames; the user message is a row the backend wrote, and the
+      chat view loads no conversation history at all (a pre-existing gap, out of
+      scope here). Inventing a user bubble above a recovered answer would be
+      fabricating conversation, so the recovered answer arrives alone.
+    - **Two backend tests had to stop writing to the real database.** The `/stream`
+      wiring tests in `test_batch_a_wiring.py` passed `conv_mod.async_session_factory`
+      through to the executor, the tail reader and the reply persistence, so they
+      wrote to whatever `DATABASE_URL` pointed at — hosted Supabase — and failed
+      on `relation "agent_runs" does not exist`. That is a fact about which
+      migrations have been applied to someone else's database, not about the
+      wiring under test, and the response is emphatically **not** to migrate the
+      remote DB (§9.16/§9.18). They now share `FakeRunStore`/`FakeRunSession` from
+      the single fakes module (`tests/fakes.py`) — one store, several sessions,
+      because the writer, reader and finisher each open their own.
+    - **`trace_span("agentic_stream", …)` moved with the work, not with the
+      request.** It used to wrap the route; it now wraps the graph invocation in
+      `run_executor.py` — same name, same attributes. On the route it would have
+      measured only the time spent tailing frames, which is now the wrong duration.
+      The two `/stream` tests patched `conv_mod.trace_span` and failed with
+      `AttributeError`; that was the only reason the move was noticed.
+    - **A `sleep`-based subscription wait failed under load, and the fix was to
+      wait on a signal.** `test_a_dropped_live_frame_is_recovered_from_the_log_before_its_successors`
+      passed alone and failed in the full suite with one frame missing: on a busy
+      machine `await asyncio.sleep(0.02)` was not long enough for the reader to
+      reach `broker.subscribe`, so it attached *after* `publish_end`, replayed the
+      six durable rows and stopped. It now spins on `broker.listener_count(run.id)`
+      — a real condition — instead of guessing a duration. Same treatment in
+      `test_a_quiet_stream_does_not_end_the_read_only_the_status_does`, where a
+      bare sleep made `assert not task.done()` pass *vacuously* for a reader that
+      had not started yet (§7).
+    - **The revert harnesses are `frontend/revert_c2.py` (9/9) and
+      `backend/revert_c2.py` (9/9), split by side of the proxy.** Each fix's
+      inverse is applied to the real source, the covering test is run, and it must
+      fail. Harness defects found and fixed first, all worth remembering because a
+      harness that reports a green baseline is worse than no harness:
+        - the frontend's first return-code convention was inverted;
+        - then its `passed == 0 ⇒ inconclusive` guard **discarded the correct
+          result** — a load-bearing revert is *expected* to leave zero passing
+          tests, because the test it breaks is often the only one the filter
+          selects. Liveness is `numTotalTests`, never `numPassedTests`;
+        - and **a revert has to reintroduce the behaviour, not the identifier.**
+          The first attempt at the payload fix replaced the call site only; all
+          three tests went red with `NameError: name 'finished_run_events' is not
+          defined`, which proves the name is spelled in that file and nothing
+          whatsoever about the wire format (§9.17). Both harnesses now revert the
+          *import* as well, and read the failed test names out of the reporter
+          rather than reporting "something failed".
+      - **The preflight is not decoration: it caught a real leak.** The first
+        backend run was killed by a tool timeout mid-revert, so its `finally`
+        never ran and `run_log.py` was left with `return True  # reverted: …`.
+        The next run refused to start and said so. `git diff` could not have
+        found it — the file is untracked, so the working tree looks pristine to
+        git while a source file is quietly broken. That is §7's rule the hard
+        way: snapshot up front, restore unconditionally, and when a run dies,
+        **grep the tree for the revert markers before debugging anything else.**
+      - **A revert that hangs is not a result, and the harness cannot tell
+        "load-bearing" from "machine is slow" if it can hang.** B5's test waited
+        for a reader to attach with an unbounded
+        `while broker.listener_count(run.id) < 1: await asyncio.sleep(0)`. Under
+        that revert the reader returns *before* it ever subscribes (that is the
+        whole point of it — terminality decided by anything), so the condition
+        became unreachable and the loop spun at 100% CPU: six minutes and 381s
+        of CPU, then killed, then reported INCONCLUSIVE. The wait is now
+        `_await_listener`, bounded by `asyncio.wait_for` and polling at 10ms —
+        same condition, no spin, and a revert produces a red test instead of a
+        hung one. **A `sleep(0)` spin loop is a busy-wait wearing patience's
+        clothes**, and the bounded version is not slower in practice.
+      - **The harness found a genuine gap, and the honest response was a new
+        test rather than a tuned fixture.** B9 dropped
+        `session_factory=async_session_factory` from the `execute_run` call and
+        both `/stream` tests in `test_batch_a_wiring.py` stayed green. Not because
+        the argument is redundant: because they assert on the *graph invocation*
+        and return as soon as the response is in hand, while the run is a
+        background task that had not yet reached its first `flush()` — the first
+        thing that opens a session. So the seam that exists precisely so those
+        tests cannot write to hosted Supabase was itself unverified, and the
+        next person to write a test that waits for the run would have found out
+        by writing a row to someone else's database. Now
+        `test_stream_route_runs_the_executor_through_its_own_session_factory`
+        reads the response to EOF (which is what forces the run to a terminal
+        status, since the route's stream ends on the run's status and not on a
+        timer) and asserts the fake store received the run.
+      - The per-revert `-k` filter is part of the contract: `B5` reverts the
+        terminality rule, and its test is the one that asserts a quiet stream
+        does *not* end the read. A filter typo would leave zero tests selected,
+        which is why liveness is "tests selected", never "tests passed".
+    - **A source-grep test can hold a redundant assertion, and the usual way to
+      find out is to revert the obvious shape first.** The D3 delegation grep
+      gained `assert "finished_run_events(" not in executor` alongside
+      `assert "finished_run_payloads(snapshot.values)" in executor`. Reverting
+      the call site fails both, which makes the second look redundant and
+      invites deleting it. It is not: the shape only it catches is the payloads
+      call **plus** a wire-rendering call — the realistic reintroduction, where
+      something in the executor wants the rendered form for its own output and
+      the double-encoding bug returns on half the frames while the first
+      assertion stays green. Probing that shape (4/4 load-bearing) is what
+      turned "obviously redundant" into "independently load-bearing". Delete a
+      duplicate assertion on evidence about *which* shape each one forbids, not
+      on the observation that one revert trips both.
+
 ## 9b. Already solved — do not re-propose
 
 Bounded revision loop with force-accept; LLM retry/empty-response handling +
@@ -1132,8 +1395,8 @@ were all re-verified against source during the Batch A–D work.
 
 | Concern | Source of truth |
 |---|---|
-| API endpoints | live FastAPI `app.openapi()` (99 paths, 116 ops) — regenerate `docs/api-reference.md` from it |
-| Tables | `backend/app/domain/**/models.py` (35) |
+| API endpoints | live FastAPI `app.openapi()` (100 paths, 117 ops) — regenerate `docs/api-reference.md` from it |
+| Tables | `backend/app/domain/**/models.py` (37) |
 | Keyboard shortcuts | `frontend/src/components/{CommandPalette,ArtifactCanvas,ChatInput}.tsx` |
 | Frontend design system | `frontend/src/app/globals.css` + `frontend/src/lib/theme.ts` + `docs/frontend-design.md` |
 | Alerts/SLOs/runbooks | `docs/alerting/alert-rules.yml` ↔ `docs/slo.md` ↔ `docs/runbooks/` |
@@ -1159,9 +1422,14 @@ per-node retry/timeout policy — `agents/orchestrator/retry_policy.py`, the
 unreachable `set_node_defaults` removed, and §9.22/§9.23 recording the measured
 failures of LangGraph's default `retry_on` and the `astream_events`
 custom-stream trap; then the composer queue — `useNexusChat` enqueues a send
-made during a run and drains it from the run's `finally`, with §9.24/§9.25
-recording the synchronous-ref requirement and why rejoin-after-refresh is
-deferred backend work).
+made during a run and drains it from the run's `finally`, with §9.24 recording
+the synchronous-ref requirement; then the deferred work itself — answer coverage
+measured and left **off** because no configured model returns logprobs
+(§9.20/§9.21), the LangSmith key diagnosed as a 403 project token with the
+capture kept locally (§9.26), and §9.25/§9.27 replacing the deferral with the
+durable run log: `agent_runs` + `run_events`, the graph moved out of the
+`StreamingResponse` generator into a background task, `X-Nexus-Run-Id` as a
+response header, and a rejoin that replays rather than resends).
 Regenerate counts (tables/endpoints/tests) from code rather than trusting any
 static number here — and verify code-shape claims with `ast`, not regex, since
 this repo has CRLF checkouts._
