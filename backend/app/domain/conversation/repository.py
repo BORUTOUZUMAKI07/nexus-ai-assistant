@@ -182,13 +182,57 @@ class ConversationRepository(BaseRepository[Conversation]):
         await self.session.commit()
 
     # Message Operations
-    async def get_messages(self, conversation_id: UUID, limit: int = 100) -> list[Message]:
-        statement = (
-            select(Message)
-            .where(Message.conversation_id == conversation_id)
-            .order_by(Message.created_at.asc())
-            .limit(limit)
-        )
+    async def get_messages(
+        self, conversation_id: UUID, limit: int = 100, *, newest: bool = True
+    ) -> list[Message]:
+        """Return up to ``limit`` messages of a conversation, in chronological order.
+
+        ``newest=True`` (the default) selects the **most recent** ``limit`` rows
+        and then returns them ascending. It used to order ascending and limit,
+        which silently returned the *oldest* 100 messages -- and every caller
+        wants the tail:
+
+        * ``GET /conversations/{id}`` renders the transcript, so a 120-message
+          conversation showed the first 100 and omitted the newest 20. That is
+          the shape that made rejoin look broken: the recovered answer arrived
+          with no user turn anywhere near it, because the turn that produced it
+          was one of the rows the limit had discarded.
+        * ``messages.py`` and ``plan_service.py`` build LLM context, where the
+          most recent turns matter and the oldest are the least useful.
+
+        ``newest=False`` restores the previous window (the earliest ``limit``
+        rows). Nothing in ``app/`` asks for it; it exists so the semantics are
+        nameable rather than implicit, and because ``_branch_conversation``
+        copying the *opening* of a long conversation is a real question whose
+        answer should not be a side effect of how the transcript is fetched.
+
+        The window is a subquery of ids rather than a descending fetch reversed
+        in Python: one round trip, and no dependence on the caller receiving a
+        list in the same order the query returned it. ``id`` is the tiebreaker on
+        both sides because ``created_at`` is a naive-UTC timestamp and two
+        messages written in the same batch can share one -- without it the
+        window and the final ordering can disagree about which rows are newest.
+        """
+        ascending = (Message.created_at.asc(), Message.id.asc())  # type: ignore[attr-defined]
+        if newest:
+            window = (
+                select(Message.id)
+                .where(Message.conversation_id == conversation_id)
+                # The only `.desc()` in this method; it is what selects the *tail*
+                # of the conversation rather than its opening.
+                .order_by(Message.created_at.desc(), Message.id.desc())  # type: ignore[attr-defined]
+                .limit(limit)
+            )
+            statement = (
+                select(Message).where(Message.id.in_(window)).order_by(*ascending)
+            )
+        else:
+            statement = (
+                select(Message)
+                .where(Message.conversation_id == conversation_id)
+                .order_by(*ascending)
+                .limit(limit)
+            )
         result = await self.session.exec(statement)
         return list(result.all())
 

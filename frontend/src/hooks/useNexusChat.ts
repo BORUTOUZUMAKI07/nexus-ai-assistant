@@ -8,8 +8,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchWithSessionRecovery, sendHITLFeedback } from "@/lib/api";
-import { consumeChatStream, readRunId } from "@/lib/chatStream";
+import {
+  fetchWithSessionRecovery,
+  fetchConversation,
+  sendHITLFeedback,
+} from "@/lib/api";
+import { consumeChatStream, readMessageId, readRunId } from "@/lib/chatStream";
+import { hasAnswer, messagesFromHistory } from "@/lib/conversationHistory";
 
 export interface ToolCallAnnotation {
   type: "tool_call";
@@ -245,6 +250,10 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   // so the queue drain can read the just-finished turn synchronously.)
   const optionsRef = useRef(options);
   const messagesRef = useRef(messages);
+  // Bumped by every `updateMessages`, and read by the history loader to detect
+  // that it has been overtaken. See the comment there -- the conversation-ownership
+  // check alone cannot distinguish "untouched" from "a turn started under me".
+  const transcriptEpochRef = useRef(0);
   const loadingRef = useRef(isLoading);
   const abortRef = useRef<AbortController | null>(null);
   // Stable ref for the conversation-created callback — avoids re-binding sendMessage.
@@ -283,6 +292,15 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         | NexusMessage[]
         | ((prev: NexusMessage[]) => NexusMessage[])
     ) => {
+      // Every write to the transcript goes through here, so bumping the counter
+      // here is what makes an in-flight history load able to notice that it has
+      // been overtaken. Ownership alone is not enough: `historyOwnerRef` cannot
+      // tell "nobody has touched this conversation" from "the user typed and sent
+      // a turn while I was fetching", and the second one is the case where
+      // applying the fetched history would delete the message they just sent and
+      // the answer already streaming back. The writers invalidate; the loader
+      // checks.
+      transcriptEpochRef.current += 1;
       // Compute from the ref and write it back synchronously rather than
       // letting React call a functional updater during the next render. The
       // queue drain starts the following turn in the *same tick* the current
@@ -669,55 +687,88 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
    */
   const rejoinRun = useCallback(
     async (conversationId: string, runId: string, signal: AbortSignal) => {
-      const messageId = `msg-rejoined-${runId.slice(0, 8)}`;
-
-      // The bubble is created before the request so the answer streams into a
-      // message that exists. Appending it after the response means an empty gap
-      // in the transcript while the durable copy is fetched, which on a slow
-      // connection reads as "nothing was recovered".
-      updateMessages((prev) =>
-        prev.some((m) => m.id === messageId)
-          ? prev
-          : [
-              ...prev,
-              {
-                id: messageId,
-                role: "assistant",
-                content: "",
-                model: optionsRef.current.model,
-              },
-            ]
-      );
-
-      const dropBubble = () =>
-        updateMessages((prev) => prev.filter((m) => m.id !== messageId));
+      // Declared up front so the catch can remove a bubble that was created, and
+      // is a no-op when the failure happened before one existed. Without this the
+      // probe's own transport failure escaped the handler below as an unhandled
+      // rejection -- the hook reported no error, kept no bubble, and looked
+      // exactly like a run that had nothing to replay.
+      let messageId: string | null = null;
 
       try {
-        const response = await fetchWithSessionRecovery(
+        // Ask first, render later. The `POST`/`GET` responses differ in exactly
+        // one way that matters here: the GET carries the id of the message row a
+        // finished run persisted, so the transcript can be checked for the answer
+        // before a bubble is created for it.
+        const probe = await fetchWithSessionRecovery(
           `/api/chat?conversationId=${encodeURIComponent(
             conversationId
           )}&runId=${encodeURIComponent(runId)}`,
           { method: "GET", signal, headers: { Accept: "text/plain" } }
         );
 
-        // A run the backend no longer has (retention, or a different
-        // environment) is not an error to show the user about their own
-        // conversation: forget it and remove the empty bubble, because an empty
-        // assistant message is worse than no message.
-        if (response.status === 404) {
+        // A run the backend no longer has (retention, or a different environment)
+        // is not an error to show the user about their own conversation: forget it
+        // and leave the transcript alone, because an empty assistant message is
+        // worse than no message.
+        if (probe.status === 404) {
           forgetRun(conversationId);
-          dropBubble();
           return;
         }
-        if (!response.ok || !response.body) {
-          throw new Error(`Rejoin failed: ${response.statusText}`);
+        if (!probe.ok || !probe.body) {
+          throw new Error(`Rejoin failed: ${probe.statusText}`);
         }
 
-        await consumeChatStream(response.body, {
+        // The run finished and wrote its answer, and that answer is already on
+        // screen from the history load. Replaying it would render it twice.
+        //
+        // The "is there an id" question is asked inside `hasAnswer` and *only*
+        // there. It used to be asked here as well (`persisted && hasAnswer(...)`),
+        // which made the guard in `hasAnswer` unreachable -- and an unreachable
+        // guard is a second place to be wrong rather than a safety net: the test
+        // proving "no id never means already rendered" passed with the guard
+        // deleted, because the call site was already short-circuiting. One place
+        // decides, and it is the function whose name is the decision.
+        if (hasAnswer(messagesRef.current, readMessageId(probe))) {
+          forgetRun(conversationId);
+          await probe.body.cancel();
+          return;
+        }
+
+        messageId = `msg-rejoined-${runId.slice(0, 8)}`;
+        // A second name for the same value, and the reason is a `let`.
+        //
+        // `messageId` is the catch block's "did we get far enough to render a
+        // bubble" flag, so it is nullable and mutable; every closure below reads
+        // it, and TypeScript will not carry a narrowing across a closure over a
+        // `let` — which it correctly reports as `id: string | null` against
+        // `NexusMessage`. Binding the id to a `const` also removes a real hazard
+        // rather than only satisfying the checker: nothing between the two can
+        // reassign it out from under a frame that is still being applied.
+        const rejoinedId = messageId;
+
+        // The bubble is created before the stream is read so the answer streams
+        // into a message that exists. Appending it after the frames start means an
+        // empty gap in the transcript while the durable copy is read, which on a
+        // slow connection reads as "nothing was recovered".
+        updateMessages((prev) =>
+          prev.some((m) => m.id === rejoinedId)
+            ? prev
+            : [
+                ...prev,
+                {
+                  id: rejoinedId,
+                  role: "assistant",
+                  content: "",
+                  model: optionsRef.current.model,
+                },
+              ]
+        );
+
+        await consumeChatStream(probe.body, {
           patch: (content, annos) =>
             updateMessages((prev) =>
               prev.map((m) =>
-                m.id === messageId
+                m.id === rejoinedId
                   ? {
                       ...m,
                       content,
@@ -743,7 +794,10 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         // The run is probably still going — a network blip, or the backend was
         // unreachable. The stored id is kept, so a later reload tries again, and
         // the bubble is removed rather than left empty.
-        dropBubble();
+        if (messageId) {
+          const failed = messageId;
+          updateMessages((prev) => prev.filter((m) => m.id !== failed));
+        }
         setError(
           err instanceof Error
             ? err
@@ -754,24 +808,116 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     [updateMessages]
   );
 
+  // ── History / rejoin ordering ───────────────────────────────────────────
+  /**
+   * The conversation id whose history is currently on screen.
+   *
+   * A ref rather than state because it gates a *write*, not a render: the guard's
+   * whole purpose is to stop a history load that resolves late from replacing a
+   * transcript that has since moved on.
+   */
+  const historyOwnerRef = useRef<string>("");
+  // Render-facing mirror of "a conversation's messages are being fetched". The
+  // page shows a skeleton on this, and it used to keep its own flag around its
+  // own loader -- which is the second writer this ordering exists to remove.
+  const [isHydrating, setIsHydrating] = useState(false);
+
+  /**
+   * Re-attach to a run, unless its answer is already in the transcript.
+   *
+   * The page loads conversation history when a conversation is selected, and that
+   * load *replaces* the whole message list. Two writers to one list is the hazard:
+   *
+   * 1. **A late history load erases a live rejoin.** Selecting a conversation
+   *    fires both. If the history request resolves after the rejoin has streamed
+   *    frames, `setMessages(history)` drops the bubble mid-answer and the user
+   *    watches a recovered answer disappear. `historyOwnerRef` makes the load
+   *    yield once the transcript belongs to this conversation.
+   * 2. **A finished run is shown twice.** The replay starts at frame 0, so a run
+   *    that completed while the page was closed replays an answer the history has
+   *    already rendered. The backend states which message row the run persisted
+   *    (`X-Nexus-Message-Id`); if the transcript already holds that id there is
+   *    nothing to recover, so the run id is retired instead.
+   *
+   * Order is history first, then rejoin. The other order is the one that loses
+   * data: the rejoin's bubble would be created against an empty list and then
+   * replaced by the history, or the history would land on a bubble the replay had
+   * already patched.
+   */
+  const hydrateThenRejoin = useCallback(
+    async (conversationId: string) => {
+      // Claim the transcript immediately, before any await. A conversation switch
+      // with no history load yet must invalidate the previous one's in-flight
+      // load, and that is the only moment the claim can be made.
+      historyOwnerRef.current = conversationId;
+      // The write-generation this load was started from. Anything that writes to
+      // the transcript while we are waiting -- a turn the user just started, a
+      // second conversation load -- bumps it, and the load yields rather than
+      // replace newer content with older content.
+      let epoch = transcriptEpochRef.current;
+      setIsHydrating(true);
+
+      // Two independent reasons to stop, and neither subsumes the other: the
+      // owner check catches "this is a different conversation now", the epoch
+      // check catches "this is the same conversation but the transcript moved".
+      const overtaken = () =>
+        historyOwnerRef.current !== conversationId ||
+        transcriptEpochRef.current !== epoch;
+
+      try {
+        const detail = await fetchConversation(conversationId);
+        // Someone else's load, or a conversation switch since: applying this
+        // would put conversation A's messages under conversation B's name.
+        if (overtaken()) return;
+        updateMessages(messagesFromHistory(detail.messages));
+        // Re-baseline before the check below. Applying the history is itself a
+        // write, so without this the loader would immediately outdate itself and
+        // the rejoin it is supposed to be followed by would never run -- a guard
+        // that reads as "someone else took over" every single time, which is the
+        // worst kind: it passes nothing and explains nothing.
+        epoch = transcriptEpochRef.current;
+      } catch (err) {
+        // A failed history load is not an error the user needs to see: the chat
+        // still works, and a rejoin below will render the answer on its own.
+        console.warn("Failed to load conversation history:", err);
+      } finally {
+        // Only the owner clears it. A superseded load leaving this set would show
+        // a skeleton forever, since nobody else would turn it off.
+        if (historyOwnerRef.current === conversationId) setIsHydrating(false);
+      }
+
+      // Overtaken by a turn that started while we were fetching: joining now
+      // would put a second run's frames into a conversation whose first run is
+      // still streaming, which the backend answers by 409ing one of them.
+      if (overtaken()) return;
+      const runId = readRun(conversationId);
+      if (!runId) return;
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        await rejoinRun(conversationId, runId, controller.signal);
+      } finally {
+        if (abortRef.current === controller) abortRef.current = null;
+      }
+    },
+    [updateMessages, rejoinRun]
+  );
+
   useEffect(() => {
     const conversationId = optionsRef.current.conversationId;
     if (!conversationId) return;
-    // A live turn already owns this conversation's stream. Joining as well would
-    // put the same frames into a second bubble, and two runs' worth of requests
-    // against one backend thread slot.
+    // A live turn already owns this conversation's stream. Hydrating or joining as
+    // well would replace the transcript out from under the in-flight answer, and
+    // put two runs' worth of requests against one backend thread slot.
     if (loadingRef.current || abortRef.current) return;
-    const runId = readRun(conversationId);
-    if (!runId) return;
-
-    const controller = new AbortController();
-    void rejoinRun(conversationId, runId, controller.signal);
-    // `rejoinRun` is in the dependency list and that is correct, not a warning to
-    // suppress: it is a useCallback over `[updateMessages]`, which is itself
-    // `useCallback([])`, so it is referentially stable for the life of the hook
-    // and the effect fires on a conversation change only. An earlier version had
-    // a disable directive here for an omission that no longer applies.
-  }, [options.conversationId, rejoinRun]);
+    void hydrateThenRejoin(conversationId);
+    // `hydrateThenRejoin` is in the dependency list and that is correct, not a
+    // warning to suppress: it is a useCallback over `[updateMessages]` and
+    // `rejoinRun`, which are themselves referentially stable for the life of the
+    // hook, so the effect fires on a conversation change only. An earlier version
+    // had a disable directive here for an omission that no longer applies.
+  }, [options.conversationId, hydrateThenRejoin]);
 
   // HITL approval/rejection
   const resolveHITL = useCallback(
@@ -812,6 +958,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
 
   return {
     messages,
+    isHydrating,
     input,
     handleInputChange,
     handleSubmit,

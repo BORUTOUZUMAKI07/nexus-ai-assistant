@@ -38,6 +38,7 @@ export const runtime = "nodejs"; // Must be Node.js for native fetch streaming
  * is the other half, and a backend test reads this file to check the two agree.
  */
 const RUN_ID_HEADER = "X-Nexus-Run-Id";
+const MESSAGE_ID_HEADER = "X-Nexus-Message-Id";
 
 /**
  * Hard ceiling on one streamed answer.
@@ -258,7 +259,10 @@ function streamTranslation(
 }
 
 /** Response headers for both entry points, plus the run id when there is one. */
-function streamHeaders(runId: string | null): Record<string, string> {
+function streamHeaders(
+  runId: string | null,
+  messageId: string | null = null
+): Record<string, string> {
   return {
     "Content-Type": "text/plain; charset=utf-8",
     "X-Vercel-AI-Data-Stream": "v1",
@@ -267,6 +271,9 @@ function streamHeaders(runId: string | null): Record<string, string> {
     // A client that cannot read this cannot recover an interrupted answer, and it
     // fails silently — the run keeps going server-side either way.
     ...(runId ? { [RUN_ID_HEADER]: runId } : {}),
+    // Forwarded only when the backend set it: a run with no persisted reply has
+    // none, and the client's rejoin falls back to rendering the replay.
+    ...(messageId ? { [MESSAGE_ID_HEADER]: messageId } : {}),
   };
 }
 
@@ -455,8 +462,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ detail: "backend_stream_empty" }, { status: 502 });
   }
 
-  return new NextResponse(
-    streamTranslation(backendRes.body, conversationId),
-    { headers: streamHeaders(backendRes.headers.get(RUN_ID_HEADER) ?? runId) }
-  );
+  return new NextResponse(streamTranslation(backendRes.body, conversationId), {
+    headers: streamHeaders(
+      backendRes.headers.get(RUN_ID_HEADER) ?? runId,
+      backendRes.headers.get(MESSAGE_ID_HEADER)
+    ),
+  });
 }

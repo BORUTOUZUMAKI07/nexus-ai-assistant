@@ -30,6 +30,10 @@ type Handler = (req: unknown, ctx: unknown) => Promise<Response>
 
 const CONV = "22222222-2222-4222-8222-222222222222"
 const RUN = "11111111-1111-4111-8111-111111111111"
+// A UUID, because the route validates both ids before they reach the backend --
+// a non-UUID here would be rejected at the edge and this test would pass for the
+// wrong reason.
+const MSG = "33333333-3333-4333-8333-333333333333"
 
 /** Load the route fresh so the `server-only` import guard does not trip. */
 async function chatRoute(): Promise<{ POST: Handler; GET: Handler }> {
@@ -215,6 +219,38 @@ describe("GET /api/chat — rejoin to a run already in flight", () => {
       const res = await (await chatRoute()).GET(getReq(), {})
       expect(res.headers.get("X-Nexus-Run-Id")).toBe(RUN)
       bare.restore()
+    } finally {
+      stub.restore()
+    }
+  })
+
+  it("forwards the persisted-message id so the client can skip a duplicate", async () => {
+    // The header crosses the proxy. If the BFF drops it, the client falls back to
+    // rendering the replay -- which is right for a live run and wrong for a
+    // finished one, so the failure mode is "the user reads the same answer twice"
+    // with no error anywhere. Not a new SSE frame type for exactly that reason:
+    // a frame the translator does not know is dropped in silence (AGENTS.md §2).
+    const stub = stubBackend("", {
+      headers: { "X-Nexus-Run-Id": RUN, "X-Nexus-Message-Id": MSG },
+    })
+    try {
+      const { GET } = await chatRoute()
+      const res = await GET(getReq(), {})
+      expect(res.headers.get("X-Nexus-Message-Id")).toBe(MSG)
+    } finally {
+      stub.restore()
+    }
+  })
+
+  it("sends no message id when the backend has none to send", async () => {
+    // A run still producing has no row. A blank header would be read by the
+    // client as an id that matches nothing, which happens to be harmless -- and
+    // a placeholder would not be, so the absence has to stay an absence.
+    const stub = stubBackend("", { headers: { "X-Nexus-Run-Id": RUN } })
+    try {
+      const { GET } = await chatRoute()
+      const res = await GET(getReq(), {})
+      expect(res.headers.has("X-Nexus-Message-Id")).toBe(false)
     } finally {
       stub.restore()
     }
