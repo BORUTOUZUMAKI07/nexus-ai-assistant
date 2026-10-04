@@ -20,7 +20,6 @@ import { AuthModal } from "@/components/AuthModal";
 import { CommandPalette } from "@/components/CommandPalette";
 import {
   fetchConversations,
-  fetchConversation,
   createConversation,
   deleteConversation,
   forkConversation,
@@ -37,12 +36,11 @@ import {
   addArtifactVersion,
   fetchPlans,
   PlanItem as APIPlanItem,
-  ConversationMessage,
   CurrentUser,
   fetchCurrentUser,
 } from "@/lib/api";
 import { clearSession, SESSION_EXPIRED_EVENT } from "@/lib/auth";
-import { useNexusChat, NexusMessage, NexusAnnotation } from "@/hooks/useNexusChat";
+import { useNexusChat, NexusMessage } from "@/hooks/useNexusChat";
 
 /**
  * The four secondary tabs are code-split.
@@ -100,33 +98,6 @@ const AdminView = dynamic(
   { ssr: false, loading: () => <TabSkeleton rows={6} /> },
 );
 
-function mapServerMessage(m: ConversationMessage): MessageItem {
-  return {
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    thought_process: m.thought_process ?? undefined,
-    model: m.model ?? undefined,
-    citations: (m.citations ?? []).map(
-      (c): CitationItem => ({
-        filename: c.filename ?? c.source ?? "source",
-        chunk_index: c.chunk_index ?? 0,
-        score: c.score ?? 0,
-        content_snippet: c.content_snippet ?? c.snippet ?? "",
-      })
-    ),
-    tool_calls: (m.tool_calls ?? []).map(
-      (t): ToolCallItem => ({
-        name: t.tool_name ?? t.name ?? "tool",
-        args: t.tool_input ?? t.args,
-        result: t.result,
-        status: t.status ?? "completed",
-      })
-    ),
-    created_at: m.created_at,
-  };
-}
-
 function mapPlan(p: APIPlanItem): PlanReviewItem {
   return {
     id: p.id,
@@ -166,7 +137,9 @@ export default function AppPage() {
   const [currentModel, setCurrentModel] = useState("llama-3.3-70b-versatile");
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-  const [historyLoading, setHistoryLoading] = useState(false);
+  // A conversation's messages are fetched by the chat hook, not here. See the
+  // note on `loadHistory`'s removal below: two loaders writing one transcript is
+  // the race that ordering was introduced to remove.
 
   // Dual-Pane Artifact Canvas state
   const [activeArtifact, setActiveArtifact] = useState<ArtifactItem | null>(null);
@@ -258,64 +231,20 @@ export default function AppPage() {
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
   }, []);
 
-  const { setMessages, clearMessages } = chat;
+  const { clearMessages } = chat;
 
-  // Load conversation list and restore the most recent chat on mount
-  const loadHistory = useCallback(
-    async (convId: string) => {
-      setHistoryLoading(true);
-      try {
-        const full = await fetchConversation(convId);
-        const mapped = (full.messages ?? []).map(mapServerMessage);
-        setMessages(
-          mapped.map((m): NexusMessage => {
-            // Rebuild the annotation stream from persisted fields so citations,
-            // tool calls and reasoning survive a page reload.
-            const annotations: NexusAnnotation[] = [];
-            if (m.thought_process) {
-              annotations.push({ type: "reasoning", data: { content: m.thought_process } });
-            }
-            for (const c of m.citations ?? []) {
-              annotations.push({
-                type: "citation",
-                data: {
-                  filename: c.filename,
-                  source: c.filename,
-                  content_snippet: c.content_snippet,
-                  score: c.score,
-                },
-              });
-            }
-            for (const t of m.tool_calls ?? []) {
-              annotations.push({
-                type: "tool_call",
-                data: {
-                  tool_name: t.name,
-                  tool_input: (t.args ?? {}) as Record<string, unknown>,
-                  tool_call_id: "",
-                  status: (t.status as "running" | "completed" | "error") ?? "completed",
-                  result: t.result,
-                },
-              });
-            }
-            return {
-              id: m.id,
-              role: m.role as "user" | "assistant" | "system",
-              content: m.content,
-              model: m.model,
-              annotations: annotations.length > 0 ? annotations : undefined,
-              createdAt: m.created_at ?? new Date().toISOString(),
-            };
-          })
-        );
-      } catch (err) {
-        console.warn("Failed to load conversation history:", err);
-      } finally {
-        setHistoryLoading(false);
-      }
-    },
-    [setMessages]
-  );
+  // Conversation history is loaded by the chat hook, deliberately, and this loader
+  // was removed rather than kept alongside it.
+  //
+  // It was not a duplicate by accident: both wrote the *whole* message list, and
+  // selecting a conversation started both. Whichever resolved last won, so a
+  // history request that came back after the rejoin had streamed frames replaced
+  // the transcript and made a recovered answer vanish mid-stream. Fixing the
+  // rejoin without removing this would have documented a guarantee the code did
+  // not have -- so the single writer is the hook, which also owns the ordering
+  // (history, then rejoin) and the duplicate-answer check.
+  //
+  // `chat.isHydrating` replaces the `historyLoading` flag this kept.
 
   // Load the conversation's saved artifacts.
   //
@@ -431,7 +360,6 @@ export default function AppPage() {
         setConversations(items);
         if (items.length > 0) {
           setActiveConversationId(items[0].id);
-          void loadHistory(items[0].id);
         } else {
           handleNewChat();
         }
@@ -439,7 +367,7 @@ export default function AppPage() {
       .catch((err) => {
         console.warn("Backend conversation list unavailable:", err);
       });
-  }, [mounted, isAuthOpen, loadHistory, handleNewChat]);
+  }, [mounted, isAuthOpen, handleNewChat]);
 
   const handleSignOut = async () => {
     // Logs out server-side: revokes the refresh token and clears both httpOnly
@@ -460,7 +388,6 @@ export default function AppPage() {
     setActiveArtifact(null);
     setActiveCitation(null);
     setPendingPlan(null);
-    void loadHistory(id);
   };
 
   const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
@@ -475,7 +402,6 @@ export default function AppPage() {
       const remaining = conversations.filter((c) => c.id !== id);
       if (remaining.length > 0) {
         setActiveConversationId(remaining[0].id);
-        void loadHistory(remaining[0].id);
       } else {
         handleNewChat();
       }
@@ -518,7 +444,6 @@ export default function AppPage() {
       };
       setConversations((prev) => [item, ...prev]);
       setActiveConversationId(forked.id);
-      void loadHistory(forked.id);
     } catch (err) {
       console.warn("Fork conversation failed:", err);
     }
@@ -804,7 +729,7 @@ export default function AppPage() {
                 activeArtifact ? "w-full md:w-[52%]" : "w-full"
               }`}
             >
-              {historyLoading ? (
+              {chat.isHydrating ? (
                 <div className="flex-1 flex items-center justify-center text-sm text-[var(--text-muted)]">
                   Loading conversation…
                 </div>

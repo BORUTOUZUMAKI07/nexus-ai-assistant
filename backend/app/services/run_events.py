@@ -27,7 +27,80 @@ from __future__ import annotations
 import json
 from typing import Any
 
-__all__ = ["finished_run_events", "finished_run_payloads", "sse_frame"]
+__all__ = [
+    "citation_payloads",
+    "finished_run_events",
+    "finished_run_payloads",
+    "sse_frame",
+]
+
+
+# How many citations ride one frame. The synthesizer already received these in its
+# context and the answer text refers to them by number, so the client's citation
+# panel has to show the same set or the numbering points at nothing. Capped
+# anyway: a broad research turn can retrieve hundreds of chunks, and every one
+# of them is copied into a frame, into the run log, and into the message row.
+MAX_CITATION_FRAMES = 40
+
+
+def citation_payloads(values: Any) -> list[dict[str, Any]]:
+    """One ``citation`` frame per retrieved chunk the finished run actually used.
+
+    ## Why this reads the checkpoint and not the stream
+
+    The graph stores its citations in state (``nodes.py``'s synthesizer returns
+    ``citations``, and ``AgentState`` declares the key), so after the run the
+    checkpointer holds the authoritative list. Nothing emits them *during* the
+    run: the only frame path that could carry them is ``on_custom_event``, which
+    langgraph never emits for a custom event -- ``astream_events`` has to be
+    asked for ``stream_mode="custom"``, and even then it arrives as an
+    ``on_chain_stream`` payload rather than as ``on_custom_event`` (AGENTS.md
+    §9.23, measured on 1.2.11).
+
+    That left citations dead at three independent points, each invisible on its
+    own: the backend emitted no citation frame, so the client's annotation
+    handler never fired; the BFF's ``citation`` -> ``8:`` translation and the
+    client's annotation collection were correct but unreachable; and the message
+    row was written with ``citations`` left at its ``[]`` default, so the
+    history loader had nothing to rebuild from either. The citation panel could
+    not work live or after a reload, and no test failed, because each layer's own
+    tests pass in isolation.
+
+    ## Why they are emitted after the run rather than during it
+
+    Citations are only final once the synthesizer has chosen which retrieved
+    chunks survived its revision loop. Streaming them as they were retrieved
+    would render a panel listing chunks the answer does not cite. This is the
+    same reason the critique and quality frames are post-run, and it is why the
+    client already rebuilds its annotation array from scratch on every patch.
+    """
+    if not isinstance(values, dict):
+        return []
+    raw = values.get("citations")
+    if not isinstance(raw, list):
+        return []
+
+    frames: list[dict[str, Any]] = []
+    for item in raw[:MAX_CITATION_FRAMES]:
+        if not isinstance(item, dict):
+            # A hand-built or older checkpoint can hold a non-dict here. Dropping
+            # one citation is recoverable; a frame the client cannot read is
+            # dropped there instead, silently, which is the failure this module
+            # exists to prevent.
+            continue
+        frames.append(
+            {
+                "type": "citation",
+                # Only the fields the client renders. `metadata` and `file_id` are
+                # carried on the message row for the citation inspector to fetch,
+                # not repeated into a frame every reader of this run holds.
+                "filename": item.get("filename"),
+                "chunk_index": item.get("chunk_index"),
+                "score": item.get("score"),
+                "content_snippet": item.get("content_snippet"),
+            }
+        )
+    return frames
 
 
 def sse_frame(payload: dict[str, Any]) -> str:

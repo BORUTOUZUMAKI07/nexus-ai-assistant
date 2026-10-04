@@ -47,7 +47,7 @@ from backend.app.services.conversation_service import ConversationService
 from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.tracing import trace_span
-from backend.app.services.run_events import finished_run_payloads
+from backend.app.services.run_events import citation_payloads, finished_run_payloads
 from backend.app.services.run_log import RunBroker, RunWriter, run_broker
 from backend.app.services.usage_service import UsageService
 
@@ -112,6 +112,13 @@ async def execute_run(
     )
 
     emitted_text = ""
+    # Collected from the frames as they pass through, because this is the only
+    # place a tool call exists: the graph does not keep tool calls in state, and
+    # the message row is written after the stream has already ended. Without
+    # this the row's `tool_calls` stayed at its `[]` default, so a reloaded
+    # transcript showed the answer with no record of the work behind it --
+    # `add_message` accepts the argument and nothing passed it.
+    collected_tool_calls: list[dict[str, Any]] = []
     latency_ms: float = 0
     message_id: UUID | None = None
     start_time = time.time()
@@ -133,6 +140,17 @@ async def execute_run(
                     await writer.emit(frame)
                     if is_text:
                         emitted_text += str(frame.get("content", ""))
+                    elif frame.get("type") == "tool_call":
+                        # The AG-UI `TOOL_CALL_START` alias carries the same call a
+                        # few lines later; matching on `tool_call` alone keeps one
+                        # invocation to one stored entry.
+                        collected_tool_calls.append(
+                            {
+                                "tool_name": frame.get("tool_name"),
+                                "tool_input": frame.get("tool_input"),
+                                "tool_call_id": frame.get("tool_call_id"),
+                            }
+                        )
             except asyncio.CancelledError:
                 # Shutdown, not a client going away: the run is genuinely being
                 # torn down, so it must not be marked completed.
@@ -166,6 +184,8 @@ async def execute_run(
                     parent_message_id=parent_message_id,
                     run_id=run_id,
                     session_factory=session_factory,
+                    tool_calls=collected_tool_calls,
+                    citations=await _run_citations(graph, config),
                 )
                 await writer.emit({"type": "error", "message": str(exc)})
                 await _terminate(
@@ -182,6 +202,14 @@ async def execute_run(
 
             latency_ms = (time.time() - start_time) * 1000.0
 
+            # One checkpoint read, shared. The citations are needed twice -- on the
+            # message row and as frames for the client and the run log -- and a
+            # second `aget_state` would be a second trip to the checkpointer for
+            # the same fact, in a module whose whole design is about not paying
+            # for round-trips per token.
+            post_run = await _post_run_frames(graph, config)
+            citations = [f for f in post_run if f.get("type") == "citation"]
+
             message_id = await _persist_reply(
                 conversation_id=conversation_id,
                 user_id=user_id,
@@ -192,9 +220,11 @@ async def execute_run(
                 parent_message_id=parent_message_id,
                 run_id=run_id,
                 session_factory=session_factory,
+                tool_calls=collected_tool_calls,
+                citations=citations,
             )
 
-            for frame in await _post_run_frames(graph, config):
+            for frame in post_run:
                 await writer.emit(frame)
 
             await writer.emit(
@@ -421,6 +451,13 @@ async def _post_run_frames(graph: Any, config: dict[str, Any]) -> list[dict[str,
         # See `finished_run_payloads` for the full account.
         frames.extend(finished_run_payloads(snapshot.values))
 
+        # Citations, for the same reason the frames above are post-run: the
+        # synthesizer's chosen set is only known now. Emitted before the `done`
+        # frame so a client that stops reading at `done` still has its evidence
+        # -- and so the run log holds them, which is what makes a *rejoin* able
+        # to restore a citation panel rather than a bare answer.
+        frames.extend(citation_payloads(snapshot.values))
+
     if snapshot is not None and getattr(snapshot, "next", None):
         # LangGraph stores interrupts on snapshot.tasks[].interrupts (the
         # __interrupt__ values key does not exist). Surface the latest interrupt
@@ -448,6 +485,28 @@ async def _post_run_frames(graph: Any, config: dict[str, Any]) -> list[dict[str,
     return frames
 
 
+async def _run_citations(graph: Any, config: dict[str, Any]) -> list[dict[str, Any]]:
+    """This run's citations, read from the checkpointer.
+
+    Separate from ``_post_run_frames`` because the failure path needs the
+    citations and must **not** get the critique/quality frames that come with it:
+    a run that died mid-answer has no verdict to report, and emitting one would
+    put a fabricated score on a partial reply.
+
+    Fail-open to no citations. A run that failed before the synthesizer ran has
+    none, and a checkpointer read that fails here is not worth losing the partial
+    answer over -- the caller is about to write the user's text to the database,
+    and that write matters more than the evidence attached to it.
+    """
+    try:
+        snapshot = await graph.aget_state(config)
+    except Exception as exc:
+        logger.warning("run_citation_read_failed", error_type=type(exc).__name__)
+        return []
+    values = getattr(snapshot, "values", None)
+    return citation_payloads(values) if values else []
+
+
 async def _persist_reply(
     *,
     conversation_id: UUID,
@@ -459,6 +518,8 @@ async def _persist_reply(
     parent_message_id: UUID | None,
     run_id: UUID,
     session_factory: Callable[[], Any],
+    citations: list[dict[str, Any]] | None = None,
+    tool_calls: list[dict[str, Any]] | None = None,
 ) -> UUID | None:
     """Write the assistant message, usage row and cost row for this run.
 
@@ -495,6 +556,13 @@ async def _persist_reply(
                 content=emitted_text,
                 parent_message_id=parent_message_id,
                 model=settings.DEFAULT_MODEL,
+                # Stored, not derived. These two are the only durable record of
+                # the evidence behind this answer, and the columns have existed
+                # the whole time with nothing writing them -- so a reloaded
+                # transcript rendered the answer with an empty citation panel
+                # and no tool history, and read as though the answer had none.
+                citations=citations or [],
+                tool_calls=tool_calls or [],
             )
             await usage_svc._repo.log_usage(
                 UsageLogCreate(

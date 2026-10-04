@@ -257,7 +257,7 @@ backend/app/
   | `services/tools/content_shape.py` | C2: classify scraped shape; **rejects bad shape and salvages** rather than discarding (discarding would *remove* evidence). Also holds the stdlib `html_to_text()`. |
   | `services/artifact_intent.py` | D3: three-layer "is this turn a document?" decision — explicit request, then answer shape, then one small typed classifier. **The artifact body is never regenerated**; the synthesizer already paid for that text, and a second generation would leave the canvas and the chat permanently disagreeing. |
   | `agents/orchestrator/artifact_node.py` | D3 graph node, `synthesizer → artifact → END`. Opens its own short-lived session (like the memory mirror) and is fail-open: a graph exception there costs the user their whole reply to save them one file. |
-  | `services/run_events.py` | The SSE frames a finished run reports (`critique` / `quality` / `artifact`). Extracted from `api/v1/conversations.py` **because it had to be testable, not for tidiness** — as three inline `yield json.dumps(...)` statements in a 300-line async generator, the artifact frame could be deleted outright with no test changing result. |
+  | `services/run_events.py` | The SSE frames a finished run reports (`critique` / `quality` / `artifact` / `citation`). Extracted from `api/v1/conversations.py` **because it had to be testable, not for tidiness** — as three inline `yield json.dumps(...)` statements in a 300-line async generator, the artifact frame could be deleted outright with no test changing result. `citation_payloads()` is the C3 addition (§9.28) and the single source both the frames and the message row read. |
 
 - **The `html2text` trap.** `services/tools/web_search.py` imported `html2text`,
   which was neither a declared dependency nor installed. The `ModuleNotFoundError`
@@ -301,9 +301,14 @@ frontend/src/
 │   │                        #   ArtifactCanvas, KnowledgeView, SettingsView,
 │   │                        #   UsageView, AdminView, PlanHistory, AuthModal,
 │   │                        #   CitationInspector, SavedArtifacts, ui/*
-├── hooks/useNexusChat.ts    # chat state machine (SSE consumption)
+├── hooks/useNexusChat.ts    # chat state machine (SSE consumption), and since
+│                            #   C3 the *only* writer to the transcript:
+│                            #   hydrateThenRejoin / historyOwnerRef /
+│                            #   transcriptEpochRef / isHydrating (§9.28)
 ├── lib/                     # api.ts, auth.ts, models.ts, proxy.ts, theme.ts,
-│                            #   utils.ts
+│                            #   utils.ts, chatStream.ts (one read loop for both
+│                            #   entry points), conversationHistory.ts (rows →
+│                            #   NexusMessage, plus hasAnswer)
 ├── proxy.ts                 # edge middleware: server-side session gate for /app
 ├── lib/proxy.ts             # shared BFF helper (cookie JWT → Authorization: Bearer)
 └── test/                    # Vitest: components/, hooks/, lib/, mocks/
@@ -378,12 +383,15 @@ a resend.
   `b1c2d3e4f5a6` (Batch B memory lifecycle columns) →
   `c2a1b2c3d4e5` (agent_runs + run_events, the durable run log — §9.27)).
   `alembic upgrade head` before first boot.
-  **`c2a1b2c3d4e5` has never been applied to any database**, including the
-  hosted one; it was verified offline only (`alembic upgrade
-  b1c2d3e4f5a6:c2a1b2c3d4e5 --sql`, exit 0). That is deliberate — §9.16/§9.18 —
-  and it is why any test that reaches a real session fails on
-  `relation "agent_runs" does not exist` until someone runs it against a local
-  container.
+  **`c2a1b2c3d4e5` has never been applied to the hosted database**, and must not
+  be (§9.16/§9.18). It *was* verified offline (`alembic upgrade
+  b1c2d3e4f5a6:c2a1b2c3d4e5 --sql`, exit 0) and, on 2026-10-04, **end-to-end from
+  an empty database on real Postgres** in a throwaway container — 38 tables,
+  `uq_run_events_run_id_seq` a genuine `UNIQUE (run_id, seq)`, RLS on both new
+  tables, `alembic_version = c2a1b2c3d4e5` (§9.28). So a test that reaches a real
+  session now works **against a local database you migrated**, and still fails
+  with `relation "agent_runs" does not exist` against the hosted one — which is
+  the correct behaviour, not a bug to work around.
 - **The graph is linear and `tests/test_migration_graph.py` enforces it.** It
   was not, and nothing noticed: `a7b8c9d0e1f2` and `b1c2d3e4f5a6` were both
   written against `f6a7b8c9d0e1` and committed independently, giving two heads.
@@ -568,27 +576,34 @@ Windows shell gotchas (learned the hard way):
 
 ## 7. Testing inventory (verified counts)
 
-- Backend: **73 unit test files** + **11 integration** + **3 e2e** under
-  `backend/tests/` (pytest). Fakes live in the single module
+- Backend: **75 unit test files** in `backend/tests/`, **11 integration files**
+  in `backend/tests/integration/` and **1 e2e file** in `backend/tests/e2e/`
+  (9 tests — verified with `uv run pytest -m e2e --collect-only`, which
+  collects exactly those 9 and nothing else; the earlier "3 e2e" in this
+  section was wrong). Fakes live in the single module
   `backend/tests/fakes.py` (e.g. `FakeSession`, and — since C2 —
   `FakeRunStore`/`FakeRunSession`, which model the run log's own persistence
   shape: ordered paging, `add_all` batches and an async context manager).
-- Suite total: **1133 passed, 4 skipped, 9 deselected, 1 error** for
-  `cd backend && uv run pytest --ignore=tests/integration` (2026-10-04, Docker
-  Desktop down). Without `--ignore`, the 11 integration files run by default —
-  the `integration` marker is unregistered, and `addopts` already excludes e2e,
-  which is where the 9 deselected come from. **If Docker Desktop is not running
-  those 11 files produce ~113 `DockerException` setup errors**; that is the
-  environment, not a regression. Verify with `docker info` before
-  investigating. The one remaining error is *not* one of those files:
-  `test_rate_limit.py::test_app_login_allowed_sets_headers` shares the
-  `client` fixture → `override_get_db` → `_testcontainers`, so it needs Docker
-  too (despite its own docstring saying otherwise). It fails at **fixture
-  setup**, so a Docker error there cannot have been caused by anything in
-  `app/`. With Docker up the figure is 1133 passed, 4 skipped, 9 deselected,
-  0 errors.
-- Frontend: **31 Vitest test files** under `frontend/src/test/` + **6 Playwright
-  specs** in `frontend/e2e/`.
+  **A new test file that touches the run log must declare its own `store` /
+  `session_factory` fixtures from `tests/fakes.py`**, shadowing conftest's
+  real-DB one, or it writes to whatever `DATABASE_URL` names (§9.16).
+- Suite total: **1301 passed, 4 skipped, 9 deselected, 0 errors, 0 failures**
+  for a plain `cd backend && uv run pytest` with Docker up (measured
+  2026-10-04, 598s — the run is I/O-bound on the testcontainer). The
+  `integration` marker is unregistered, so the 11 integration files run by
+  default; `addopts` excludes e2e, which is where the 9 deselected come from.
+  **If Docker Desktop is not running those 11 files produce ~113
+  `DockerException` setup errors**; that is the environment, not a regression.
+  Verify with `docker info` before investigating — and on Windows, *restart* it
+  if needed: `Start-Process "$Env:ProgramFiles\Docker\Docker\Docker Desktop.exe"`,
+  then `docker start nexus_postgres nexus_redis nexus_qdrant` and wait for the
+  health checks to leave `starting`. `test_rate_limit.py::test_app_login_allowed_sets_headers`
+  shares the `client` fixture → `override_get_db` → `_testcontainers`, so it
+  needs Docker too (despite its own docstring saying otherwise); it fails at
+  **fixture setup**, so a Docker error there cannot have been caused by
+  anything in `app/`.
+- Frontend: **32 Vitest test files** under `frontend/src/test/` (**315
+  tests**, measured 2026-10-04) + **6 Playwright specs** in `frontend/e2e/`.
 - Batch A–D test files: `test_batch_a_wiring.py`, `test_batch_b_memory.py`,
   `test_batch_c_correctness.py`, `test_batch_d_research.py`,
   `test_batch_d_spend.py`, `test_batch_d3_artifact.py`,
@@ -601,9 +616,29 @@ Windows shell gotchas (learned the hard way):
   opens a session and so cannot observe it.
   Stream-transport: `test_stream_custom_event_trap.py` (10 tests, §9.23).
   RAG: `test_hyde_generation.py` (31 tests, 15-revert harness — see §9.19).
+  C3 (citations + message identity, §9.28): `test_run_citations.py` (16) and
+  `test_run_message_identity.py` (9), covered by `backend/revert_c3.py`
+  (10/10 load-bearing).
+  Frontend C3: `src/test/hooks/chat-rejoin.test.ts` (15),
+  `src/test/lib/conversation-history.test.ts` (14) and
+  `src/test/chat-stream-rejoin.test.ts` (10), covered by
+  `frontend/revert_c3.py` (**17/17** load-bearing).
 - `walkthrough.md` once claimed "82 tests" — that is stale. Current counts: see
   above.
 - Backend pyproject: `addopts = -v -m 'not e2e'` — plain `pytest` skips e2e.
+- **`pytest-randomly` is installed and active**, which means the suite runs in a
+  different order on every invocation and CI is the only place the order is
+  pinned. A bare `get_event_loop()` in a sync test is therefore a latent
+  order-dependent failure, not a style question: `asyncio.run()` sets the thread
+  loop to `None` on exit, so any `_await` helper doing the bare call raises
+  `RuntimeError: There is no current event loop in thread 'MainThread'` once a
+  preceding test has used `asyncio.run`. Twelve files have that `_await` helper
+  and **all but one** carry the `try/except RuntimeError: new_event_loop()`
+  guard with a comment naming the failure. The outlier was
+  `test_admin_user_deletion.py` — proven pre-existing, not introduced by any
+  later work: with only `test_batch_d_spend.py` + that file selected and nothing
+  else changed, **6 of 8 seeds failed before the guard and 8 of 8 passed after
+  it** (measured 2026-10-04). When adding a twelfth, copy the guard.
 
 **The revert check is the part that matters.** Every batch ships with a script
 that applies each fix's inverse to the real source, runs the suite, and
@@ -1284,10 +1319,15 @@ different tests) looked like three unrelated bugs instead of one.
       exactly the part of the answer the user is missing. A full replay is only
       wasteful for a long answer; a wrong cursor is a hole in it.
     - **What rejoin does *not* reconstruct, stated plainly:** the user turn. The
-      run log holds frames; the user message is a row the backend wrote, and the
-      chat view loads no conversation history at all (a pre-existing gap, out of
-      scope here). Inventing a user bubble above a recovered answer would be
-      fabricating conversation, so the recovered answer arrives alone.
+      run log holds frames; the user message is a row the backend wrote. Inventing
+      a user bubble above a recovered answer would be fabricating conversation, so
+      the recovered answer arrives alone. **Correction (2026-10-04):** this bullet
+      also claimed the chat view "loads no conversation history at all", and that
+      was false — `page.tsx` had a `loadHistory` and always did. What was actually
+      true is narrower and is the reason the history load had to move into the
+      hook: it lived in the page, so it was a **second writer to the same
+      transcript** the rejoin writes, and the two raced on conversation select.
+      See §9.28.
     - **Two backend tests had to stop writing to the real database.** The `/stream`
       wiring tests in `test_batch_a_wiring.py` passed `conv_mod.async_session_factory`
       through to the executor, the tail reader and the reply persistence, so they
@@ -1384,6 +1424,139 @@ different tests) looked like three unrelated bugs instead of one.
       duplicate assertion on evidence about *which* shape each one forbids, not
       on the observation that one revert trips both.
 
+28. **Citations were dead at three independent points, and the transcript had two
+    writers. Both are the §2 failure mode one layer down, which is why neither
+    showed up as a failure.** Measured 2026-10-04; harnesses
+    `backend/revert_c3.py` (10/10) and `frontend/revert_c3.py` (17/17).
+
+    - **Point 1 — no backend `citation` frame existed.** `iter_graph_frames` has
+      an `on_custom_event` branch (`run_executor.py:424`) whose whitelist includes
+      `"citation"`, and it looks exactly like the frame's source. It is not: no
+      `get_stream_writer` / `get_custom_event_writer` / `adispatch_custom_event`
+      exists anywhere in `app/` (grepped), so nothing emits one, and
+      `on_custom_event` is not an event langgraph emits at all (§9.23 — it
+      occurs once in the package as an idle-timer touch). The branch's own
+      docstring already said so at `run_executor.py:330-335`; the frame was
+      simply never added anywhere else.
+    - **Point 2 — the BFF translation and the client mapper were both correct and
+      both unreachable.** `route.ts` already mapped `citation` → `8:` and the
+      hook already collected annotations. Against an always-empty frame list they
+      passed their own tests.
+    - **Point 3 — the columns had no writer.** `add_message` has accepted
+      `citations=` and `tool_calls=` since the tables existed; at `a561a32`
+      `git grep -n "citations=\|tool_calls=" -- backend/app` hits only the
+      parameter's own body (`repository.py:219-220`) and a response schema. **No
+      caller passed either**, so both columns were `[]` for every message ever
+      written — which is also why the page's reconstruction loop was dead code.
+    - **The fix is at the single source, not at the consumers.** The synthesizer's
+      chosen citations only exist in the checkpoint *after* the stream ends, so
+      `_post_run_frames` appends `citation_payloads(snapshot.values)` and
+      `execute_run` filters that list once, sharing the result with
+      `_persist_reply`. **`_run_citations()` exists only for the failure path**,
+      because a run that died mid-answer must not also get a critique or a
+      quality score emitted on a partial reply. A second `aget_state` for the same
+      fact would be a second checkpointer round-trip in the module whose whole
+      design is about not paying per-token round-trips.
+    - **Tool calls are collected from the frames, matching `type == "tool_call"`
+      only.** The AG-UI `TOOL_CALL_START` alias carries the same invocation a few
+      lines later; matching both stored one call twice.
+    - **`hasAnswer` owns the "is there an id" decision alone.** The rejoin's
+      duplicate-answer guard was `persisted && hasAnswer(msgs, persisted)`, and
+      the `persisted &&` made the `if (!persistedMessageId) return false` inside
+      `hasAnswer` unreachable — an unreachable guard is a second place to be
+      wrong, not a safety net (§9.21). Removing it is what made R16 load-bearing
+      at all: with the call site short-circuiting, a test against a transcript of
+      real ids passed with the guard deleted.
+    - **The one observable case for that guard is a transcript whose own ids are
+      unreadable**, and it had to be built on purpose: `toMessage` copies `row.id`
+      verbatim, so a history payload that lost its ids yields `m.id === undefined`,
+      and `messages.some(m => m.id === undefined)` is then true. Both halves are
+      asserted — `hasAnswer(unreadable, undefined) === false` *and* the raw
+      predicate `unreadable.some(...) === true` (§9.13's fixture check, written as
+      the predicate because no input can make `hasAnswer` return true there).
+    - **`get_messages` took the *oldest* 100 rows.** It was `ORDER BY created_at
+      ASC LIMIT :n`, so a long conversation showed its beginning and omitted the
+      newest messages — the exact rows a rejoin needs in order to recognise its
+      own answer. `newest=True` is now the default: a subquery of ids
+      (`ORDER BY created_at DESC, id DESC LIMIT :n`) matched by `IN`, with the
+      ascending outer order restored for rendering. **`IN` and not `NOT IN`, and
+      both sides carry the `id` tiebreaker** — `created_at` is not unique, so a
+      boundary that ties drops or duplicates rows. Two `type: ignore[attr-defined]`
+      for `.desc()` (§9.27's rule).
+    - **The page's history loader was removed, not moved-and-kept.** `loadHistory`
+      and `mapServerMessage` in `page.tsx` are gone; `src/lib/conversationHistory.ts`
+      plus `hydrateThenRejoin` in the hook are the only writer to the transcript.
+      Two writers to one `messages` array is the hazard, and both losses were
+      silent: a late load replacing a live rejoin (recovered answer vanishes
+      mid-answer), and a late load replacing a turn the user just sent.
+    - **`historyOwnerRef` must be claimed *before the first await*.** That is the
+      only moment a conversation switch can invalidate the previous load's
+      in-flight fetch; claimed after the await it is always too late. It is the
+      separate failure from `transcriptEpochRef`, which fences a load overtaken by
+      a *write* to the same conversation, and both checks are needed — one cannot
+      catch the other (`R6`/`R7` are independent reverts of them).
+    - **The loader must re-baseline `epoch` after its own `updateMessages` apply.**
+      `updateMessages` bumps the epoch unconditionally, so without the re-baseline
+      the load outdates itself and every *subsequent* load for that conversation is
+      refused. This was a race inside the fix for the first race; `R8` pins it.
+    - **`const rejoinedId = messageId`, not `messageId` in the closures.**
+      `messageId` is the catch block's nullable "did we render a bubble" flag, and
+      TypeScript will not carry a narrowing across a closure over a `let` — it
+      reported `id: string | null` against `NexusMessage`, correctly. The `const`
+      is also the safer shape: nothing between the two can reassign the id out
+      from under a frame still being applied.
+    - **The rejoin's `fetchWithSessionRecovery` probe sat *outside* its `try`.** A
+      transport failure there escaped as an unhandled rejection — no `setError`, no
+      bubble removal, no visible anything. `messageId` is declared `let ... = null`
+      up front so the catch can drop a bubble conditionally.
+    - **`X-Nexus-Message-Id` is a response header on the rejoin `GET` only**, set
+      only when `run.message_id` is set (`conversations.py:474`). The duplicate
+      answer is decided by **identity**, not by row count and not by text
+      equality — both of which are wrong the moment two runs answer alike or one
+      produces nothing. Parity of the header name across the BFF is pinned from
+      the *backend* side by `test_the_bff_forwards_the_same_message_id_header_name_the_backend_sets`
+      (`test_run_message_identity.py`), which reads the frontend route's source —
+      the value crosses two repos and nothing type-checks it, so a rename on
+      either side has to be a red build.
+    - **Harness findings, both of which were *test* defects.** `R6` (the
+      conversation-switch guard) reported NOT LOAD-BEARING until a test existed
+      that switches conversations **while a load is parked** — an earlier test
+      exercised the same guard for a same-conversation write, which `transcriptEpochRef`
+      handles on its own. `R17` (the hydration flag) was first written to assert
+      the flag is still `false` after a superseded load finishes, which passes
+      either way; the flag's load-bearing direction is the *skip* one — a slow load
+      for an abandoned conversation must not clear the skeleton the current
+      conversation is still showing.
+    - **`pytest-randomly` is active, and it found a pre-existing defect.**
+      `tests/test_admin_user_deletion.py::_await` was the one `_await` helper of
+      twelve doing a bare `asyncio.get_event_loop()`, so it raised `RuntimeError:
+      There is no current event loop in thread 'MainThread'` whenever a preceding
+      test had used `asyncio.run` — invisible in alphabetical file order, which is
+      why it survived. Proven pre-existing: selecting only that file plus
+      `test_batch_d_spend.py` (both untouched by this work) and varying the seed,
+      **6 of 8 seeds failed before the guard and 8 of 8 passed after it**. Details
+      in §7.
+    - **Migration `c2a1b2c3d4e5` is now verified applied, offline *and* live.** An
+      earlier revision of this file said it "has never been applied to any
+      database"; it has now been run end-to-end from an empty database on real
+      Postgres: 38 tables (the 37 of §10 plus `alembic_version` itself),
+      `uq_run_events_run_id_seq` as a genuine
+      `UNIQUE (run_id, seq)`, `relrowsecurity = t` on both new tables,
+      `alembic_version = c2a1b2c3d4e5`. Two environment facts from that run:
+      Docker's `localhost:5432` is **shadowed by a native `postgres.exe`** on this
+      machine, so compose's DSN fails with `InvalidPasswordError` and the
+      throwaway `pgvector/pgvector:pg16` container had to be published on port
+      **55432**; and the real-DB run-log smoke test (JSONB round-trip, contiguous
+      `seq` from 1, a real `UniqueViolation`, IDOR returning `None`, cursor
+      semantics, `catch_up()` paging, flush-before-status, live delivery with no
+      duplicates) passed **32/32**.
+    - **An inherited premise was wrong and is corrected in §9.27.** The premise
+      this round started from was "the chat view loads no conversation history at
+      all". `page.tsx` had `loadHistory` and always did. The real defects were the
+      two-writer race and the duplicate answer — both of which are worth more than
+      the premise was, and neither of which is visible from reading the feature
+      list.
+
 ## 9b. Already solved — do not re-propose
 
 Bounded revision loop with force-accept; LLM retry/empty-response handling +
@@ -1429,7 +1602,15 @@ measured and left **off** because no configured model returns logprobs
 capture kept locally (§9.26), and §9.25/§9.27 replacing the deferral with the
 durable run log: `agent_runs` + `run_events`, the graph moved out of the
 `StreamingResponse` generator into a background task, `X-Nexus-Run-Id` as a
-response header, and a rejoin that replays rather than resends).
+response header, and a rejoin that replays rather than resends; then C3 — the
+citations path closed at its single source (`citation_payloads`, a real
+`citation` frame, and the two message columns that had no writer), tool calls
+collected from the frames, `get_messages` switched to the *newest* window, the
+page's `loadHistory` deleted so the hook is the transcript's only writer,
+`X-Nexus-Message-Id` deciding the duplicate answer by identity, and
+`pytest-randomly` surfacing the twelfth `_await` helper's missing loop guard.
+§9.28 records it all, including the correction to §9.27's false claim that the
+chat view loaded no history).
 Regenerate counts (tables/endpoints/tests) from code rather than trusting any
 static number here — and verify code-shape claims with `ast`, not regex, since
 this repo has CRLF checkouts._

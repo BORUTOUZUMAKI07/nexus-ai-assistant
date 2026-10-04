@@ -51,6 +51,18 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 # that forwarding silently stops working.
 RUN_ID_HEADER = "X-Nexus-Run-Id"
 
+# Header carrying the id of the message row a finished run persisted, set only
+# when there is one.
+#
+# It exists to answer one question the client cannot otherwise answer: "is this
+# run's answer already in my transcript?" A rejoin replays from frame 0, so a
+# run that finished while the browser was closed produces an answer the user has
+# never seen *rendered* -- but the row is in the database, and a client that also
+# loads history would then show it twice. Comparing this id against the hydrated
+# history is exact; comparing positions or lengths would be a guess that is wrong
+# whenever two runs produce the same text or one of them produced nothing.
+MESSAGE_ID_HEADER = "X-Nexus-Message-Id"
+
 # ─── Per-thread run serialization ─────────────────────────────────────────────
 # A single LangGraph thread must not be executed concurrently: a resume racing a
 # fresh turn would double-run tools and corrupt the checkpointer. Guards track
@@ -456,6 +468,10 @@ async def rejoin_run_stream(
         raise HTTPException(status_code=404, detail="Run not found")
 
     cursor = after_seq if after_seq is not None else parse_last_event_id(last_event_id)
+    # Only present once the run has persisted its reply. Absent means "still
+    # producing, or died before writing a row", which is exactly the case where
+    # the client *should* render the replay instead of trusting its history.
+    persisted = {MESSAGE_ID_HEADER: str(run.message_id)} if run.message_id else {}
     return StreamingResponse(
         frame_stream(run.id, after_seq=cursor),
         media_type="text/event-stream",
@@ -463,6 +479,7 @@ async def rejoin_run_stream(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
             RUN_ID_HEADER: str(run.id),
+            **persisted,
         },
     )
 

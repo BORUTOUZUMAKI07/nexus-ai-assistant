@@ -22,7 +22,23 @@ from fastapi import HTTPException
 
 
 def _await(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # pytest-asyncio tears the current loop down after each async test, so once
+    # one has run get_event_loop() raises here. Re-establish a loop instead of
+    # depending on collection order.
+    #
+    # This file was the only one of the twelve that still did the bare call, and
+    # the defect was invisible while the suite ran in file order: `pytest` runs
+    # files alphabetically and nothing before `test_admin_user_deletion.py` tore a
+    # loop down. `pytest-randomly` is installed, so a shuffled order puts an async
+    # test first and all ten of these fail with "There is no current event loop in
+    # thread 'MainThread'" -- the same shape as the eleven siblings that already
+    # carry this guard, which is why it is the one that was missed.
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 # ── fakes ─────────────────────────────────────────────────────────────────────

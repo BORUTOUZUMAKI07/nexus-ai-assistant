@@ -306,7 +306,27 @@ export async function consumeChatStream(
  */
 export const RUN_ID_HEADER = "X-Nexus-Run-Id";
 
+/**
+ * Header carrying the message row a finished run persisted. Set on the rejoin
+ * (`GET`) response only, and only when the run got as far as writing its reply.
+ *
+ * The consumer uses it to decide whether the replay is needed at all: a run that
+ * finished while the page was closed already has its answer in the conversation
+ * history, and rendering the replay as well would show the user the same answer
+ * twice. There is no way to infer this client-side — the frames carry no
+ * message id — so it is stated by the only party that knows it.
+ */
+export const MESSAGE_ID_HEADER = "X-Nexus-Message-Id";
+
 /** Read the run id off a chat response, or null when there is none. */
 export function readRunId(response: Response): string | null {
   return response.headers.get(RUN_ID_HEADER);
+}
+
+/**
+ * Read the persisted-message id off a chat response, or null when the run has
+ * not produced one (still running, or it died before writing a row).
+ */
+export function readMessageId(response: Response): string | null {
+  return response.headers.get(MESSAGE_ID_HEADER);
 }
