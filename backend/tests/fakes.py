@@ -12,6 +12,9 @@ import operator as _pyop
 from datetime import UTC, datetime
 from typing import Any
 
+# Imported for the isinstance check in FakeRunSession.add, which decides which
+# table a row belongs to. Test-module scope only; nothing in the app imports this.
+from backend.app.domain.run.models import AgentRun
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.sql import operators as _saop
 from sqlalchemy.sql.dml import Delete
@@ -200,3 +203,105 @@ class FakeSession:
 
 def utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+class FakeRunStore:
+    """Shared backing rows for the run log, so several sessions see one dataset.
+
+    A *store* rather than one session per test: the writer, the tailer and the
+    executor each open their own session, and a test that cannot see across them
+    is testing nothing. Modelled here rather than on ``FakeSession`` because the
+    run log has its own persistence shape -- ordered paging, ``add_all`` batches,
+    an async context manager -- and bolting that onto the general fake would give
+    it two unrelated jobs.
+    """
+
+    def __init__(self) -> None:
+        self.runs: list[Any] = []
+        self.events: list[Any] = []
+        self.commits = 0
+
+
+class FakeRunSession:
+    """The slice of session ``RunRepository`` uses: insert, and select with a
+    declarative where-clause, an order-by and a limit.
+
+    ``order_by`` and ``limit`` are honoured from the statement rather than
+    ignored, because the tailer pages with them and a fake that quietly dropped
+    them would make a broken page size look correct.
+
+    It is deliberately a *narrow* fake. SQLAlchemy's ability to filter is not
+    what any of these tests is about -- the query itself is verified by compiling
+    the statement (AGENTS.md §9.14) -- so only what the repository actually issues
+    is modelled, and anything else surfaces as an ``AttributeError`` rather than
+    silently returning nothing.
+    """
+
+    def __init__(self, store: FakeRunStore) -> None:
+        self.store = store
+        self.added: list[Any] = []
+
+    async def __aenter__(self) -> "FakeRunSession":
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def commit(self) -> None:
+        self.store.commits += 1
+
+    async def refresh(self, obj: Any) -> None:
+        return None
+
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
+        table = (
+            self.store.runs
+            if isinstance(obj, AgentRun)
+            else self.store.events
+        )
+        for i, existing in enumerate(table):
+            if existing.id == obj.id:
+                table[i] = obj
+                return
+        table.append(obj)
+
+    def add_all(self, objs: Any) -> None:
+        for obj in objs:
+            self.add(obj)
+
+    async def exec(self, statement, *args, **kwargs) -> FakeResult:
+        entity = statement.column_descriptions[0].get("entity")
+        rows = self.store.runs if entity is AgentRun else self.store.events
+        matched = list(rows)
+        for clause in statement._where_criteria:
+            matched = [r for r in matched if _eval_clause(clause, r)]
+
+        for clause in reversed(getattr(statement, "_order_by_clauses", ())):
+            column = getattr(getattr(clause, "modifier", None), "key", None)
+            if column is None:
+                continue
+            descending = str(clause).upper().endswith("DESC")
+            matched.sort(key=lambda r, c=column: getattr(r, c), reverse=descending)
+
+        limit = getattr(statement, "_limit", None)
+        if limit is not None:
+            matched = matched[:limit]
+        return FakeResult(matched)
+
+
+class RecordingRunSession(FakeRunSession):
+    """Captures the statements the repository actually builds.
+
+    Subclassing rather than wrapping keeps the query behaviour identical, so a
+    test that asserts on the recorded statements cannot be perturbed by the
+    recording itself.
+    """
+
+    def __init__(self, store: FakeRunStore) -> None:
+        super().__init__(store)
+        self.statements: list[Any] = []
+
+    async def exec(self, statement, *args, **kwargs) -> FakeResult:
+        self.statements.append(statement)
+        return await super().exec(statement, *args, **kwargs)

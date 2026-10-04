@@ -3,8 +3,6 @@ Conversations API Router.
 Pure HTTP transport layer — delegates all conversation use cases to ConversationService (SRP + DIP).
 """
 import asyncio
-import json
-import time
 from collections.abc import AsyncGenerator
 from typing import Literal
 from uuid import UUID
@@ -18,8 +16,6 @@ from backend.app.api.deps import (
 )
 from backend.app.core.config import settings
 from backend.app.core.exceptions import ResourceNotFoundError
-from backend.app.core.logging import bind_request_context, clear_request_context
-from backend.app.core.spend import clear_spend_meter
 from backend.app.domain.conversation.schemas import (
     BranchCreate,
     ConversationCreate,
@@ -27,27 +23,33 @@ from backend.app.domain.conversation.schemas import (
     ConversationResponse,
     ConversationUpdate,
 )
-from backend.app.domain.usage.schemas import UsageLogCreate
+from backend.app.domain.run.service import RunService
 from backend.app.domain.user.models import User
-from backend.app.infrastructure.ai.litellm_client import ai_client
 from backend.app.infrastructure.database.session import async_session_factory
 from backend.app.services.conversation_service import ConversationService
 from backend.app.services.evaluation.guardrail_service import guardrail_service
-from backend.app.services.evaluation.quality_service import quality_service
-from backend.app.services.observability.cost_tracking import cost_tracking_service
-from backend.app.services.observability.tracing import trace_span
 from backend.app.services.org_service import OrganizationService
 from backend.app.services.prompt_compiler import prompt_compiler
 from backend.app.services.prompt_service import load_active_skills
-from backend.app.services.run_events import finished_run_events
+from backend.app.services.run_executor import (
+    encode_frame,
+    execute_run,
+    spawn_run_task,
+)
+from backend.app.services.run_log import tail_run
 from backend.app.services.usage_service import UsageService
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
+
+# Header carrying the run id on both stream responses. Named here because the
+# BFF has to forward it and a string literal repeated across two repos is how
+# that forwarding silently stops working.
+RUN_ID_HEADER = "X-Nexus-Run-Id"
 
 # ─── Per-thread run serialization ─────────────────────────────────────────────
 # A single LangGraph thread must not be executed concurrently: a resume racing a
@@ -196,7 +198,6 @@ class HITLFeedbackRequest(BaseModel):
 async def stream_conversation(
     conversation_id: str,
     body: StreamChatRequest,
-    request: Request,
     current_user: User = Depends(get_current_user),
     conv_svc: ConversationService = Depends(get_conversation_service),
     usage_svc: UsageService = Depends(get_usage_service),
@@ -204,6 +205,13 @@ async def stream_conversation(
     """
     SSE streaming endpoint consumed by the Next.js /api/chat proxy.
     Emits newline-delimited JSON events conforming to the Nexus event schema.
+
+    Starts a durable run and then *reads* it. The graph no longer runs inside
+    this response's generator, so the reply survives a refresh; the frames this
+    returns are produced by ``services/run_executor.py`` and read back out of
+    ``services/run_log.py``. ``rejoin_run_stream`` below serves the same log, so
+    a client that reconnects mid-answer gets the frames it missed rather than a
+    truncated reply that looks finished.
     """
     thread_id = str(conversation_id)
     user_messages = body.messages
@@ -340,272 +348,164 @@ async def stream_conversation(
     max_agentic_turns = 20
     graph_messages = (user_messages or [])[-max_agentic_turns:]
 
-    async def event_generator() -> AsyncGenerator[str, None]:
-        emitted_text = ""
-        start_time = time.time()
-        latency_ms = 0
-        # Track whether on_chat_model_stream produced token-level chunks.
-        # on_chain_stream emits the final AIMessage.content which would duplicate
-        # the text if we already streamed individual tokens — use it only as a
-        # fallback when the model did NOT stream token-by-token (e.g. ToT node).
-        _streamed_tokens = False
-        # Bind identity (agent + prompt version, conversation, mode) onto every
-        # log line for the life of this stream. Cleared in the finally below —
-        # contextvars outlive the statement that set them, so a streaming
-        # response that returned without clearing would mislabel later logs.
-        bind_request_context(
-            conversation_id=thread_id, user_id=str(current_user.id), mode=body.mode
+    # ── The run is the unit of work; this request is only a reader ─────────
+    #
+    # What changed: the graph used to be executed *inside* this response's async
+    # generator, which made a run's lifetime the request's. A refresh closed the
+    # generator, the event loop hit its disconnect break, and the rest of the
+    # answer — along with the assistant message, the usage row and the cost row —
+    # was simply never produced. The run is now a durable row executed by a task
+    # that holds nothing from this request, and the generator below only reads
+    # frames out of the run log.
+    #
+    # Consequence worth stating plainly: a client that disconnects mid-run no
+    # longer stops the run. That is the entire point, and it means a run is now
+    # bounded by the per-node timeout/retry policy and the per-run token/step
+    # ceiling, not by whether a browser stayed on the page.
+    async with async_session_factory() as session:
+        run = await RunService(session).start_run(
+            conversation_id=convo_uuid,
+            user_id=current_user.id,
+            thread_id=thread_id,
+            mode=body.mode,
         )
-        try:
-            async with trace_span("agentic_stream", {"thread_id": thread_id, "mode": body.mode, "user_id": str(current_user.id)}):
-                # ── Custom streams: you must ask for them, in string form. ──
-                #
-                # Measured against langgraph 1.2.11, one variable at a time in a
-                # fresh process (tests/test_stream_custom_event_trap.py runs the
-                # measurement; do not trust this comment over that test):
-                #
-                #   astream_events(v2)                        -> 0 payloads
-                #   astream_events(v2, stream_mode="custom")    -> payload, as an
-                #       `on_chain_stream` on the ROOT `LangGraph` run, with
-                #       data["chunk"] set to exactly what was written
-                #   astream_events(v2, stream_mode=["custom"])  -> 0 payloads  (!)
-                #   astream(stream_mode="custom")               -> payload, unwrapped
-                #   astream_events(v2, stream_mode="bogus")     -> no raise, AND
-                #       the root run's on_chain_stream is suppressed entirely
-                #
-                # Two traps in that table. The list form is what anyone writes
-                # when subscribing to more than one mode, and it delivers
-                # nothing. A typo is worse: it is accepted, and it silences the
-                # root deltas too, so the graph looks like it is producing less
-                # rather than more. Neither is self-announcing.
-                #
-                # `on_custom_event` is NOT an emitted event name. The string
-                # occurs once in the package, at langgraph/pregel/_retry.py:312,
-                # as an idle-timer touch handler on an internal scope class. A
-                # handler written against the tutorials is dead code that reads
-                # correct.
-                #
-                # The hazard that remains: the payload arrives as an
-                # `on_chain_stream`, which is the branch immediately below. It
-                # looks for `chunk["messages"]`, finds none, and no-ops -- right
-                # by accident, not by design. So a mid-run event added without
-                # the root-name check produces no error and reaches no user.
-                #
-                # Our own critique/quality/artifact frames are unaffected: they
-                # are read post-run via `aget_state` and rendered by
-                # `finished_run_events`, never streamed mid-run.
-                #
-                # To add a mid-run event here: pass stream_mode="custom" (string,
-                # not list), match on `event.get("name") == "LangGraph"`, and
-                # discriminate on the chunk's own shape.
-                async for event in orchestrator_graph.astream_events(
-                    input={
-                        "messages": graph_messages,
-                        "mode": body.mode,
-                        **({"system_prompt": compiled_system_prompt} if compiled_system_prompt else {}),
-                        **({"active_skills": [s.name for s in active_skills]} if active_skills else {}),
-                    },
-                    config=config,
-                    version="v2",
-                ):
-                    kind = event.get("event")
 
-                    if kind == "on_chat_model_stream":
-                        chunk = event.get("data", {}).get("chunk")
-                        if chunk and hasattr(chunk, "content") and chunk.content:
-                            payload = json.dumps({"type": "text_delta", "content": chunk.content})
-                            emitted_text += chunk.content
-                            _streamed_tokens = True
-                            yield f"data: {payload}\n\n"
+    async def _release() -> None:
+        # Released by the executor, not here: the run outlives this response, so
+        # releasing on disconnect would let a second run start on the same
+        # LangGraph thread while the first was still writing checkpoints.
+        await _release_stream_slot(thread_id)
 
-                    elif kind in ("on_chain_stream", "on_chain_end"):
-                        # If no token-level chunks have been streamed, emit the final message
-                        # content from the completed node (synthesizer or tree_of_thoughts).
-                        if not _streamed_tokens:
-                            data = event.get("data", {})
-                            chunk = data.get("chunk") or data.get("output")
-                            if isinstance(chunk, dict):
-                                msgs = chunk.get("messages")
-                                if msgs:
-                                    last = msgs[-1]
-                                    if hasattr(last, "content") and isinstance(last.content, str) and last.content:
-                                        payload = json.dumps({"type": "text_delta", "content": last.content})
-                                        emitted_text += last.content
-                                        _streamed_tokens = True
-                                        yield f"data: {payload}\n\n"
-
-                    elif kind == "on_tool_start":
-                        tool_input = event.get("data", {}).get("input", {})
-                        run_id = event.get("run_id")
-                        tool_name = event.get("name")
-                        payload = json.dumps({
-                            "type": "tool_call",
-                            "tool_name": tool_name,
-                            "tool_input": tool_input,
-                            "tool_call_id": run_id,
-                        })
-                        yield f"data: {payload}\n\n"
-                        # AG-UI standardized alias: live tool-progress
-                        # events with the protocol's field names. New UIs can bind
-                        # to TOOL_CALL_START; existing clients keep tool_call.
-                        agui_payload = json.dumps({
-                            "type": "TOOL_CALL_START",
-                            "messageId": f"ag-{run_id}",
-                            "tool": tool_name,
-                            "input": tool_input,
-                            "timestamp": time.time(),
-                        })
-                        yield f"data: {agui_payload}\n\n"
-
-                    elif kind == "on_tool_end":
-                        output = event.get("data", {}).get("output")
-                        run_id = event.get("run_id")
-                        tool_name = event.get("name")
-                        payload = json.dumps({
-                            "type": "tool_result",
-                            "tool_call_id": run_id,
-                            "result": str(output)[:2000] if output else None,
-                        })
-                        yield f"data: {payload}\n\n"
-                        agui_payload = json.dumps({
-                            "type": "TOOL_CALL_COMPLETE",
-                            "messageId": f"ag-{run_id}",
-                            "tool": tool_name,
-                            "output": str(output)[:2000] if output else None,
-                            "timestamp": time.time(),
-                        })
-                        yield f"data: {agui_payload}\n\n"
-
-                    elif kind == "on_custom_event":
-                        name = event.get("name", "")
-                        data = event.get("data", {})
-                        if name in ("citation", "thinking", "hitl_request", "elicitation_request", "error", "text_delta"):
-                            payload = json.dumps({"type": name, **data})
-                            yield f"data: {payload}\n\n"
-
-                    if await request.is_disconnected():
-                        logger.info("client_disconnected_stream", thread_id=thread_id)
-                        break
-
-            latency_ms = (time.time() - start_time) * 1000
-
-            # Persist the assistant reply so history survives the (stateless) graph.
-            # The writes run on a FRESH dedicated session rather than the
-            # request-scoped one: when a client disconnects mid-stream, FastAPI
-            # may tear down the request session (close/rollback) while this
-            # block is still running — a fresh session is never closed out from
-            # under us, so streaming replies are not lost to session teardown.
-            if emitted_text.strip():
-                try:
-                    async with async_session_factory() as session:
-                        persist_conv_svc = ConversationService(session)
-                        persist_usage_svc = UsageService(session)
-                        prompt_tok = ai_client.count_tokens(
-                            " ".join(
-                                m.get("content", "") if isinstance(m, dict) else str(m)
-                                for m in user_messages
-                            ),
-                            settings.DEFAULT_MODEL,
-                        )
-                        comp_tok = ai_client.count_tokens(emitted_text, settings.DEFAULT_MODEL)
-                        cost_usd = cost_tracking_service.calculate_cost(settings.DEFAULT_MODEL, prompt_tok, comp_tok)
-                        quality = quality_service.evaluate_response_quality(
-                            user_messages[-1].get("content", "") if user_messages and isinstance(user_messages[-1], dict) else (str(user_messages[-1]) if user_messages else ""),
-                            emitted_text,
-                            prompt_tok + comp_tok,
-                            latency_ms,
-                        )
-
-                        assistant_msg = await persist_conv_svc.add_message(
-                            conversation_id=convo_uuid,
-                            role="assistant",
-                            content=emitted_text,
-                            parent_message_id=user_msg.id if user_msg else None,
-                            model=settings.DEFAULT_MODEL,
-                        )
-                        await persist_usage_svc._repo.log_usage(
-                            UsageLogCreate(
-                                user_id=current_user.id,
-                                org_id=org_id,
-                                conversation_id=convo_uuid,
-                                message_id=assistant_msg.id,
-                                model=settings.DEFAULT_MODEL,
-                                prompt_tokens=prompt_tok,
-                                completion_tokens=comp_tok,
-                                latency_ms=latency_ms,
-                                cost_usd=cost_usd,
-                                metadata_json={"quality": quality},
-                            )
-                        )
-                        await cost_tracking_service.record_cost_log(
-                            session=session,
-                            user_id=current_user.id,
-                            org_id=org_id,
-                            model=settings.DEFAULT_MODEL,
-                            provider="groq",
-                            prompt_tokens=prompt_tok,
-                            completion_tokens=comp_tok,
-                        )
-                        await session.commit()
-                except Exception as exc:
-                    logger.warning("agentic_assistant_message_persist_failed", thread_id=thread_id, error=str(exc))
-
-            # Surface critic/evidence state from the finished run, then check for
-            # HITL pauses (graph parked at an interrupt → resume endpoint continues it).
-            snapshot = await orchestrator_graph.aget_state(config)
-            if snapshot is not None and getattr(snapshot, "values", None):
-                # Which frames this is, and in what order, is a contract with
-                # the client -- see services/run_events.py. It lives there, not
-                # inline, so it is unit-testable: as three inline `yield`s in
-                # this generator it was unreachable by any test, and a revert
-                # harness proved the artifact frame could be deleted with
-                # nothing turning red.
-                for frame in finished_run_events(snapshot.values):
-                    yield frame
-            if snapshot is not None and getattr(snapshot, "next", None):
-                # LangGraph stores interrupts on snapshot.tasks[].interrupts (the
-                # __interrupt__ values key does not exist). surface the latest
-                # interrupt value + thread id so the client can render the
-                # pending action and POST the resume to the right conversation.
-                interrupt_payload = None
-                for task in snapshot.tasks or []:
-                    intr_list = getattr(task, "interrupts", None) or []
-                    if intr_list:
-                        interrupt_payload = getattr(intr_list[-1], "value", None)
-                        break
-                payload = json.dumps({
-                    "type": "hitl_request",
-                    "thread_id": thread_id,
-                    "state": {"next": list(snapshot.next), "ts": str(snapshot.created_at)},
-                    "tool_name": (interrupt_payload or {}).get("tool_name"),
-                    "arguments": (interrupt_payload or {}).get("arguments"),
-                    "reason": (interrupt_payload or {}).get("reason"),
-                })
-                yield f"data: {payload}\n\n"
-
-            yield f"data: {json.dumps({'type': 'done', 'content': emitted_text, 'thread_id': thread_id, 'latency_ms': latency_ms})}\n\n"
-
-        except Exception as exc:
-            logger.exception("stream_error", thread_id=thread_id, error=str(exc))
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
-        finally:
-            clear_request_context()
-            # Same reasoning as the request context: a spend meter left bound
-            # would keep charging the *next* request served by this task and,
-            # once it hit its ceiling, silently disable the ceiling for that
-            # request too. The graph binds its own meter in bootstrap_node for
-            # the non-streaming paths; clearing here covers the stream path and
-            # any generator abandoned mid-flight.
-            clear_spend_meter()
-            await _release_stream_slot(thread_id)
-
-        yield "data: [DONE]\n\n"
+    spawn_run_task(
+        execute_run(
+            run_id=run.id,
+            # Passed in rather than imported by the executor: the endpoint's own
+            # tests monkeypatch *this module's* `orchestrator_graph`, and an
+            # import inside the executor would step over that seam and run the
+            # real graph (AGENTS.md §9.14).
+            graph=orchestrator_graph,
+            config=config,
+            graph_input={
+                "messages": graph_messages,
+                "mode": body.mode,
+                **({"system_prompt": compiled_system_prompt} if compiled_system_prompt else {}),
+                **({"active_skills": [s.name for s in active_skills]} if active_skills else {}),
+            },
+            conversation_id=convo_uuid,
+            user_id=current_user.id,
+            mode=body.mode,
+            org_id=org_id,
+            user_messages=user_messages,
+            parent_message_id=user_msg.id if user_msg else None,
+            on_finish=_release,
+            # Passed explicitly rather than left to the executor's default
+            # argument: a default is bound at import time, so patching the module
+            # global would not reach it and the test seam would look present but
+            # do nothing.
+            session_factory=async_session_factory,
+        ),
+        run_id=run.id,
+    )
 
     return StreamingResponse(
-        event_generator(),
+        frame_stream(run.id, after_seq=0),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            # The one thing this response has to tell the client that the frames
+            # themselves do not: the id it can reattach with after a refresh. A
+            # header rather than a new frame type, because every new SSE frame
+            # needs a branch in the BFF translator
+            # (frontend/src/app/api/chat/route.ts) or it is silently dropped on
+            # the floor — a header needs one forwarded line instead.
+            RUN_ID_HEADER: str(run.id),
+        },
     )
+
+
+# ─── Rejoin: read a run that is already in flight, or finished ───────────────
+
+
+@router.get("/{conversation_id}/runs/{run_id}/stream")
+async def rejoin_run_stream(
+    conversation_id: str,
+    run_id: UUID,
+    after_seq: int | None = Query(None, ge=0, description="Resume after this frame sequence"),
+    last_event_id: str | None = Header(
+        None, alias="Last-Event-ID", description="SSE-standard resume cursor"
+    ),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Tail a run's frames, replaying whatever the client missed.
+
+    This is the other half of the refactor. It is a *read* of the same log the
+    live stream reads, so a client that refreshes mid-answer gets the frames it
+    never saw and then follows the rest — rather than a truncated reply that
+    looks complete.
+
+    Ownership is checked before a single frame is read, against the caller's user
+    id *and* the conversation in the path. The run id alone is not enough: a
+    caller who guessed another user's run id would otherwise replay their answer.
+    """
+    async with async_session_factory() as session:
+        run = await RunService(session).get_for_user(run_id, current_user.id)
+    if run is None or str(run.conversation_id) != conversation_id:
+        # 404 for both "does not exist" and "not yours": telling them apart
+        # would confirm that a guessed run id is real.
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    cursor = after_seq if after_seq is not None else parse_last_event_id(last_event_id)
+    return StreamingResponse(
+        frame_stream(run.id, after_seq=cursor),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            RUN_ID_HEADER: str(run.id),
+        },
+    )
+
+
+async def frame_stream(run_id: UUID, *, after_seq: int) -> AsyncGenerator[str, None]:
+    """Render a run's frames as SSE: replay from ``after_seq``, then follow live.
+
+    Shared by the live stream and the rejoin stream so a client cannot tell them
+    apart, which is the requirement. The terminal ``[DONE]`` sentinel is emitted
+    here rather than by the run, because it marks the end of *this reader*, not
+    the end of the run: a second reader attaching to a finished run replays the
+    same frames and then gets its own ``[DONE]``.
+    """
+    try:
+        async for frame in tail_run(
+            run_id, after_seq=after_seq, session_factory=async_session_factory
+        ):
+            yield encode_frame(frame)
+    except asyncio.CancelledError:
+        # The reader went away. The run did not: it is a durable row with its own
+        # task, and re-raising keeps a normal disconnect from being logged as a
+        # stream failure.
+        raise
+    except Exception as exc:
+        logger.warning("run_tail_failed", run_id=str(run_id), error=str(exc))
+        yield encode_frame({"type": "error", "message": "stream interrupted"})
+    yield "data: [DONE]\n\n"
+
+
+def parse_last_event_id(raw: str | None) -> int:
+    """Read an SSE ``Last-Event-ID`` header as a frame sequence.
+
+    Unparseable input becomes 0 — replay everything — because that is the
+    recoverable direction: a client resending from the start sees frames it
+    already had, whereas resuming from a wrong offset would silently skip part of
+    the answer.
+    """
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw.strip()))
+    except (TypeError, ValueError):
+        return 0
 
 
 # ─── HITL Feedback Endpoint ──────────────────────────────────────────────────

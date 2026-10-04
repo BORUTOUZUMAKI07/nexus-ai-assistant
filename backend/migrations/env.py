@@ -130,6 +130,7 @@ from backend.app.domain.artifact.models import Artifact, ArtifactVersion
 from backend.app.domain.webhook.models import WebhookEndpoint, WebhookDelivery
 from backend.app.domain.org.models import Organization, OrganizationMember, OrganizationInvite
 from backend.app.domain.share.models import ConversationShare
+from backend.app.domain.run.models import AgentRun, RunEvent
 
 # this is the Alembic Config object
 config = context.config

@@ -861,23 +861,61 @@ def test_the_repository_lookup_exists():
     assert hasattr(ArtifactRepository, "find_by_conversation_title")
 
 
-def test_the_run_event_frames_helper_is_used_by_the_route():
-    """The route must not re-inline the frames it delegated.
+def test_the_run_event_frames_helper_is_used_by_the_run():
+    """The finished-run frames must not be re-inlined by their new owner.
 
     A source-grep is weak on its own -- an earlier wiring test in this repo
     passed even with the call's result discarded -- so this only asserts the
     delegation exists; `tests/test_batch_d3_run_events.py` is what actually
     pins the emitted frames.
+
+    The subject moved. `finished_run_events(snapshot.values)` used to be called
+    from the `/stream` route, which ran the graph itself; the C2 change made the
+    run outlive the request, so the frames are emitted by the background executor
+    and the route only tails the log (AGENTS.md §9.27). Grepping the route for
+    this stopped being true for a reason that has nothing to do with D3 -- the
+    delegation is intact, one layer down. The assertion follows it there, and
+    additionally pins that the route is now genuinely a reader: a route that
+    re-derived the frames from a snapshot is the exact shape this test forbids,
+    and after the refactor that shape is reachable again in a new place.
+
+    The name moved again inside the executor, for a reason that matters. The
+    helper it asserts on is `finished_run_payloads`, not `finished_run_events`:
+    the run log stores frame *objects*, and `finished_run_events` renders them
+    to wire strings (`data: {...}\\n\\n`) for a generator writing straight to an
+    HTTP response. Persisting those and serialising again double-encoded every
+    post-run frame, so the BFF translator found no `type` and dropped the
+    critique, the quality score and the artifact notification. So this grep has
+    to follow the *delegation*, not the identifier -- and the identifier it
+    names is the exact one whose reappearance here would be the bug.
     """
     from pathlib import Path
 
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "app"
-        / "api"
-        / "v1"
-        / "conversations.py"
-    ).read_text(encoding="utf-8")
-    assert "finished_run_events(snapshot.values)" in source
-    # The frames must no longer be built inline here.
-    assert "'type': 'artifact'" not in source
+    root = Path(__file__).resolve().parents[1]
+    route = (root / "app" / "api" / "v1" / "conversations.py").read_text(
+        encoding="utf-8"
+    )
+    executor = (root / "app" / "services" / "run_executor.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "finished_run_payloads(snapshot.values)" in executor
+    # The frames must no longer be built inline by the owner.
+    assert "'type': 'artifact'" not in executor
+    # Neither owner may render to the wire format: the log persists objects and
+    # `encode_frame` does the rendering, once, at the edge.
+    #
+    # This second assertion is not redundant with the first, which was my first
+    # assumption. Reverting the call site (`payloads` -> `events`) fails *both*,
+    # so measuring them that way makes the second look redundant and invites
+    # deleting it. The shape only it catches is the payloads call **plus** a
+    # wire-rendering call -- i.e. the realistic reintroduction, where something
+    # in the executor wants the rendered form for its own output and the old
+    # double-encoding bug comes straight back on half the frames. Reverting to
+    # that shape leaves the first assertion green.
+    assert "finished_run_events(" not in executor
+    # And the route must not have grown a second copy now that it is only a
+    # reader -- this is the assertion that would have caught the delegation
+    # being "moved back" rather than removed.
+    assert "finished_run_events(" not in route
+    assert "'type': 'artifact'" not in route

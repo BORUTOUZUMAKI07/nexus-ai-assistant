@@ -33,3 +33,8 @@ backend/app/services/rag/query_rewriter.py
 backend/app/services/decision.py
 backend/app/services/rag/answer_coverage.py
 backend/app/agents/orchestrator/retry_policy.py
+backend/app/domain/run/models.py
+backend/app/domain/run/repository.py
+backend/app/domain/run/service.py
+backend/app/services/run_log.py
+backend/app/services/run_executor.py

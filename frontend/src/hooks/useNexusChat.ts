@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchWithSessionRecovery, sendHITLFeedback } from "@/lib/api";
+import { consumeChatStream, readRunId } from "@/lib/chatStream";
 
 export interface ToolCallAnnotation {
   type: "tool_call";
@@ -154,6 +155,68 @@ export interface QueuedMessage {
   id: string;
   content: string;
   options?: SendMessageOptions;
+}
+
+// ── Rejoin: remembering which run a conversation was streaming ──────────────
+//
+// The backend no longer runs a turn inside the request that asked for it, so an
+// answer keeps being produced whether or not the browser is still listening.
+// That is what makes it recoverable, and it costs one localStorage entry per
+// conversation to make it so.
+//
+// Only the run *id* is stored, never the frames: the durable copy lives on the
+// server, and a browser that cached the answer would be a second source of
+// truth for it, stale the moment the backend appends another frame.
+
+const RUN_STORAGE_PREFIX = "nexus-active-run:";
+
+/** A run id is a UUID; anything else in storage is not one of ours. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function runStorageKey(conversationId: string) {
+  return `${RUN_STORAGE_PREFIX}${conversationId}`;
+}
+
+function rememberRun(conversationId: string, runId: string) {
+  if (!conversationId) return;
+  try {
+    window.localStorage.setItem(runStorageKey(conversationId), runId);
+  } catch {
+    // Storage can be unavailable (private mode, quota, disabled cookies). The
+    // run still completes and is still persisted server-side; the only thing
+    // lost is the ability to re-attach to it after a reload, which is a
+    // degradation rather than a failure. Nothing here is worth an error banner.
+  }
+}
+
+/**
+ * Drop a stored run id.
+ *
+ * Accepts null, and null is meaningful rather than a defensive branch: "we never
+ * filed this turn's run under any key", which happens when the response carried
+ * no run id (the turn failed before a run existed) or when the client never
+ * named the conversation and the backend never resolved one. Widening the type
+ * here keeps that from having to be narrowed at the call site with a cast or an
+ * `if` whose only purpose is to satisfy the compiler.
+ */
+function forgetRun(conversationId: string | null) {
+  if (!conversationId) return;
+  try {
+    window.localStorage.removeItem(runStorageKey(conversationId));
+  } catch {
+    // Same reasoning as rememberRun: the entry expires with the session anyway.
+  }
+}
+
+function readRun(conversationId: string): string | null {
+  if (!conversationId) return null;
+  try {
+    const raw = window.localStorage.getItem(runStorageKey(conversationId));
+    return raw && UUID_RE.test(raw) ? raw : null;
+  } catch {
+    return null;
+  }
 }
 
 export function useNexusChat(options: UseNexusChatOptions = {}) {
@@ -349,37 +412,44 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      const annotations: NexusAnnotation[] = [];
-      const citations: CitationAnnotation["data"][] = [];
-      const toolCalls: ToolCallAnnotation["data"][] = [];
-      let reasoningBuffer = "";
-      // Accumulators, not state writes, because the two frames arrive
-      // independently and `quality` can land without `critique`. Writing state
-      // per frame would make the second one clobber the first.
-      let verdictCritique: string | undefined;
-      let verdictRevisions = 0;
-      let verdictScore: number | undefined;
-      let verdictGate: boolean | null = null;
+      /**
+       * Which localStorage key this turn's run id was filed under, or null if it
+       * was never filed.
+       *
+       * Declared out here because both ends of the turn need it and only the
+       * middle can set it: the key is known once the header is read (or once the
+       * backend reports a resolved conversation id), and it has to be *cleared*
+       * when the stream ends cleanly. A variable scoped to the `try` could not
+       * be cleared from the failure paths that matter, which is the direction
+       * that silently loses the ability to recover.
+       */
+      let rememberedUnder: string | null = null;
 
-      const publishVerdict = () => {
-        if (verdictCritique === undefined && verdictScore === undefined) return;
-        setTurnVerdict({
-          critique: verdictCritique,
-          revision_count: verdictRevisions,
-          evidence_score: verdictScore ?? 0,
-          evidence_gate_passed: verdictGate,
-        });
-      };
-
-      const patchAssistant = (content: string, annos: NexusAnnotation[]) => {
+      /**
+       * Write a streamed message back into the list.
+       *
+       * Shared by the live turn and the rejoin, and the reason the rejoin can
+       * exist at all without duplicating this. `annos.length > 0 ? annos :
+       * m.annotations` is deliberate and not a no-op: an annotation-free patch
+       * must not clear annotations an earlier patch installed, or a text delta
+       * arriving between two annotation frames would erase them.
+       */
+      const patchMessage = (
+        messageId: string,
+        content: string,
+        annos: NexusAnnotation[]
+      ) => {
         updateMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantMsgId
+            m.id === messageId
               ? { ...m, content, annotations: annos.length > 0 ? annos : m.annotations }
               : m
           )
         );
       };
+
+      const patchAssistant = (content: string, annos: NexusAnnotation[]) =>
+        patchMessage(assistantMsgId, content, annos);
 
       try {
         // Build multimodal message list — user message may carry an image
@@ -423,184 +493,41 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           throw new Error(`Chat API error: ${response.statusText}`);
         }
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let streamContent = "";
-        let streamError: string | null = null;
-        // Track whether the backend assigned a new conversation id so we can
-        // surface it to the page via onConversationCreated.
-        let resolvedConversationId: string | null = null;
-
-        // SSE lines can be split across network chunks (and JSON payloads may
-        // even contain literal newlines), so any trailing partial line is
-        // carried into the next iteration instead of being parsed eagerly.
-        let buffer = "";
-        const processLine = (line: string) => {
-          if (!line) return;
-
-          // Structured stream error (Vercel AI SDK 3: prefix)
-          if (line.startsWith("3:")) {
-            const raw = line.slice(2);
-            try {
-              streamError = JSON.parse(raw);
-            } catch {
-              streamError = raw;
-            }
-            return;
-          }
-
-          // Text delta
-          if (line.startsWith("0:")) {
-            const raw = line.slice(2);
-            try {
-              streamContent += JSON.parse(raw);
-            } catch {
-              streamContent += raw;
-            }
-            patchAssistant(streamContent, annotations);
-            return;
-          }
-
-          // Annotations
-          if (!line.startsWith("8:")) return;
-          try {
-            const parsed: unknown[] = JSON.parse(line.slice(2));
-            if (!Array.isArray(parsed)) return;
-            for (const ann of parsed) {
-              // Verdict frames are read structurally, before the
-              // `NexusAnnotation` cast, because they are deliberately NOT part
-              // of that union: they are not stored on the message. Casting them
-              // in would put a member in the union that no code path ever
-              // pushes, which is a type that lies.
-              const verdict = ann as { type?: string; data?: Record<string, unknown> };
-              if (verdict.type === "critique") {
-                const d = verdict.data ?? {};
-                if (typeof d.critique === "string") verdictCritique = d.critique;
-                if (typeof d.revision_count === "number") verdictRevisions = d.revision_count;
-                publishVerdict();
-                continue;
-              }
-              if (verdict.type === "quality") {
-                const d = verdict.data ?? {};
-                if (typeof d.evidence_score === "number") verdictScore = d.evidence_score;
-                // `?? null` and not `?? true`: an unreported gate is not a pass,
-                // and defaulting it to `true` turns the backend's silence into a
-                // clean bill of health.
-                verdictGate =
-                  typeof d.evidence_gate_passed === "boolean"
-                    ? d.evidence_gate_passed
-                    : null;
-                publishVerdict();
-                continue;
-              }
-
-              const typed = ann as NexusAnnotation;
-              if (typed.type === "reasoning") {
-                reasoningBuffer += typed.data.content ?? "";
-              } else if (typed.type === "citation") {
-                citations.push(typed.data);
-              } else if (typed.type === "tool_call") {
-                toolCalls.push({ ...typed.data, status: "running" });
-              } else if (typed.type === "tool_result") {
-                const call = toolCalls.find(
-                  (c) => c.tool_call_id === typed.data.tool_call_id
-                );
-                if (call) {
-                  call.status = "error" in typed.data ? "error" : "completed";
-                  call.result = typed.data.result;
-                }
-                annotations.push(typed);
-              } else if (typed.type === "hitl_request") {
-                setPendingHITL(typed.data);
-                annotations.push(typed);
-              } else if (typed.type === "artifact") {
-                // Not pushed into `annotations`: the array is rebuilt from
-                // reasoning/citations/tool-calls on the next patch, so an entry
-                // here would be dropped by the very next text delta. The
-                // callback is the durable signal; the artifact itself lives in
-                // the database.
-                onArtifactSavedRef.current?.(typed.data);
-              } else if (
-                (ann as { type: string; data?: { thread_id?: string } }).type === "conversation_created"
-              ) {
-                // Backend resolved a new conversation UUID — capture it for the callback.
-                const newId = (ann as { type: string; data: { thread_id: string } }).data?.thread_id;
-                if (newId) resolvedConversationId = newId;
-              }
-            }
-            const next: NexusAnnotation[] = [
-              ...annotations,
-              ...(reasoningBuffer
-                ? [
-                    {
-                      type: "reasoning" as const,
-                      data: { content: reasoningBuffer },
-                    },
-                  ]
-                : []),
-              ...citations.map(
-                (c): CitationAnnotation => ({ type: "citation", data: c })
-              ),
-              ...toolCalls.map(
-                (t): ToolCallAnnotation => ({
-                  type: "tool_call",
-                  data: t,
-                })
-              ),
-            ];
-            patchAssistant(streamContent, next);
-          } catch {
-            // Ignore malformed annotation payloads
-          }
-        };
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value, { stream: true });
-          buffer += chunk;
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            processLine(line);
-            if (streamError) break;
-          }
-          if (streamError) break;
+        const runId = readRunId(response);
+        if (runId && conversationId) {
+          rememberRun(conversationId, runId);
+          rememberedUnder = conversationId;
         }
 
-        // Flush a final line that arrived without a trailing newline.
-        if (buffer && !streamError) processLine(buffer);
+        await consumeChatStream(response.body, {
+          patch: patchAssistant,
+          onError: (message) => setError(new Error(message)),
+          onHitlRequest: (data) => setPendingHITL(data),
+          onArtifactSaved: (artifact) =>
+            onArtifactSavedRef.current?.(artifact),
+          onTurnVerdict: setTurnVerdict,
+          onConversationCreated: (id) => {
+            // A conversation the client did not name: the run id read off the
+            // header had no key to be filed under, so file it under the
+            // resolved one now. That is what lets a reload after the very first
+            // turn re-attach -- the id arrives on the last frame, which is
+            // before the stream closes, so nothing is missed.
+            if (conversationId) return;
+            if (runId) {
+              rememberRun(id, runId);
+              rememberedUnder = id;
+            }
+            onConversationCreatedRef.current?.(id);
+          },
+        });
 
-        const finalAnnotations: NexusAnnotation[] = [
-          ...(reasoningBuffer
-            ? [
-                {
-                  type: "reasoning" as const,
-                  data: { content: reasoningBuffer },
-                },
-              ]
-            : []),
-          ...citations.map(
-            (c): CitationAnnotation => ({ type: "citation", data: c })
-          ),
-          ...toolCalls.map(
-            (t): ToolCallAnnotation => ({ type: "tool_call", data: t })
-          ),
-          ...annotations.filter((a) => a.type === "hitl_request"),
-        ];
-        // Even on a mid-stream error keep whatever already streamed so a failed
-        // answer is never silently replaced by a blank bubble.
-        patchAssistant(streamContent, finalAnnotations);
-        // Fire the conversation-created callback if the backend assigned a new id.
-        if (resolvedConversationId && !conversationId && onConversationCreatedRef.current) {
-          onConversationCreatedRef.current(resolvedConversationId);
-        }
-        if (streamError) {
-          setError(new Error(streamError));
-          return;
-        }
+        // Reaching this line means the stream closed at the backend's end, so the
+        // run is over and there is nothing left to re-attach to. Every failure
+        // path -- a dropped connection, a rejected fetch, an abort -- jumps past
+        // it and deliberately leaves the stored id in place, because a run the
+        // browser stopped watching for its own reasons is still going, and
+        // forgetting its id is precisely the case rejoin exists to cover.
+        forgetRun(rememberedUnder);
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") return;
         setError(err instanceof Error ? err : new Error("Chat stream failed"));
@@ -710,6 +637,141 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     setTurnVerdict(null);
     setError(null);
   }, [updateMessages, clearQueued]);
+
+  // ── Rejoin ───────────────────────────────────────────────────────────────
+  /**
+   * Re-attach to a run that is still going, and replay the answer into the view.
+   *
+   * This is the client half of the run decoupling. The backend keeps producing
+   * frames whether or not anybody is reading, so the answer to "what happened to
+   * the answer I was watching?" is a second read of the same run rather than a
+   * resend — which matters, because a resend is a *different answer*: it spends a
+   * second run, charges a second time, and produces text that does not match the
+   * one the user already saw.
+   *
+   * ## What this reconstructs, precisely
+   *
+   * The recovered assistant message only. The run log holds the frames, and the
+   * frames do not include the user turn — that is a message row the backend
+   * wrote, and the chat view does not load conversation history at all (a
+   * pre-existing gap, out of scope here). Inventing a user bubble to sit above
+   * the recovered answer would be fabricating conversation, so the answer
+   * arrives alone.
+   *
+   * ## Why no `Last-Event-ID`
+   *
+   * The backend and the BFF both honour a cursor, and it is tested there. This
+   * hook never sends one: after a reload the in-memory frame list is empty, so
+   * the first frame *is* the one that needs re-reading, and resuming from a
+   * cursor carried across the reload would skip exactly the part of the answer
+   * the user is missing. A full replay is only wasteful for a long answer; a
+   * wrong cursor is a hole in it.
+   */
+  const rejoinRun = useCallback(
+    async (conversationId: string, runId: string, signal: AbortSignal) => {
+      const messageId = `msg-rejoined-${runId.slice(0, 8)}`;
+
+      // The bubble is created before the request so the answer streams into a
+      // message that exists. Appending it after the response means an empty gap
+      // in the transcript while the durable copy is fetched, which on a slow
+      // connection reads as "nothing was recovered".
+      updateMessages((prev) =>
+        prev.some((m) => m.id === messageId)
+          ? prev
+          : [
+              ...prev,
+              {
+                id: messageId,
+                role: "assistant",
+                content: "",
+                model: optionsRef.current.model,
+              },
+            ]
+      );
+
+      const dropBubble = () =>
+        updateMessages((prev) => prev.filter((m) => m.id !== messageId));
+
+      try {
+        const response = await fetchWithSessionRecovery(
+          `/api/chat?conversationId=${encodeURIComponent(
+            conversationId
+          )}&runId=${encodeURIComponent(runId)}`,
+          { method: "GET", signal, headers: { Accept: "text/plain" } }
+        );
+
+        // A run the backend no longer has (retention, or a different
+        // environment) is not an error to show the user about their own
+        // conversation: forget it and remove the empty bubble, because an empty
+        // assistant message is worse than no message.
+        if (response.status === 404) {
+          forgetRun(conversationId);
+          dropBubble();
+          return;
+        }
+        if (!response.ok || !response.body) {
+          throw new Error(`Rejoin failed: ${response.statusText}`);
+        }
+
+        await consumeChatStream(response.body, {
+          patch: (content, annos) =>
+            updateMessages((prev) =>
+              prev.map((m) =>
+                m.id === messageId
+                  ? {
+                      ...m,
+                      content,
+                      annotations: annos.length > 0 ? annos : m.annotations,
+                    }
+                  : m
+              )
+            ),
+          onArtifactSaved: (artifact) =>
+            onArtifactSavedRef.current?.(artifact),
+          onTurnVerdict: setTurnVerdict,
+          // A rejoin does not surface `hitl_request` as pending state: the run
+          // was interrupted for approval before the page went away, and the card
+          // it raises belongs to a turn this view has no user message for. It
+          // stays in the annotation list, so the transcript records that the
+          // turn stopped for a human rather than silently reading as complete.
+        });
+
+        // The replay reached the backend's end, so the run is finished.
+        forgetRun(conversationId);
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") return;
+        // The run is probably still going — a network blip, or the backend was
+        // unreachable. The stored id is kept, so a later reload tries again, and
+        // the bubble is removed rather than left empty.
+        dropBubble();
+        setError(
+          err instanceof Error
+            ? err
+            : new Error("Could not re-attach to the running answer.")
+        );
+      }
+    },
+    [updateMessages]
+  );
+
+  useEffect(() => {
+    const conversationId = optionsRef.current.conversationId;
+    if (!conversationId) return;
+    // A live turn already owns this conversation's stream. Joining as well would
+    // put the same frames into a second bubble, and two runs' worth of requests
+    // against one backend thread slot.
+    if (loadingRef.current || abortRef.current) return;
+    const runId = readRun(conversationId);
+    if (!runId) return;
+
+    const controller = new AbortController();
+    void rejoinRun(conversationId, runId, controller.signal);
+    // `rejoinRun` is in the dependency list and that is correct, not a warning to
+    // suppress: it is a useCallback over `[updateMessages]`, which is itself
+    // `useCallback([])`, so it is referentially stable for the life of the hook
+    // and the effect fires on a conversation change only. An earlier version had
+    // a disable directive here for an omission that no longer applies.
+  }, [options.conversationId, rejoinRun]);
 
   // HITL approval/rejection
   const resolveHITL = useCallback(
