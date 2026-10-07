@@ -1676,6 +1676,63 @@ different tests) looked like three unrelated bugs instead of one.
     - Backend suite measured **1314 passed, 4 skipped, 9 deselected** after
       these changes (baseline 1312).
 
+30. **Tests were shipping logs to New Relic, and the emitter was a pytest
+    plugin nobody wrote.** New Relic's Logs UI showed `faker.*` locale records
+    while **nothing** in `backend/app` or `backend/tests` imports faker: the
+    source is `faker/contrib/pytest/plugin.py:9-20`, an *autouse session
+    fixture* constructing `Faker(locale=[DEFAULT_LOCALE])` in **every** pytest
+    session — 44 DEBUG locale messages before the first test runs. They left
+    the machine because `backend/.env:91` sets `NEW_RELIC_ENABLED=true` (the
+    *app* should export) and pytest loads that file: conftest's first backend
+    import builds `settings` with it true, `main.py:40` -> `setup_logging()` ->
+    the `logging.py:183` gate attaches the OTLP handler to the **root** logger
+    at DEBUG (`logging.py:84`: `LOG_LEVEL` unset + non-production -> DEBUG, so
+    third-party DEBUG noise is eligible too — the app's own console never
+    showed it, and pytest captures log output, which is why reading a session's
+    output "proved" nothing either way).
+    - **Measured, not inferred.** One single-file session produced exactly one
+      **47-record** batch in the collector (44 faker + 3 app-init: `mem0_cloud_
+      init_failed`, `otlp_log_handler_wired`, `fastmcp_mounted`). After the
+      fix, a full suite run took the collector's batch count **43 -> 43,
+      delta 0** (the suite itself: **1316 passed, 4 skipped, 9 deselected**,
+      i.e. the 1314 baseline + the 2 new guards).
+    - **The fix is the third telemetry guard**: `os.environ[
+      "NEW_RELIC_ENABLED"] = "false"` in `tests/conftest.py`, before the backend
+      imports — the same position rule as `LANGSMITH_TRACING` and `SENTRY_DSN`,
+      because `redis_client` builds the settings singleton during import.
+      Guarded by `tests/test_no_newrelic_in_tests.py`: behavioural (asks the
+      singleton; SKIPs where `.env` does not enable export, else it would pass
+      vacuously in CI, whose config default is already `False`) + AST ordering.
+      Harness `backend/revert_nr.py` **2/2** — R1 (the inverse) fails both, R2
+      (an in-place `"true"` probe) fails only the behavioural one, which is what
+      proves neither test is redundant. The harness runs its child pytest with
+      `NEW_RELIC_OTLP_ENDPOINT=""` (`logs.py:36` is the gate) so that proving
+      the fix never itself ships records; `test_otlp_logs.py` is unaffected
+      because it monkeypatches `OTLPLogExporter` with an in-memory fake.
+    - **Two measurement traps, each of which "proved" the opposite of the
+      truth.** (a) `docker logs` on the collector goes to **stderr**: with
+      `2>$null` it returns 0 lines, and with `2>&1` every line is an
+      `ErrorRecord`, so `.Substring()` throws and `Select-String` matches
+      nothing useful — two probes reported "0 faker records passed the
+      collector" that way. Read it as `(docker logs ... 2>&1 | ForEach-Object {
+      "$_" })`. (b) The debug exporter is `verbosity: basic`
+      (`docker/otel-collector-config.yaml:109`) and prints **counts only**
+      (`"log records": 47`), never bodies, so collector logs can count records
+      but can never identify them. Attribution came from batch counts around a
+      controlled session, not from reading them.
+    - **`otlp.nr-data.net:4318` is valid — do not "fix" config line 98.** Both
+      `:4318` and `:443` answer HTTP 200 to a key-authenticated `/v1/logs`
+      POST (measured). The collector's 81 `Exporting failed` lines are all
+      `signal: metrics` (logs: 5, all retried; **0 log batches ever dropped**),
+      ending in 12 dropped metric batches, and the error is Docker DNS
+      (`lookup otlp.nr-data.net on 127.0.0.11:53: server misbehaving`) — an
+      environment flake, not a defect. The recurring `Failed to scrape
+      Prometheus endpoint` warnings are simply the backend not running.
+    - **Batch sizes 47 vs 48** are consistent with `+1 sentry_initialized` on
+      the runs where `revert_sentry.py` had the Sentry guard reverted (R1/R2),
+      but that particular attribution was **not** separately measured; the 47
+      figure was.
+
 ## 9b. Already solved — do not re-propose
 
 Bounded revision loop with force-accept; LLM retry/empty-response handling +
@@ -1706,8 +1763,12 @@ without which the pinned contrib image refuses to start, and
 real container instead; plus the `tests/conftest.py` `SENTRY_DSN` ordering fix,
 whose guard ran too late to beat the settings singleton built during import.
 US region; the key is held only in the repo-root `.env`. Suites: backend
-**1314 passed, 4 skipped**; guards `revert_otel.py` 2/2 and `revert_sentry.py`
-2/2. Both recorded in §9.29.)
+**1316 passed, 4 skipped** (the 1314 baseline + the 2 new guards); guards
+`revert_otel.py` 2/2, `revert_sentry.py` 2/2 and `revert_nr.py` 2/2. The same
+day added the third telemetry guard — `tests/conftest.py` turns New Relic log
+export off for pytest, whose faker autouse fixture was shipping 47 records per
+run (§9.30) — verified by a full-suite run leaving the collector's batch count
+at **43 -> 43, delta 0**. §9.29 and §9.30 record this.)
 
 _Previously: 2026-10-05 (LangSmith tracing brought **live** — the 403 was a
 wrong-region default, not a bad credential: `LANGSMITH_ENDPOINT` added to

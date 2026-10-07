@@ -57,6 +57,24 @@ os.environ["LANGSMITH_TRACING"] = "false"
 # the file.
 os.environ["SENTRY_DSN"] = ""
 
+# Third telemetry sink: tests must not ship LOGS to New Relic either.
+# backend/.env:91 sets NEW_RELIC_ENABLED=true because the *app* should export,
+# and pytest loads that file, so conftest's first backend import builds the
+# settings singleton with it true and main.py:40 -> setup_logging() -> the
+# logging.py:183 gate attaches the OTLP LoggingHandler to the ROOT logger at
+# DEBUG (LOG_LEVEL unset + ENVIRONMENT=development -> logging.py:84 -> DEBUG).
+# Everything a session logs then leaves the machine, and most of it is not the
+# app's: faker's autouse session fixture (faker/contrib/pytest/plugin.py:9-20)
+# constructs a Faker in EVERY session, emitting 44 DEBUG locale messages, so
+# one measured session left exactly one 47-record batch in the collector
+# (44 faker + 3 app-init; measured 2026-10-07) and every suite run repeated it.
+# Same position rule as the two guards above: an assignment made after the
+# first backend import is a no-op, because the singleton has already read the
+# file. The app itself is unaffected -- nothing sets this outside pytest, so
+# `make backend` still exports (viewer.py's "inactive" status in tests is the
+# honest reading of this).
+os.environ["NEW_RELIC_ENABLED"] = "false"
+
 import backend.app.infrastructure.cache.redis_client as cache_module  # noqa: E402
 import redis.asyncio as redis  # noqa: E402
 from _testcontainers import (  # noqa: E402
