@@ -576,7 +576,7 @@ Windows shell gotchas (learned the hard way):
 
 ## 7. Testing inventory (verified counts)
 
-- Backend: **75 unit test files** in `backend/tests/`, **11 integration files**
+- Backend: **76 unit test files** in `backend/tests/`, **11 integration files**
   in `backend/tests/integration/` and **1 e2e file** in `backend/tests/e2e/`
   (9 tests — verified with `uv run pytest -m e2e --collect-only`, which
   collects exactly those 9 and nothing else; the earlier "3 e2e" in this
@@ -587,11 +587,21 @@ Windows shell gotchas (learned the hard way):
   **A new test file that touches the run log must declare its own `store` /
   `session_factory` fixtures from `tests/fakes.py`**, shadowing conftest's
   real-DB one, or it writes to whatever `DATABASE_URL` names (§9.16).
-- Suite total: **1301 passed, 4 skipped, 9 deselected, 0 errors, 0 failures**
+- Suite total: **1306 passed, 4 skipped, 9 deselected, 0 errors, 0 failures**
   for a plain `cd backend && uv run pytest` with Docker up (measured
-  2026-10-04, 598s — the run is I/O-bound on the testcontainer). The
+  2026-10-05, 386s — the run is I/O-bound on the testcontainer; the previous
+  measurement was 1301/598s, and the +5 is exactly
+  `tests/test_langsmith_region.py`). The
   `integration` marker is unregistered, so the 11 integration files run by
   default; `addopts` excludes e2e, which is where the 9 deselected come from.
+  **Do not read the exit code off a pipeline.** `pytest ... | Select-Object -Last
+  N` reports **1** on a fully green run: with `LANGSMITH_TRACING=true` the
+  langsmith SDK registers an `atexit` `close_session` that logs through a
+  handler whose stream pytest has already closed, and under a pipe that
+  `ValueError: I/O operation on closed file` reaches the shell as a non-zero
+  status. Redirect to a **file** and read the summary line instead — that is
+  how the 1306 above was measured. `make test` writes straight to the console
+  and is unaffected, and CI has no `.env`, so tracing is off there.
   **If Docker Desktop is not running those 11 files produce ~113
   `DockerException` setup errors**; that is the environment, not a regression.
   Verify with `docker info` before investigating — and on Windows, *restart* it
@@ -623,6 +633,11 @@ Windows shell gotchas (learned the hard way):
   `src/test/lib/conversation-history.test.ts` (14) and
   `src/test/chat-stream-rejoin.test.ts` (10), covered by
   `frontend/revert_c3.py` (**17/17** load-bearing).
+  LangSmith region (the §9.26 outage): `test_langsmith_region.py` (5),
+  covered by `backend/revert_ls.py` (**4/4** load-bearing). It reads the SDK's
+  own default endpoint out of `langsmith/utils.py` with `ast` rather than
+  hardcoding it, because a hardcoded copy is a second source of truth that
+  drifts the moment LangChain renames a host.
 - `walkthrough.md` once claimed "82 tests" — that is stale. Current counts: see
   above.
 - Backend pyproject: `addopts = -v -m 'not e2e'` — plain `pytest` skips e2e.
@@ -1144,36 +1159,80 @@ different tests) looked like three unrelated bugs instead of one.
     resend would have produced a second, differently-worded answer and charged
     for it.**
 
-26. **Two of the three observability switches are blocked on credentials, and
-    one of them was blocked in a way that looked like a working feature.**
-    Measured 2026-10-04 against the live deployment; both `backend/.env` flags
-    were flipped, exercised, and then put **back** where they were.
-    - **`LANGSMITH_TRACING`: every ingest POST returns 403.** Not a code fault.
-      The configured key is a *project* token (`lsv2_pt_...`, not `lsv2_sk_...`).
-      `POST /runs/multipart` → `403 {"error":"Forbidden"}` and
-      `GET /sessions` → `403 Forbidden`, **both with and without a
-      `project_name`**. `/info` answers 200, but that endpoint does not
-      authenticate, so it is not evidence the token has workspace access — the
-      honest claim is "this token cannot reach the workspace owning
-      `nexus-ai-assistant`", not "the key works but is read-only". The symptom
-      is nasty and worth naming: langchain logs the failure as a *warning*
-      (`Failed to multipart ingest runs`) and the run **completes normally**,
-      so a dashboard that stays empty looks identical to an app that produced
-      no spans. Anyone enabling this must first prove the upload is *accepted*
-      (`docs/observability/langsmith-trace-sample.md` has the one-line check);
-      leave the flag `false` until then, since on it only pays for rejected
-      requests.
-    - **`NEW_RELIC_LICENSE_KEY` is absent**, and the ingest key belongs on the
-      *collector* (`docker/otel-collector-config.yaml`), not the app. Bringing
-      New Relic live additionally requires deploying that collector to a
-      reachable endpoint. Neither is a code change; see
-      `docs/observability-deployment.md` for the remaining ops steps.
-    - **What *was* delivered instead:** `docs/observability/langsmith-trace-sample.md`
-      — a real run's complete span tree (`LangGraph → bootstrap → planner →
+26. **LangSmith tracing is LIVE, and it was broken for a week by a wrong-region
+    default that looked exactly like a bad credential. New Relic is still
+    blocked on credentials.**
+    - **LangSmith runs FOUR separate deployments, each with its own accounts
+      and its own API.** GCP US / GCP EU / GCP APAC / AWS US, with Supabase auth
+      per region. A key minted in one is **unknown to the other three**:
+      `GET /sessions?limit=1` returns `403` on the wrong host for a perfectly
+      valid key. The SDK defaults to `api.smith.langchain.com`, so
+      `LANGSMITH_ENDPOINT` is **mandatory** unless you signed up on GCP US. This
+      repo's workspace (`708479fc-5ba2-496b-b30f-f313bee4d409`, `Workspace 1`,
+      created 2026-09-05) is on **AWS US**, so `backend/.env` now sets
+      `LANGSMITH_ENDPOINT=https://aws.api.smith.langchain.com` +
+      `LANGSMITH_TRACING=true`. Traced 2026-10-05: the *existing* `lsv2_pt_`
+      key returns `200` on that host and `403` on the other three, same
+      instant.
+    - **The correction matters more than the fix: the original diagnosis in this
+      section was wrong.** It claimed the `lsv2_pt_` token "cannot reach the
+      workspace" and prescribed a new `lsv2_sk_` service key. The key was
+      always fine; a new service key would have 403'd identically. The mistake
+      was generalisable: **a 403 means "this host does not know this key", not
+      "this key is bad"** — and that has two causes with opposite fixes (wrong
+      region vs. real scope), so probe *all four* hosts before concluding
+      anything about credential scope. `/info` answering 200 proves nothing: it
+      is unauthenticated and answers on every host.
+    - **The failure was invisible in the dashboard**, which is what made it cost
+      a week. LangSmith logs the ingest failure as a *warning* (`Failed to
+      multipart ingest runs`) and the run **completes normally**, so an empty
+      LangSmith is indistinguishable from an app that emitted no spans. Always
+      verify an upload is *accepted* before believing a dashboard
+      (`docs/observability/langsmith-trace-sample.md` has the three checks: read
+      the API, ingest one run, list it back). The `nexus-ai-assistant` tracing
+      project does not exist until the first successful ingest creates it — an
+      empty project list is not a failure.
+    - **`LANGSMITH_WORKSPACE_ID` is deliberately NOT set.** The SDK turns it into
+      an `X-Tenant-Id` header (`langsmith/client.py`), and a wrong tenant id is
+      another way to earn a 403. It is only needed for a key scoped to more than
+      one workspace.
+    - **A service key is still the right long-term credential** (a PAT dies when
+      its creator leaves the org) but it is a hygiene item, not a fix — pick
+      workspace-scoped, since an org-scoped key *requires* `X-Tenant-Id` and
+      omitting it 403s.
+    - **`NEW_RELIC_LICENSE_KEY` is still absent**, and the ingest key belongs on
+      the *collector* (`docker/otel-collector-config.yaml`), not the app.
+      Bringing New Relic live additionally requires deploying that collector to a
+      reachable endpoint. See `docs/observability-deployment.md` for the
+      remaining ops steps.
+    - **Verified end to end, not merely configured** (2026-10-05, live): the SDK
+      resolved `aws.api.smith.langchain.com`, `/info` authenticated, an ingest
+      POST was **accepted**, it auto-created the `nexus-ai-assistant` project,
+      and the run read back via `list_runs`. A read-only probe cannot establish
+      any of that — only the write can.
+    - **Two SDK 0.12.1 facts that both produced a confident-looking FALSE
+      FAILURE** on a system that was working: `Client.create_run()` **returns
+      `None`** (so `.id` raises `AttributeError`, indistinguishable from a
+      rejected upload — judge success by what the call *caused*), and `Client`
+      has **no `delete_run`** while `DELETE /runs/{id}` answers **405**, so probe
+      runs can only be removed in the UI. Also: `list_runs`/`list_threads` emit
+      `DeprecationWarning` (use `client.runs.query()`), and `client.info` is a
+      `LangSmithInfo` object with no `.get()`.
+    - **Guarded by** `tests/test_langsmith_region.py` (5 tests), which reads the
+      SDK's own default out of `langsmith/utils.py` with `ast` rather than
+      hardcoding it — a hardcoded copy is a second source of truth that drifts
+      the moment LangChain renames a host. Revert harness:
+      `backend/revert_ls.py`, **4/4 load-bearing**. Two harness defects are
+      recorded in it: `restore()` used to delete the snapshot after the first
+      revert, so every later restore was a silent no-op (and it left
+      `.env.example` genuinely reverted on disk), and a revert that deleted one
+      region-table row still passed a substring assertion because the *sibling*
+      `eu.`/`apac.`/`aws.` rows all contain `api.smith.langchain.com`.
+    - **The trace document is `docs/observability/langsmith-trace-sample.md`** —
+      a real run's complete span tree (`LangGraph → bootstrap → planner →
       route_after_planner → orchestrator → route_after_critic → critic_grader →
       synthesizer → artifact`, 10 spans, ~10.4s, per-node timings), captured
-      from the `astream_events` payloads. Real, not simulated; only the
-      *destination* is missing.
+      from the `astream_events` payloads. Real, not simulated.
     - **Two capture bugs worth remembering, because both produced a
       confidently wrong document.** (a) The answer came out **repeated three
       times**: the capture replicated the endpoint's `on_chain_stream`
@@ -1557,6 +1616,66 @@ different tests) looked like three unrelated bugs instead of one.
       the premise was, and neither of which is visible from reading the feature
       list.
 
+29. **New Relic is live end to end, and neither of the two guards protecting it
+    could have been written from the docs.** Done 2026-10-07. The ingest key
+    lives **only** in the repo-root `.env` (gitignored, `.gitignore:23`) and is
+    read by the collector as `${env:NEW_RELIC_LICENSE_KEY}` -- never in
+    `backend/.env`, never in a tracked file. `backend/.env` gained only
+    `NEW_RELIC_ENABLED=true` + `NEW_RELIC_OTLP_ENDPOINT=http://localhost:4318`.
+    - **The collector config was valid YAML and fatal at graph build** --
+      `processors.resource.attributes` entries in
+      `docker/otel-collector-config.yaml` had no `action`, so startup dies with
+      the error now quoted in the file. Adding `action: upsert` to both entries
+      fixed it, verified by a real container start (`running=true exit=0`,
+      `{"status":"Server available"}` at `localhost:13133/healthz`, zero error
+      lines across the 60s `retry_on_failure` window), then
+      `POST http://localhost:4318/v1/logs` (200 `{"partialSuccess":{}}`, debug
+      exporter `log records: 1`), then the app's own `logging.py:183`
+      (`otlp_log_handler_wired endpoint=.../v1/logs`). A direct key probe to
+      `https://otlp.nr-data.net/v1/logs` returned 200. Region is **US**, so the
+      endpoint at line 89 needed no change. Only the New Relic UI confirmation
+      is outstanding (the user's), since the backend is **not deployed yet**.
+    - **`otelcol validate` is not a substitute for starting the collector.**
+      Measured on the pinned image: it exits **0** on that broken config (it
+      only unmarshals -- it never builds the component graph) and **1** on
+      garbage, so a green `validate` proves only that the file was parsed.
+      Hence `tests/test_otel_collector_config.py` pairs a static
+      `test_every_resource_attribute_declares_an_action` with
+      `test_the_collector_really_builds_the_tracked_config`, which boots the
+      pinned contrib image and waits for `Everything is ready`. Do not
+      "simplify" it back to `validate`. `revert_otel.py` is **2/2** (R1 the
+      inverse; R2 a probe adding `does_not_exist` to one pipeline -- static
+      passes, startup fails). Never run it concurrently with a suite run: it
+      reverts a file the suite tests.
+    - **The Sentry guard in `tests/conftest.py` only works by position.**
+      `os.environ["SENTRY_DSN"] = ""` sat *after* conftest's first backend
+      import. `app/infrastructure/cache/redis_client.py:4` does
+      `from backend.app.core.config import settings`, which constructs the
+      singleton at import time (`config.py:740`) and reads `backend/.env`'s
+      real 95-character DSN; `main.py:44` then calls `sentry_sdk.init()`. So
+      the assignment was a no-op and every local pytest run initialised Sentry
+      -- exactly the shutdown `--- Logging error ---` the comment above the
+      guard exists to prevent. `SettingsConfigDict` sets no `env_ignore_empty`,
+      so `""` is honoured instead of falling back to the file, which is what
+      makes the fix work at all. Guarded by
+      `tests/test_no_sentry_in_tests.py`: a behavioural test on
+      `settings.SENTRY_DSN` that **skips** when `backend/.env` defines no DSN
+      (else it would pass vacuously), plus an `ast` ordering test that is
+      load-bearing everywhere, CI included. `revert_sentry.py` is **2/2**, and
+      two of its own defects are worth keeping: a probe value that is merely
+      non-empty raises `BadDsn` while conftest imports `backend.app.main`, so
+      collection dies and the harness reports INCONCLUSIVE instead of the
+      asymmetry it wants (the probe must be *DSN-shaped* and offline); and
+      `restore()` must compare the restored bytes against the snapshot, never
+      against the pre-restore bytes, because those differ by definition while a
+      revert is live.
+    - **`-r` REPLACES the report characters.** `-rf -rs` prints skip summaries
+      and **zero** `FAILED` names while tests fail underneath -- measured, and
+      it fooled two harnesses. Use one combined flag (`-rfs`) or no `-r` at
+      all; `SKIPPED` lines carry `file:line` with no `::`.
+    - Backend suite measured **1314 passed, 4 skipped, 9 deselected** after
+      these changes (baseline 1312).
+
 ## 9b. Already solved — do not re-propose
 
 Bounded revision loop with force-accept; LLM retry/empty-response handling +
@@ -1580,7 +1699,25 @@ were all re-verified against source during the Batch A–D work.
 
 ---
 
-_Last updated: 2026-10-02 (Batches A–D incl. D3 artifacts; then migration-graph
+_Last updated: 2026-10-07 (New Relic brought **live end to end** -- the
+collector's `processors.resource.attributes` entries gained `action: upsert`,
+without which the pinned contrib image refuses to start, and
+`otelcol validate` exits 0 on that same broken config, so the guard boots a
+real container instead; plus the `tests/conftest.py` `SENTRY_DSN` ordering fix,
+whose guard ran too late to beat the settings singleton built during import.
+US region; the key is held only in the repo-root `.env`. Suites: backend
+**1314 passed, 4 skipped**; guards `revert_otel.py` 2/2 and `revert_sentry.py`
+2/2. Both recorded in §9.29.)
+
+_Previously: 2026-10-05 (LangSmith tracing brought **live** — the 403 was a
+wrong-region default, not a bad credential: `LANGSMITH_ENDPOINT` added to
+`.env`/`.env.example`/`config.py`, `LANGSMITH_TRACING=true`, ingest verified end
+to end against the AWS deployment, and §9.26's "the key cannot reach the
+workspace" diagnosis retracted in three places. Guarded by
+`tests/test_langsmith_region.py` + `backend/revert_ls.py`, 4/4 load-bearing.
+New Relic still blocked on the ingest key. Suite 1306 passed.)
+
+_Before that: 2026-10-02 (Batches A–D incl. D3 artifacts; then migration-graph
 linearization, `/auth/oauth/providers` + sign-in wiring, model remap, Makefile
 gates, admin user-erasure endpoint, all three dead config files removed,
 guardrail Unicode-evasion fix, `docs/api-reference.md` resync; then the

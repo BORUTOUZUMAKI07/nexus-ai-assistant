@@ -254,6 +254,20 @@ class Settings(BaseSettings):
     # type-checked alongside everything else; do not delete them from .env on the
     # grounds that nothing references these attributes.
     LANGSMITH_API_KEY: str | None = None
+    # Which LangSmith *deployment* to talk to. LangSmith runs four of them
+    # (GCP US / GCP EU / GCP APAC / AWS US), each with separate accounts, and a
+    # key from one is unknown to the other three — every call 403s. Left unset,
+    # the SDK silently defaults to the GCP-US host, which is why a perfectly
+    # valid key can fail everywhere while `/info` (unauthenticated) still answers
+    # 200. Set it to the API host for the region you signed up at:
+    #   https://api.smith.langchain.com       (GCP US, the SDK default)
+    #   https://eu.api.smith.langchain.com    (GCP EU)
+    #   https://apac.api.smith.langchain.com  (GCP APAC)
+    #   https://aws.api.smith.langchain.com   (AWS US)
+    # Note the API host is not the UI host: aws.smith.langchain.com is a web
+    # page and will not accept ingest. None here is the right default because
+    # picking the wrong one is the silent failure, not an obvious error.
+    LANGSMITH_ENDPOINT: str | None = None
     LANGSMITH_PROJECT: str = Field(default="nexus-ai-assistant")
     LANGSMITH_TRACING: bool = Field(default=False)
     SENTRY_DSN: str | None = None

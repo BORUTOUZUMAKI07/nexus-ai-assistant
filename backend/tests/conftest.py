@@ -31,11 +31,34 @@ sys.path.insert(0, str(tests_dir))
 # any backend module constructs the settings singleton.
 import os  # noqa: E402
 
-import backend.app.infrastructure.cache.redis_client as cache_module  # noqa: E402
-import redis.asyncio as redis  # noqa: E402
+# Tests must not ship traces to LangSmith either, for the same reason Sentry is
+# switched off below: backend/.env sets LANGSMITH_TRACING=true because the *app*
+# should trace, and pytest loads that file. tests/test_node_policies.py compiles
+# a real StateGraph, so one local suite run uploaded 120 spans into the
+# LangSmith project (measured 2026-10-05) and mixed pytest fixtures in with real
+# conversation traces. Nothing failed; the pollution was only visible from the
+# API side.
+#
+# Placed before the backend imports on purpose: langsmith's get_env_var is
+# @functools.lru_cache'd on its *arguments*, not on the environment, so a "true"
+# read once during import would survive every later assignment for the whole
+# session. Nothing in this file's import chain reaches langsmith first (there is
+# no conftest above this one), so ordering is the entire mechanism -- and
+# test_the_sdk_would_not_trace_from_this_session reads *through* that cache, so
+# a stale value would fail there rather than silently upload spans.
+os.environ["LANGSMITH_TRACING"] = "false"
 
+# Set BEFORE the backend imports below, not after them: the first one
+# (redis_client) runs `from backend.app.core.config import settings`, which
+# builds the singleton right there. Assigned afterwards, this line is a no-op
+# -- settings has already read backend/.env's live DSN, and main.py:44 then
+# calls sentry_sdk.init() with it during tests. SettingsConfigDict sets no
+# env_ignore_empty, so an empty value is honoured instead of falling back to
+# the file.
 os.environ["SENTRY_DSN"] = ""
 
+import backend.app.infrastructure.cache.redis_client as cache_module  # noqa: E402
+import redis.asyncio as redis  # noqa: E402
 from _testcontainers import (  # noqa: E402
     build_session_factory,
     build_test_engine,

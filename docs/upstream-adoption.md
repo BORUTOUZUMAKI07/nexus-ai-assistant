@@ -157,7 +157,10 @@ UI and no product requirement for one. Revisit with a concrete user story.
 ### 3.4 LangSmith Studio — **not adopted**
 
 A dev-time tool, not a runtime dependency. Tracing is already available
-opt-in via `LANGSMITH_TRACING` (`backend/app/core/config.py:258`).
+opt-in via `LANGSMITH_TRACING` (`backend/app/core/config.py:258`), with
+`LANGSMITH_ENDPOINT` required whenever the account is not on the default
+GCP-US deployment — LangSmith's four regions share no accounts, so a key from
+one 403s on the other three.
 
 ### 3.5 Test fakes — **already the repo's pattern**
 

@@ -71,6 +71,12 @@ useful deployment:
   `NEW_RELIC_LICENSE_KEY` secret — the app itself never holds an NR key
 - LangSmith traces: `LANGSMITH_API_KEY` + `LANGSMITH_TRACING=true` (LangGraph
   auto-instruments; free tier shows the orchestration graphs)
+- **Also set `LANGSMITH_ENDPOINT`** if you did not sign up on the default GCP-US
+  deployment. LangSmith is four separate deployments (GCP US / EU / APAC / AWS
+  US) with separate accounts, and a key from one returns `403` on the other
+  three. Use the API host for your region, e.g.
+  `https://aws.api.smith.langchain.com` — not the `smith.` UI host, which will
+  not accept ingest. See `docs/observability/langsmith-trace-sample.md`.
 
 ## 3. Run database migrations
 

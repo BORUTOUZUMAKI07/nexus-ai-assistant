@@ -77,12 +77,21 @@ processors:
   batch:
     send_batch_size: 512
     timeout: 5s
+  # `action` is REQUIRED on every entry in collector-contrib v0.121: leaving it
+  # out yields an empty action, and the processor refuses to build --
+  #     failed to build pipelines: failed to create "resource" processor, in
+  #     pipeline "logs": error creating AttrProc due to unsupported action ""
+  # which kills the collector at startup (exit 1) before /healthz ever answers.
+  # `upsert` is the intended semantics: set the attribute, or overwrite it if a
+  # sender already set one.
   resource:
     attributes:
       - key: deployment.environment
         value: ${env:ENVIRONMENT}
+        action: upsert
       - key: service.name
         value: nexus-ai-assistant
+        action: upsert
 
 exporters:
   otlphttp/newrelic:
