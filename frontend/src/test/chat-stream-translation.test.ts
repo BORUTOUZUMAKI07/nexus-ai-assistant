@@ -233,4 +233,47 @@ describe("/api/chat SSE translation", () => {
       restore()
     }
   })
+
+  it("emits a lead-in byte before any frame so the headers flush when the response opens", async () => {
+    // Next only flushes the response headers on the body's first write
+    // (next/dist/server/pipe-readable.js: "we don't actually flush the headers
+    // until we've started writing chunks"). X-Nexus-Run-Id rides those headers,
+    // and the backend's first frame can arrive a minute after the response
+    // opens — so without a lead-in the client cannot store the run id for the
+    // whole window, and a refresh there silently loses the rejoin (§9.27).
+    //
+    // The stubbed upstream never produces a frame and never closes, so only
+    // the lead-in can resolve this read: without it the read hangs and the
+    // test fails on its timeout rather than passing for the wrong reason.
+    const original = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start() {
+            // intentionally never enqueues or closes
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream", "X-Nexus-Run-Id": "33333333-3333-3333-3333-333333333333" } }
+      )) as unknown as typeof fetch
+    try {
+      const POST = await chatRoute()
+      const res = await POST(request(), {})
+      expect(res.headers.get("X-Nexus-Run-Id")).toBeTruthy()
+      const reader = res.body!.getReader()
+      const first = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("no byte written before the first backend frame")),
+            2000
+          )
+        ),
+      ])
+      expect(first.done).toBe(false)
+      expect(new TextDecoder().decode(first.value)).toBe("\n")
+      await reader.cancel()
+    } finally {
+      globalThis.fetch = original
+    }
+  })
 })

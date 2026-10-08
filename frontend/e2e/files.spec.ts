@@ -62,7 +62,11 @@ test.describe("Knowledge & RAG", () => {
     await page
       .getByPlaceholder("Ask a question about your documents…")
       .fill("What is Hybrid Search?")
-    await page.getByRole("button", { name: "Search" }).click()
+    // exact: true — the CommandPalette trigger's aria-label is "Search or run a
+    // command (Command or Control K)", which a non-exact "Search" match also
+    // resolves and strict mode refuses (measured: 2 elements). The Knowledge
+    // view's own submit button is the exact-name one.
+    await page.getByRole("button", { name: "Search", exact: true }).click()
 
     await expect(page.getByText("Native Hybrid Search uses multi-stage prefetch.")).toBeVisible()
     await expect(page.getByText(/Score: 0.94/)).toBeVisible()

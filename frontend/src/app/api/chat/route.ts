@@ -211,6 +211,16 @@ function streamTranslation(
 
   return new ReadableStream({
     async start(controller) {
+      // Next only flushes the response headers on the first body write
+      // (node_modules/next/dist/server/pipe-readable.js: "we don't actually
+      // flush the headers until we've started writing chunks"), and the first
+      // translated backend frame can be a minute behind this response opening.
+      // Without this lead-in byte the X-Nexus-Run-Id header above is withheld
+      // until the first frame, so a refresh in that window never stores the run
+      // id and cannot rejoin — a failure the client cannot even observe.
+      // An empty line is ignored by chatStream.ts (`if (!line) return`) and
+      // filtered by the tests' frames() helpers, so it carries no semantics.
+      controller.enqueue(new TextEncoder().encode("\n"));
       try {
         const reader = body.getReader();
         const textDecoder = new TextDecoder();
