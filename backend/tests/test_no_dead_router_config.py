@@ -37,9 +37,9 @@ reason and with the same three-way drift:
                          Clarity and returns STATUS/SCORE/FEEDBACK
     task_contracts.yaml  context budget 0.60 / 0.85 / 0.95 tiers
                          context_compiler.py has one ratio, 0.75
-    eval_criteria.yaml   g_eval_rubrics (a heuristic metric)
-                         heuristic was removed from dependencies over unpatched
-                         CVEs in 2026-09
+    eval_criteria.yaml   g_eval_rubrics (a third-party eval-library metric)
+                         that library was removed from dependencies over
+                         unpatched CVEs in 2026-09
     eval_criteria.yaml   profanity sanitize tier
                          no profanity filter exists anywhere in the app
 

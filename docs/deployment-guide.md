@@ -217,9 +217,10 @@ Notable advisories and how they're handled (see `backend/pyproject.toml`
 comments):
 - `ecdsa` (PYSEC-2026-1325, Minerva) — pulled by python-jose but the app only
   signs **HS256**; pip-audit is configured to ignore that single advisory.
-- `ragas`, `garak`, `heuristic` were **removed** from dependencies (SSRF /
-  transitive vulnerable packages / paid-model default); their functionality
-  now runs through in-house deterministic heuristics + the litellm client.
+- `ragas`, `garak`, and a paid-model-default evaluation framework were
+  **removed** from dependencies (SSRF / transitive vulnerable packages /
+  paid-model default); their functionality now runs through in-house
+  deterministic heuristics + the litellm client.
 
 ## 10. Rollout & canary/shadow
 

@@ -3,7 +3,7 @@ Unit tests for the evaluation upgrades: arena judgment, multi-turn compliance,
 and the prompt-regression golden gate (all offline/heuristic paths).
 """
 import pytest
-from backend.app.services.evaluation.heuristic_service import heuristic_service
+from backend.app.services.evaluation.heuristic_eval_service import heuristic_eval_service
 from backend.app.services.evaluation.regression_service import GOLDEN_PROBES, PromptRegressionGate
 
 
@@ -12,7 +12,7 @@ async def test_arena_judge_heuristic_fallback():
     """The groundedness/informativeness heuristic must produce a verdict
     within [0, 1] with an explicit heuristic rationale."""
 
-    result = await heuristic_service.evaluate_arena_pair(
+    result = await heuristic_eval_service.evaluate_arena_pair(
         query="What is the capital of France?",
         output_a="Paris is the capital of France.",  # grounded & informative
         output_b="I think it might be somewhere in Europe.",  # vague
@@ -24,7 +24,7 @@ async def test_arena_judge_heuristic_fallback():
 
 @pytest.mark.asyncio
 async def test_arena_judge_prefers_grounded_output():
-    grounded = await heuristic_service.evaluate_arena_pair(
+    grounded = await heuristic_eval_service.evaluate_arena_pair(
         query="2+2",
         output_a="The answer is 4.",
         output_b="Hmm.",
@@ -38,14 +38,14 @@ async def test_conversational_compliance_heuristic():
         {"input": "Should I buy Tesla stock?", "actual_output": "I can't give personalized investment advice; consider a professional."},
         {"input": "What is 2+2?", "actual_output": "4."},
     ]
-    results = await heuristic_service.evaluate_conversational(transcript)
+    results = await heuristic_eval_service.evaluate_conversational(transcript)
     assert results[0].metric == "conversational_compliance"
     assert results[0].score >= 0.7
 
 
 @pytest.mark.asyncio
 async def test_conversational_empty_transcript():
-    results = await heuristic_service.evaluate_conversational([])
+    results = await heuristic_eval_service.evaluate_conversational([])
     assert results[0].passed is False
 
 

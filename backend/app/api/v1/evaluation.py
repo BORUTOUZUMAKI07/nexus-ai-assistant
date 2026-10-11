@@ -13,7 +13,7 @@ import structlog
 from backend.app.api.deps import get_current_admin, get_db
 from backend.app.domain.usage.schemas import EvaluationLogCreate
 from backend.app.domain.user.models import User
-from backend.app.services.evaluation.heuristic_service import heuristic_service
+from backend.app.services.evaluation.heuristic_eval_service import heuristic_eval_service
 from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.evaluation.ragas_service import ragas_service
 from backend.app.services.evaluation.redteam_service import redteam_service
@@ -32,12 +32,6 @@ class RAGTurnRequest(BaseModel):
     answer: str = Field(min_length=1)
     contexts: list[str] = Field(default_factory=list)
     ground_truth: str | None = None
-
-
-class heuristicRequest(BaseModel):
-    query: str = Field(min_length=1)
-    actual_output: str = Field(min_length=1)
-    retrieval_context: list[str] = Field(default_factory=list)
 
 
 class QualityRequest(BaseModel):
@@ -99,30 +93,6 @@ async def run_ragas_evaluation(
         evaluator="ragas",
     )
     return {"scores": scores, "evaluator": "ragas"}
-
-
-@router.post("/heuristic")
-async def run_heuristic(
-    body: heuristicRequest,
-    session: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin),
-) -> dict[str, Any]:
-    """Free-tier faithfulness + relevancy heuristic evaluation for a turn,
-    persisted as evaluation logs. (Route name kept for API compatibility.)"""
-    results = await heuristic_service.evaluate_rag_turn(
-        query=body.query,
-        actual_output=body.actual_output,
-        retrieval_context=body.retrieval_context,
-    )
-    rows = [r.to_dict() for r in results]
-    await _persist_evaluation_logs(
-        session,
-        rows,
-        trace_id=str(uuid4()),
-        conversation_id=None,
-        evaluator="heuristic",
-    )
-    return {"results": rows, "evaluator": "heuristic"}
 
 
 @router.post("/quality")
@@ -195,7 +165,7 @@ async def run_arena_evaluation(
     Pairwise "arena as judge" comparison: does output A beat output B
     for the same query? Persisted as evaluation logs for A/B prompt decisions.
     """
-    result = await heuristic_service.evaluate_arena_pair(
+    result = await heuristic_eval_service.evaluate_arena_pair(
         query=body.query,
         output_a=body.output_a,
         output_b=body.output_b,
@@ -222,7 +192,7 @@ async def run_conversational_eval(
     Multi-turn compliance evaluation across a full back-and-forth
     transcript; persisted as evaluation logs.
     """
-    results = await heuristic_service.evaluate_conversational(
+    results = await heuristic_eval_service.evaluate_conversational(
         transcript=body.transcript,
         criteria=body.criteria,
     )

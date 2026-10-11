@@ -2,7 +2,6 @@
 Celery Background Tasks.
 Handles asynchronous heavy-duty operations:
 - File vector ingestion & indexing (RAG pipeline)
-- Free-tier (heuristic) background evaluation benchmarks
 - Redis cache garbage collection and cleanup
 - Canvas pipelines (Chains, Groups, Chords)
 """
@@ -16,7 +15,6 @@ from backend.app.domain.file.repository import FileRepository
 from backend.app.infrastructure.database.session import async_session_factory
 from backend.app.infrastructure.resilience.guards import singleton_lock
 from backend.app.infrastructure.storage.supabase_storage import storage_client
-from backend.app.services.evaluation.heuristic_service import heuristic_service
 from backend.app.services.rag.ingest import ingestion_service
 from backend.app.worker.celery_app import celery_app
 
@@ -130,32 +128,6 @@ def process_file_indexing_task(self, file_id_str: str, payload: dict | None = No
         except Exception as status_exc:
             logger.warning("celery_indexing_failure_status_update_failed", file_id=file_id_str, error_type=type(status_exc).__name__)
         raise self.retry(exc=exc)
-
-
-@celery_app.task(name="tasks.evaluate_turn")
-def evaluate_turn_task(query: str, response: str, contexts: list[str]) -> dict:
-    """
-    Evaluates an individual RAG or LLM conversation turn for hallucination and relevancy.
-    """
-    async def _eval():
-        results = await heuristic_service.evaluate_rag_turn(
-            query=query,
-            actual_output=response,
-            retrieval_context=contexts,
-        )
-        return [r.to_dict() for r in results]
-
-    res = run_async(_eval())
-    return {"status": "completed", "results": res}
-
-
-@celery_app.task(name="tasks.periodic_evaluation")
-def periodic_evaluation_task() -> dict:
-    """
-    Periodic evaluation of recent conversations via the free-tier heuristics.
-    """
-    logger.info("periodic_evaluation_task_running")
-    return {"status": "completed", "evaluated_turns": 0}
 
 
 @celery_app.task(name="tasks.cache_cleanup")

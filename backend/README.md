@@ -80,7 +80,7 @@ list. The short version:
 - New routers register in `api/v1/api.py`; admin routes use
   `get_current_admin` and hand-built dicts.
 - No new third-party deps without an advisory review (see pyproject comments —
-  ragas/garak/heuristic were removed over CVEs).
+  ragas/garak and a paid-LLM evaluation framework were removed over CVEs).
 
 ## Testing
 

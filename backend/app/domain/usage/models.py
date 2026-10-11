@@ -57,6 +57,6 @@ class EvaluationLog(SQLModel, table=True):
     score: float = Field(default=0.0)
     passed: bool = Field(default=True)
     reason: str | None = Field(default=None)
-    evaluator: str = Field(default="heuristic")  # heuristic, ragas, g-eval, guardrail
+    evaluator: str = Field(default="heuristic")  # heuristic, ragas, arena_judge, conversational, guardrail
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None), index=True)

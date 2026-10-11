@@ -14,7 +14,6 @@ from backend.app.agents.orchestrator import nodes
 from backend.app.agents.subagents import coder as coder_module
 from backend.app.agents.subagents.coder import coder_subagent
 from backend.app.infrastructure.ai.litellm_client import litellm_service
-from backend.app.services.evaluation.heuristic_service import heuristic_service
 from backend.app.services.evaluation.guardrail_service import guardrail_service
 from backend.app.services.tools.web_search import WebSearchService
 from ddgs.exceptions import DDGSException
@@ -121,26 +120,6 @@ async def test_web_search_duckduckgo_retries_with_backoff(monkeypatch):
     assert flaky.calls == 3
     assert len(results) == 1
     assert results[0]["title"] == "ok"
-
-
-# ── Evaluation heuristic contract ─────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_eval_rag_turn_heuristic_contract():
-    """The free-tier evaluator must always produce the documented RAG-turn
-    report contract — two in-range metrics with explicit reasons — with no
-    external judge or API key involved."""
-    results = await heuristic_service.evaluate_rag_turn(
-        query="q",
-        actual_output="This is a sufficiently long synthesized answer for grading.",
-        retrieval_context=["grounding evidence from the retrieved document"],
-    )
-
-    assert len(results) == 2
-    assert [r.metric for r in results] == ["faithfulness", "answer_relevancy"]
-    assert all(r.reason for r in results)
-    assert all(0.0 <= r.score <= 1.0 for r in results)
 
 
 # ── CoderSubagent self-correction loop ────────────────────────────────────────

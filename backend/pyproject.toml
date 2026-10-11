@@ -75,10 +75,11 @@ dependencies = [
     # ragas + garak were removed in 2026-09 after the dependency audit:
     #   - ragas  PYSEC-2026-3046 (SSRF, no fixed release through 0.4.3)
     #   - garak  transitively pinned vulnerable nltk/datasets/accelerate
-    # heuristic was removed in the same audit pass: its "genuine judge" metrics
-    # default to a paid OpenAI model, and everything it adds runs through the
-    # project's own deterministic heuristics (evaluation/heuristic_service.py) or
-    # the app's litellm client (prompt-regression gate) — both 100% free tier.
+    # A paid-LLM evaluation framework was removed in the same audit pass: its
+    # "genuine judge" metrics default to a paid OpenAI model, and everything it
+    # adds runs through the project's own deterministic heuristics
+    # (evaluation/heuristic_eval_service.py) or the app's litellm client
+    # (prompt-regression gate) — both 100% free tier.
     # Re-add any of these only if a patched version lands AND the library is
     # actually used.
     "guardrails-ai>=0.5.0",

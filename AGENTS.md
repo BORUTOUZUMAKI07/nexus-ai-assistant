@@ -169,9 +169,9 @@ These were each confirmed first-hand and are intentional:
     `done_when` / `escalate_when`) and three context-budget tiers (0.60/0.85/
     0.95). `critic.py:14-25` checks a different four-part rubric; `context_
     compiler.py:41` has a single ratio, 0.75. Six numbers, zero live.
-  - `eval_criteria.yaml` — G-Eval rubrics (a **heuristic** metric, removed from
-    dependencies over CVEs) and a profanity sanitize tier that no code
-    implements.
+  - `eval_criteria.yaml` — G-Eval rubrics for a third-party evaluation library
+    that was removed from dependencies over CVEs, plus a profanity sanitize tier
+    that no code implements.
   `tests/test_no_dead_router_config.py` guards the router case only — it
   enumerates **git-tracked** YAML, not `rglob`, because this checkout holds an
   untracked `.kilo/worktrees/debonair-redcurrant/` worktree with a full copy of
@@ -200,7 +200,7 @@ backend/app/
 │   └── subagents/           # researcher.py, coder.py, critic.py
 ├── services/                # cross-domain services: rag/ (embedding, retrieval,
 │   │                        #   reranking, hybrid_fusion), monitoring/ (drift,
-│   │                        #   slices, fairness), evaluation/ (heuristic, ragas,
+│   │                        #   slices, fairness), evaluation/ (heuristics, ragas,
 │   │                        #   regression, arena, conversational, quality),
 │   │                        #   experiments, bandit, confidence, audit, prompt_*
 │   │                        #   optimizer, tools/ (firecrawl, e2b, elicitations),
@@ -241,8 +241,8 @@ backend/app/
   (see any `tests/test_*.py`); ASGI tests use `dependency_overrides` +
   `ASGITransport` (see `tests/test_observability_viewer.py`).
 - No new third-party dependencies without reviewing advisories (ragas, garak,
-  and heuristic were **removed** in 2026-09 due to unfixed CVEs — see comments
-  in `pyproject.toml`).
+  and a paid-LLM evaluation framework were **removed** in 2026-09 due to
+  unfixed CVEs — see comments in `pyproject.toml`).
 - **New cross-cutting modules (added 2026-10, Batch A–D).** All are pure
   functions/classes with injected deps, and all are covered by a
   `tests/test_batch_*.py` whose every fix is verified by reverting it:
@@ -706,9 +706,10 @@ different tests) looked like three unrelated bugs instead of one.
    into `require_idempotency_key` in `api/deps.py`); metrics families
    `nexus_requests_total`/`nexus_errors_total`/`nexus_latency_seconds` from
    `api/v1/metrics.py` (mounted at `/metrics` with `include_in_schema=False`).
-6. **Free-tier-first LLM strategy**: heuristic/garak/ragas removed; judges and
-   evals use deterministic heuristics + LiteLLM free tier. Live eval gates are
-   opt-in via the repo variable so contributors without model credits see green.
+6. **Free-tier-first LLM strategy**: garak/ragas and a paid-LLM evaluation
+   framework removed; judges and evals use deterministic heuristics + LiteLLM
+   free tier. Live eval gates are opt-in via the repo variable so contributors
+   without model credits see green.
 7. **Skills** (`backend/skills/coder.md`, `researcher.md`, `critic.md`) are
    markdown skill-guides for the subagent personas — they document behavior but
    are **not loaded at runtime** (system prompts are hardcoded constants in the
@@ -1744,7 +1745,7 @@ were all re-verified against source during the Batch A–D work.
 
 | Concern | Source of truth |
 |---|---|
-| API endpoints | live FastAPI `app.openapi()` (100 paths, 117 ops) — regenerate `docs/api-reference.md` from it |
+| API endpoints | live FastAPI `app.openapi()` (99 paths, 116 ops) — regenerate `docs/api-reference.md` from it |
 | Tables | `backend/app/domain/**/models.py` (37) |
 | Keyboard shortcuts | `frontend/src/components/{CommandPalette,ArtifactCanvas,ChatInput}.tsx` |
 | Frontend design system | `frontend/src/app/globals.css` + `frontend/src/lib/theme.ts` + `docs/frontend-design.md` |

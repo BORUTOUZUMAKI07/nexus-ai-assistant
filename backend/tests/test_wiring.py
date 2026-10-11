@@ -327,6 +327,5 @@ def test_evaluation_router_registers_admin_scoped_routes():
 
     paths = {r.path for r in evaluation.router.routes}
     assert "/admin/evaluation/rag" in paths
-    assert "/admin/evaluation/heuristic" in paths
     assert "/admin/evaluation/redteam" in paths
     assert "/admin/evaluation/quality" in paths

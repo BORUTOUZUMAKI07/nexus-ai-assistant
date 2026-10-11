@@ -1,7 +1,7 @@
 # Nexus AI Assistant — API & FastMCP Reference
 
 > Generated from the **live OpenAPI schema** (`app.openapi()` at commit
-> `9b6181a`): **100 paths · 117 operations**, all under `/api/v1` except
+> `9b6181a`): **99 paths · 116 operations**, all under `/api/v1` except
 > where noted. This is a hand-maintained summary; the interactive Swagger UI
 > at `/docs` is always authoritative.
 >
@@ -128,7 +128,7 @@
 - **Hooks**: `GET/POST /admin/hooks`, `PUT/DELETE /admin/hooks/{policy_id}`,
   `POST /admin/hooks/reload`
 - **Monitoring**: `GET /admin/monitoring/{drift,observability,viewer,viewer-data,slices,fairness,bandits}`
-- **Evaluation**: `POST /admin/evaluation/{arena,conversational,heuristic,prompt-regression,quality,rag,redteam}`
+- **Evaluation**: `POST /admin/evaluation/{arena,conversational,prompt-regression,quality,rag,redteam}`
 - **Optimization**: `POST /admin/optimization/run`, `GET /admin/optimization/runs`
 - **Audit**: `GET /admin/audit`, `GET /admin/audit-logs`, `GET /admin/audit/eu-act`,
   `GET /admin/audit/redteam`
@@ -170,7 +170,7 @@ file IO, elicitations). Every request is gated — a Bearer JWT, the
 - File uploads: multipart; `MAX_UPLOAD_SIZE_MB` enforced before buffering.
 - Every documented route above was confirmed present in the live schema; the
   counts at the top were regenerated from `app.openapi()` on 2026-10-04
-  (100 paths / 117 operations). Regenerate from `/openapi.json` if it drifts.
+  (99 paths / 116 operations). Regenerate from `/openapi.json` if it drifts.
 - **Stream rejoin**: `POST /conversations/{id}/stream` returns `X-Nexus-Run-Id`.
   `GET /conversations/{id}/runs/{run_id}/stream` re-attaches to that run and
   honours `Last-Event-ID`; it 404s with `{"detail": "run_not_found"}` for a run
