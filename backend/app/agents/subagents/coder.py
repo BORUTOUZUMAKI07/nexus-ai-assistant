@@ -5,11 +5,12 @@ and iteratively fixes bugs before returning results.
 """
 import re
 from typing import Any
+from uuid import UUID
 
 import structlog
 from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
-from backend.app.services.tools.code_execution import code_executor
+from backend.app.services.tools.tool_gateway import tool_gateway
 
 logger = structlog.get_logger(__name__)
 
@@ -54,8 +55,26 @@ class CoderSubagent:
             code = self.extract_code(response)
             latest_code = code
 
-            # 2. Execute in sandbox
-            execution_res = await code_executor.execute_python(code=code)
+            # 2. Execute in sandbox -- routed through the shared ``tool_gateway``
+            # so the poka-yoke banned-pattern screen, lifecycle hooks and rate
+            # limit apply to model-generated code too. Calling ``code_executor``
+            # directly was an unpoliced second route to arbitrary code execution;
+            # the final code is *also* gated by the graph's ``tool_node`` HITL step.
+            gw_result = await tool_gateway.execute_tool(
+                tool_name="execute_python",
+                arguments={"code": code},
+                user_id=UUID(int=0),
+                is_user_approved=True,
+            )
+            if gw_result.get("status") == "success":
+                execution_res = gw_result.get("result") or {}
+            else:
+                execution_res = {
+                    "success": False,
+                    "error": gw_result.get("error")
+                    or gw_result.get("message")
+                    or gw_result.get("status", "execution failed"),
+                }
             latest_result = execution_res
 
             # Check if succeeded

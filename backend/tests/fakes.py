@@ -19,6 +19,7 @@ from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.sql import operators as _saop
 from sqlalchemy.sql.dml import Delete
 from sqlalchemy.sql.elements import BinaryExpression, BindParameter, BooleanClauseList
+from sqlalchemy.sql.selectable import ScalarSelect, Select
 
 
 class FakeResult:
@@ -66,7 +67,34 @@ def _clause_attrs_present(clause, row) -> bool:
     return True
 
 
-def _eval_clause(clause, row) -> bool:
+def _resolve_scalar_subquery(select_stmt, rows_by_entity) -> list[Any] | None:
+    """Best-effort resolution of a single-column Select against seeded rows.
+
+    Services filter with ``col.in_(select(...))``. SQLAlchemy leaves that as a
+    nested Select rather than a list, so without resolving it the fake treated
+    every row as matching -- and a delete built that way looked like it dropped
+    everything. That is exactly how it hid the co-member erasure in
+    ``account_service.delete_account``. Resolving the simple single-column case
+    (declarative where clauses over seeded rows) makes those filters real.
+    """
+    if rows_by_entity is None:
+        return None
+    entity = _select_entity(select_stmt)
+    if entity is None:
+        return None
+    try:
+        column = select_stmt.column_descriptions[0].get("name")
+    except Exception:
+        return None
+    if column is None:
+        return None
+    rows = list(rows_by_entity.get(entity, []))
+    for c in getattr(select_stmt, "_where_criteria", []):
+        rows = [r for r in rows if _eval_clause(c, r, rows_by_entity)]
+    return [getattr(r, column) for r in rows]
+
+
+def _eval_clause(clause, row, rows_by_entity=None) -> bool:
     """Evaluate a where-clause subtree against a model row."""
     if clause is None or clause is True:
         return True
@@ -95,6 +123,17 @@ def _eval_clause(clause, row) -> bool:
             if op is _saop.in_op:
                 if isinstance(right, (list, tuple, set)):
                     return val in right
+                # ``col.in_(select(...))`` binds a ScalarSelect wrapping the
+                # Select; handle both so the filter is actually evaluated.
+                subquery = None
+                if isinstance(right, ScalarSelect):
+                    subquery = right.element
+                elif isinstance(right, Select):
+                    subquery = right
+                if subquery is not None:
+                    resolved = _resolve_scalar_subquery(subquery, rows_by_entity)
+                    if resolved is not None:
+                        return val in resolved
                 return True  # in_(subquery): cannot evaluate — defer
             if op in (_pyop.contains, _saop.contains_op):
                 if isinstance(right, (list, tuple, set)):
@@ -103,13 +142,13 @@ def _eval_clause(clause, row) -> bool:
             if isinstance(right, str):  # ilike / like patterns
                 return right.strip("%").lower() in str(val).lower()
             if op in (_pyop.and_, _pyop.or_):  # pragma: no cover
-                return bool(op(_eval_clause(left, row), _eval_clause(right, row)))
+                return bool(op(_eval_clause(left, row, rows_by_entity), _eval_clause(right, row, rows_by_entity)))
             return True  # operators we don't model: do not exclude
         return True
     if isinstance(clause, BooleanClauseList):
         op = getattr(clause, "operator", None)
         children = list(getattr(clause, "get_children", lambda: [])())
-        results = [_eval_clause(c, row) for c in children]
+        results = [_eval_clause(c, row, rows_by_entity) for c in children]
         if op is _pyop.or_:
             return any(results)
         return all(results)
@@ -147,19 +186,23 @@ class FakeSession:
         if isinstance(statement, Delete):
             self.delete_statements.append(statement)
             try:
+                target_name = statement.table.name
+            except Exception:
+                target_name = None
+            try:
                 criteria = list(statement._where_criteria)
             except Exception:
                 criteria = []
-            if criteria:
+            if target_name is not None and criteria:
                 for entity, rows in list(self.rows.items()):
-                    survived = []
-                    for r in rows:
-                        if not all(_clause_attrs_present(c, r) for c in criteria):
-                            survived.append(r)
-                            continue
-                        if all(_eval_clause(c, r) for c in criteria):
-                            continue  # matched -> dropped
-                        survived.append(r)
+                    # A DELETE only ever touches its own table. Applying the
+                    # criteria to every entity by column name let an earlier
+                    # `delete(APIKey).where(APIKey.user_id == ...)` silently erase
+                    # the user's OrganizationMember rows, which hid the co-member
+                    # erasure in account_service.delete_account (AGENTS.md P2).
+                    if getattr(entity, "__tablename__", None) != target_name:
+                        continue
+                    survived = [r for r in rows if not all(_eval_clause(c, r, self.rows) for c in criteria)]
                     self.rows[entity] = survived
             return FakeResult([])
         entity = _select_entity(statement)
@@ -168,7 +211,7 @@ class FakeSession:
         try:
             where = list(statement._where_criteria) if entity is not None else []
             if where:
-                rows = [r for r in rows if all(_eval_clause(c, r) for c in where)]
+                rows = [r for r in rows if all(_eval_clause(c, r, self.rows) for c in where)]
         except Exception:
             pass
         hook = self.select_hooks.get(entity)

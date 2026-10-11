@@ -193,12 +193,23 @@ class AuthService:
         user = await self._repo.get_by_oauth_identity(identity.provider, identity.subject)
         if user is None:
             # First time this IdP identity is seen: fall back to the email to
-            # find a pre-existing (password) account to adopt.
-            user = await self._repo.get_by_email(email)
-            if user is not None and user.oauth_sub is None:
-                user.oauth_provider = identity.provider
-                user.oauth_sub = identity.subject
-                await self._repo.update(user, {})
+            # find a pre-existing (password) account to adopt. ONLY adopt an
+            # account that has no SSO identity yet -- an account already linked
+            # to a different provider subject must NOT be reachable through the
+            # email. Previously it skipped the link but still logged the caller
+            # in as that account, so a recycled/reassigned address (or any second
+            # IdP on the same email) inherited it, directly contradicting the
+            # guarantee in the docstring above.
+            existing = await self._repo.get_by_email(email)
+            if existing is not None:
+                if existing.oauth_sub is not None:
+                    raise AuthenticationError(
+                        "This email is already linked to a different sign-in method."
+                    )
+                existing.oauth_provider = identity.provider
+                existing.oauth_sub = identity.subject
+                await self._repo.update(existing, {})
+                user = existing
         if user is None:
             user = await self._provision_oauth_user(identity, email)
         elif not user.is_active:

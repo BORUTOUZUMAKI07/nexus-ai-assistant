@@ -142,6 +142,51 @@ async def test_delete_conversation_with_messages_and_files(
 
 
 @pytest.mark.asyncio
+async def test_delete_conversation_cascades_run_log(
+    client, user_auth_headers, test_user, session_factory
+):
+    """A conversation with a durable run log (agent_runs + run_events) must
+    delete cleanly. Both carry NO-ACTION FKs back to the conversation, so
+    omitting them raised IntegrityError on the real database and rolled back the
+    deletion -- including GDPR account erasure, which walks conversations
+    through this path.
+    """
+    from backend.app.domain.run.models import AgentRun, RunEvent
+    from sqlmodel import select
+
+    created = await client.post(
+        "/api/v1/conversations", json={"title": "Has a run"}, headers=user_auth_headers
+    )
+    conv_id = created.json()["id"]
+
+    async with session_factory() as session:
+        run = AgentRun(
+            conversation_id=conv_id, user_id=test_user.id, thread_id=str(conv_id)
+        )
+        session.add(run)
+        await session.commit()
+        await session.refresh(run)
+        session.add(RunEvent(run_id=run.id, seq=1, payload={"type": "text_delta"}))
+        await session.commit()
+        run_id = run.id
+
+    deleted = await client.delete(
+        f"/api/v1/conversations/{conv_id}", headers=user_auth_headers
+    )
+    assert deleted.status_code == 204
+
+    async with session_factory() as session:
+        left_runs = (
+            await session.exec(select(AgentRun).where(AgentRun.id == run_id))
+        ).all()
+        left_events = (
+            await session.exec(select(RunEvent).where(RunEvent.run_id == run_id))
+        ).all()
+    assert left_runs == []
+    assert left_events == []
+
+
+@pytest.mark.asyncio
 async def test_cannot_access_other_users_conversation(client, user_auth_headers):
     created = await client.post(
         "/api/v1/conversations", json={"title": "Private"}, headers=user_auth_headers

@@ -111,6 +111,37 @@ def test_development_replaces_a_published_example_value():
     assert settings.ENCRYPTION_KEY != example["ENCRYPTION_KEY"]
 
 
+def test_development_generated_secrets_are_stable_across_boots(tmp_path, monkeypatch):
+    """
+    P0 #9: a missing ENCRYPTION_KEY used to be regenerated on every boot, which
+    made every previously-encrypted BYOK api_keys row undecryptable after a
+    restart (staging included). The generated values are now persisted and
+    reused, so two separate Settings constructions agree.
+    """
+    secrets_file = tmp_path / "dev_secrets.json"
+
+    import backend.app.core.config as config_module
+
+    monkeypatch.setattr(config_module, "_DEV_SECRETS_PATH", secrets_file)
+
+    first = Settings(ENVIRONMENT="development", SECRET_KEY="", ENCRYPTION_KEY="")
+    second = Settings(ENVIRONMENT="development", SECRET_KEY="", ENCRYPTION_KEY="")
+
+    assert secrets_file.exists(), "generated dev secrets must be persisted"
+    assert first.ENCRYPTION_KEY == second.ENCRYPTION_KEY
+    assert first.SECRET_KEY == second.SECRET_KEY
+
+
+def test_explicit_development_secret_is_never_rotated(tmp_path, monkeypatch):
+    """An operator-provided key must win over the persisted dev store."""
+    import backend.app.core.config as config_module
+
+    monkeypatch.setattr(config_module, "_DEV_SECRETS_PATH", tmp_path / "dev_secrets.json")
+    settings = Settings(ENVIRONMENT="development", SECRET_KEY="s" * 40, ENCRYPTION_KEY="e" * 64)
+    assert settings.ENCRYPTION_KEY == "e" * 64
+    assert not (tmp_path / "dev_secrets.json").exists()
+
+
 def test_placeholder_set_has_no_duplicates_of_blank():
     """A blank entry would make every blank secret 'known' — harmless, but noise."""
     assert "" not in PUBLISHED_EXAMPLE_SECRETS

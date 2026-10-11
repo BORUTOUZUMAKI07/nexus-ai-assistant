@@ -21,6 +21,7 @@ wheels/
 .installed.cfg
 *.egg
 .env
+.dev_secrets.json
 .venv
 venv/
 ENV/

@@ -39,6 +39,53 @@ from backend.app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
+
+def _authenticated_user_id():
+    """The user id behind the current MCP request, or ``None``.
+
+    The ``/mcp`` gate (``main.py::_MCPAuthMiddleware``) accepts a Bearer JWT,
+    the ``nexus_access_token`` cookie, or the shared ``x-nexus-mcp-key``. Only
+    the first two name a *user*; the shared key is a service credential with no
+    user identity. Tools that take a user/conversation id must bind to this
+    identity instead of trusting the argument -- otherwise any authenticated
+    MCP client can act as any user. Returns ``None`` on the shared-key path, or
+    when there is no HTTP request (stdio transport / import-time call).
+    """
+    from uuid import UUID
+
+    from backend.app.core.exceptions import InvalidTokenError
+    from backend.app.core.security import decode_token
+
+    try:
+        from fastmcp.server.dependencies import get_http_request
+
+        request = get_http_request()
+    except Exception:
+        return None
+
+    token = ""
+    authz = request.headers.get("Authorization", "")
+    if authz.lower().startswith("bearer "):
+        token = authz[7:].strip()
+    else:
+        token = request.cookies.get("nexus_access_token", "") or ""
+
+    if not token:
+        return None
+    try:
+        payload = decode_token(token)
+    except InvalidTokenError:
+        return None
+    if payload.get("type") != "access":
+        return None
+    sub = payload.get("sub")
+    if not sub:
+        return None
+    try:
+        return UUID(str(sub))
+    except Exception:
+        return None
+
 # Initialize FastMCP Server.
 #
 # Identity comes from settings so the name MCP clients see in the initialize
@@ -58,6 +105,22 @@ except TypeError:
     mcp = FastMCP(_MCP_IDENTITY["name"])
 
 _ALLOWED_MATH_NAMES = {n: getattr(math, n) for n in dir(math) if not n.startswith("_")}
+# Remove or constrain functions that can consume large resources: factorial, comb,
+# perm, prod and lcm/gcd (gcd is small; comb/perm/factorial/prod can explode).
+_DISALLOWED_MATH_FUNCS = {
+    "factorial",
+    "comb",
+    "perm",
+    "prod",
+    "lcm",
+    "log1p",  # not a problem usually, but just in case; others vary
+    "expm1",
+}
+_ALLOWED_MATH_NAMES = {
+    name: fn
+    for name, fn in _ALLOWED_MATH_NAMES.items()
+    if name not in _DISALLOWED_MATH_FUNCS
+}
 
 
 # ==========================================
@@ -80,10 +143,36 @@ async def web_search(query: str, max_results: int = 5) -> str:
 async def execute_python_code(code: str, timeout_seconds: int = 30) -> str:
     """
     Execute Python code in an isolated E2B microVM sandbox and capture stdout/stderr.
-    """
-    from backend.app.services.tools.code_execution import code_executor
 
-    res = await code_executor.execute_python(code=code, timeout_seconds=timeout_seconds)
+    Execution is routed through the shared ``tool_gateway`` so the poka-yoke
+    banned-pattern screen, lifecycle hooks and per-caller rate limit all apply.
+    This endpoint used to call the executor directly -- an unpoliced second route
+    to arbitrary code execution that skipped every check the graph's ``tool_node``
+    enforces. A direct, authenticated MCP call is an explicit client action, so it
+    is treated as pre-approved; the ladder's approval gate exists to stop the
+    *model* running code without a human's consent.
+    """
+    from uuid import UUID
+
+    from backend.app.services.tools.tool_gateway import tool_gateway
+
+    try:
+        timeout = max(1, min(int(timeout_seconds), 30))
+    except (TypeError, ValueError):
+        timeout = 30
+
+    caller_id = _authenticated_user_id() or UUID(int=0)
+    result = await tool_gateway.execute_tool(
+        tool_name="execute_python_code",
+        arguments={"code": code, "timeout_seconds": timeout},
+        user_id=caller_id,
+        is_user_approved=True,
+    )
+    if result.get("status") != "success":
+        return "Code execution failed: " + str(
+            result.get("message") or result.get("error") or result.get("status")
+        )
+    res = result.get("result") or {}
     output = []
     if res.get("stdout"):
         output.append(f"Stdout:\n{res['stdout']}")
@@ -308,13 +397,23 @@ async def request_user_input(conversation_id: str, message: str, schema_json: st
     from backend.app.infrastructure.database.session import async_session_factory
     from backend.app.services.tools.elicitations import ElicitationService
 
+    from backend.app.domain.conversation.repository import ConversationRepository
+
     try:
         schema = json.loads(schema_json)
         convo_uuid = UUID(conversation_id)
     except Exception as exc:
         return f"Error: schema_json must be valid JSON and conversation_id a UUID — {exc}"
 
+    # IDOR guard: when the caller is an authenticated user (JWT/cookie), the
+    # conversation must belong to them. The shared x-nexus-mcp-key path has no
+    # user identity and is a trusted service credential.
+    caller_id = _authenticated_user_id()
     async with async_session_factory() as session:
+        if caller_id is not None:
+            owned = await ConversationRepository(session).get_by_id(convo_uuid, user_id=caller_id)
+            if owned is None:
+                return "Error: conversation not found for the authenticated user"
         service = ElicitationService(session)
         parked = await service.park_elicitation(
             conversation_id=convo_uuid,
@@ -342,26 +441,44 @@ async def create_artifact(
     from uuid import UUID
 
     from backend.app.domain.artifact.schemas import ArtifactCreate
+    from backend.app.domain.conversation.repository import ConversationRepository
     from backend.app.infrastructure.database.session import async_session_factory
     from backend.app.services.artifact_service import ArtifactService
 
-    try:
-        user_uuid = UUID(user_id)
-    except Exception as exc:
-        return f"Error: user_id must be a UUID — {exc}"
+    # Bind the owning user to the authenticated caller, never to a
+    # caller-supplied argument -- otherwise any authenticated MCP client could
+    # write artifacts as any user (IDOR). Only the trusted shared-key path
+    # (caller_id is None) may pass an explicit user_id.
+    caller_id = _authenticated_user_id()
+    if caller_id is not None:
+        user_uuid = caller_id
+    else:
+        try:
+            user_uuid = UUID(user_id)
+        except Exception as exc:
+            return f"Error: user_id must be a UUID — {exc}"
     if not content.strip():
         return "Error: content must not be empty"
     if len(content) > 200_000:
         return "Error: content exceeds the 200_000 character limit"
 
-    conversation_uuid = UUID(conversation_id) if conversation_id else None
-    message_uuid = UUID(message_id) if message_id else None
+    try:
+        conversation_uuid = UUID(conversation_id) if conversation_id else None
+        message_uuid = UUID(message_id) if message_id else None
+    except Exception as exc:
+        return f"Error: conversation_id and message_id must be UUIDs — {exc}"
 
     payload = ArtifactCreate(
         title=title, language=language, content=content,
         conversation_id=conversation_uuid, message_id=message_uuid,
     )
     async with async_session_factory() as session:
+        if caller_id is not None and conversation_uuid is not None:
+            owned = await ConversationRepository(session).get_by_id(
+                conversation_uuid, user_id=caller_id
+            )
+            if owned is None:
+                return "Error: conversation not found for the authenticated user"
         artifact = await ArtifactService(session).create(user_uuid, payload)
     return (
         f"Artifact persisted (id: {artifact.id}, title: {artifact.title!r}, "

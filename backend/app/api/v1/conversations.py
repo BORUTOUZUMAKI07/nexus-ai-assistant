@@ -4,7 +4,7 @@ Pure HTTP transport layer — delegates all conversation use cases to Conversati
 """
 import asyncio
 from collections.abc import AsyncGenerator
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 import structlog
@@ -41,6 +41,8 @@ from backend.app.services.usage_service import UsageService
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from ._replay_sanitizer import _sanitize_replayed_message
 
 logger = structlog.get_logger(__name__)
 
@@ -358,7 +360,14 @@ async def stream_conversation(
     # Bound the agentic context: only the most recent turns are replayed into the
     # graph every run, preventing unbounded context growth across a conversation.
     max_agentic_turns = 20
-    graph_messages = (user_messages or [])[-max_agentic_turns:]
+    # Guardrail-sanitize EVERY replayed message, not just the last one. The
+    # persistence block above only sanitized `user_messages[-1]`; any earlier
+    # entry in `body.messages` -- including an injected `role: "system"` turn --
+    # reached the graph verbatim (P1 #17). Done outside the try/except so a
+    # rejected injection is a 422, never a silently-swallowed pass-through.
+    graph_messages = [
+        _sanitize_replayed_message(m) for m in (user_messages or [])[-max_agentic_turns:]
+    ]
 
     # ── The run is the unit of work; this request is only a reader ─────────
     #

@@ -197,3 +197,120 @@ def test_manual_redeliver_unknown_delivery():
     fake.seed(WebhookEndpoint, [ep])
     svc = WebhookService(fake, http_sender=Recorder())
     assert _await(svc.redeliver(user, uuid4())) is None
+
+
+# ── P0 #8 — SSRF guard on outbound webhook targets ────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/hook",
+        "http://localhost/hook",
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata
+        "http://10.0.0.5/hook",
+        "http://192.168.1.1/hook",
+        "http://[::1]/hook",
+        "http://metadata.google.internal/hook",
+    ],
+)
+def test_register_rejects_non_public_webhook_targets(url):
+    fake = FakeSession()
+    svc = WebhookService(fake)
+    with pytest.raises(ValueError):
+        _await(svc.register(uuid4(), url, ["message.completed"]))
+    assert fake.rows.get(WebhookEndpoint, []) == []
+
+
+def test_register_rejects_embedded_credentials():
+    fake = FakeSession()
+    svc = WebhookService(fake)
+    with pytest.raises(ValueError):
+        _await(svc.register(uuid4(), "https://user:pass@example.com/hook", []))
+
+
+def test_delivery_revalidates_the_target_before_sending():
+    """A persisted endpoint whose URL is private must not be fetched, even if it
+    was somehow stored (DNS rebinding / pre-guard rows)."""
+    user = uuid4()
+    fake = FakeSession()
+    ep = _endpoint(user, "http://169.254.169.254/meta")
+    fake.seed(WebhookEndpoint, [ep])
+
+    recorder = Recorder()
+    svc = WebhookService(fake, http_sender=recorder)
+    _await(svc.dispatch_event("message.completed", {"msg": "x"}, user))
+
+    assert recorder.calls == []  # never left the process
+    deliveries = _await(svc.deliveries(ep.id))
+    assert len(deliveries) == 1
+    assert deliveries[0].status == "failed"
+    assert deliveries[0].error_message
+
+
+# ── P0 #11 — sign and send the exact same bytes ───────────────────────────────
+
+
+def test_default_sender_posts_the_bytes_it_signed(monkeypatch):
+    import backend.app.services.webhook_service as ws_mod
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, content=None, headers=None, **kwargs):
+            captured["url"] = url
+            captured["content"] = content
+            captured["headers"] = headers
+            captured["kwargs"] = kwargs
+            return _Resp()
+
+    monkeypatch.setattr(ws_mod.httpx, "AsyncClient", _Client)
+
+    svc = WebhookService(FakeSession())
+    payload = {"event": "message.completed", "payload": {"msg": "hi"}}
+    status = _await(svc._default_sender("https://hook.example/a", {"X": "y"}, payload))
+
+    assert status == 200
+    # The body on the wire is exactly the bytes the signature was computed over.
+    assert captured["content"] == ws_mod._encode_webhook_body(payload)
+    assert "json" not in captured["kwargs"]
+
+
+# ── #54 — retry limit is configurable ─────────────────────────────────────────
+
+
+def test_retry_failed_deliveries_honours_an_explicit_max_attempts(monkeypatch):
+    user = uuid4()
+    fake = FakeSession()
+    ep = _endpoint(user, "https://hook.example/y")
+    fake.seed(WebhookEndpoint, [ep])
+    fake.seed(
+        WebhookDelivery,
+        [
+            WebhookDelivery(
+                endpoint_id=ep.id, event="message.completed", payload_json={},
+                status="failed", attempts=1,
+            ),
+            WebhookDelivery(
+                endpoint_id=ep.id, event="message.completed", payload_json={},
+                status="failed", attempts=3,
+            ),
+        ],
+    )
+
+    recorder = Recorder()
+    monkeypatch.setattr(WebhookService, "_default_sender", recorder)
+    retried = _await(retry_failed_deliveries(fake, max_attempts=2))
+    assert retried == 1  # only attempts=1 is below the override of 2

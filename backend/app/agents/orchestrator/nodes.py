@@ -914,6 +914,15 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         augmented_prompt = last_user_content
 
     # â”€â”€ Multimodal Vision Path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # These are read after the branches rejoin, on BOTH paths: the join does
+    # `revision_count = revision_count + revisions_used`, and the return dict
+    # includes `critique`. They used to be bound only inside the non-vision
+    # `else`, so every vision turn raised UnboundLocalError. Initialize them
+    # here, before the branch, so neither path can reach the join unbound.
+    revision_count = int(state.get("revision_count", 0))
+    revisions_used = 0
+    critique: dict[str, Any] | None = None
+
     if is_vision:
         if isinstance(last_user_raw, list):
             augmented_content = []
@@ -942,10 +951,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         # â”€â”€ Critic-driven self-refinement loop (bounded) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         task_type = state.get("task_type", "general")
         max_revisions = int(getattr(settings, "CRITIC_MAX_REVISIONS", 2)) if task_type in ("code", "research") else 0
-        revision_count = int(state.get("revision_count", 0))
-        critique: dict[str, Any] | None = None
         draft_prompt = augmented_prompt
-        revisions_used = 0
         # The most recent draft, tracked separately from `response_text`.
         # `response_text` is only assigned on the paths that *accept* a draft,
         # so a break from any other path -- the budget stop below -- has

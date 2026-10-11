@@ -271,6 +271,29 @@ async def test_synthesizer_respects_the_disable_switch(monkeypatch):
     assert "Low confidence" not in out["messages"][0].content
 
 
+async def test_synthesizer_vision_path_does_not_crash_on_the_revision_join(monkeypatch):
+    """A vision turn takes the `is_vision` branch, which never ran the revision
+    loop; the counters and `critique` were bound only in the non-vision `else`,
+    so the join and the return dict raised UnboundLocalError and every vision
+    turn 500'd. No test covered the vision path before this one.
+    """
+    from backend.app.agents.orchestrator import nodes
+
+    async def fake_completion(**kwargs):
+        assert kwargs["model"] == "vision_analysis"
+        return "A photo of a cat sitting on a desk."
+
+    monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
+
+    state = _synth_state("Describe this image")
+    state["task_type"] = "vision"
+    out = await nodes.synthesizer_node(state)
+
+    assert "cat" in out["messages"][0].content
+    assert out["revision_count"] == 0
+    assert out["critique"] is None
+
+
 # -- C2: scrape content-shape guards -------------------------------------------
 
 

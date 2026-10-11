@@ -134,6 +134,7 @@ async def execute_run(
             {"thread_id": config["configurable"]["thread_id"], "mode": mode, "user_id": str(user_id)},
         ):
             try:
+                await writer.emit({"type": "status", "phase": "starting"})
                 async for frame, is_text in iter_graph_frames(
                     graph, config=config, graph_input=graph_input
                 ):
@@ -392,15 +393,11 @@ async def iter_graph_frames(
                 "tool_input": tool_input,
                 "tool_call_id": run_ref,
             }, False
-            # AG-UI standardized alias: live tool-progress events with the
-            # protocol's field names. New UIs can bind to TOOL_CALL_START;
-            # existing clients keep tool_call.
             yield {
-                "type": "TOOL_CALL_START",
-                "messageId": f"ag-{run_ref}",
+                "type": "status",
+                "phase": "tool_call_start",
                 "tool": tool_name,
-                "input": tool_input,
-                "timestamp": time.time(),
+                "tool_call_id": run_ref,
             }, False
 
         elif kind == "on_tool_end":
@@ -414,17 +411,16 @@ async def iter_graph_frames(
                 "result": trimmed,
             }, False
             yield {
-                "type": "TOOL_CALL_COMPLETE",
-                "messageId": f"ag-{run_ref}",
+                "type": "status",
+                "phase": "tool_call_end",
                 "tool": tool_name,
-                "output": trimmed,
-                "timestamp": time.time(),
+                "tool_call_id": run_ref,
             }, False
 
         elif kind == "on_custom_event":
             name = event.get("name", "")
             data = event.get("data", {})
-            if name in ("citation", "thinking", "hitl_request", "elicitation_request", "error", "text_delta"):
+            if name in ("citation", "thinking", "hitl_request", "elicitation_request", "error", "text_delta", "status", "thought"):
                 yield {"type": name, **data}, name == "text_delta"
 
 

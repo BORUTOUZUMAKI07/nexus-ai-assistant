@@ -233,12 +233,18 @@ class AccountService:
         # 8. Shares owned by the user.
         await self.session.exec(delete(ConversationShare).where(ConversationShare.created_by == user_id))
 
-        # 9. Organizations: memberships, invites authored by the user, then any
-        #    orgs the user owns (their members + invites must go first).
-        member_org_ids = select(OrganizationMember.organization_id).where(OrganizationMember.user_id == user_id)
+        # 9. Organizations. Remove ONLY the user's own membership rows -- an org
+        #    the user merely belongs to must keep its other members. Separately,
+        #    any org the user OWNS is deleted whole below, so every membership of
+        #    an owned org must go first (live FKs are NO ACTION). The previous
+        #    version deleted every member of every org the user belonged to,
+        #    silently erasing co-members' memberships.
         owner_org_ids = select(Organization.id).where(Organization.owner_id == user_id)
         await self.session.exec(
-            delete(OrganizationMember).where((OrganizationMember.organization_id.in_(member_org_ids)) | (OrganizationMember.organization_id.in_(owner_org_ids)))
+            delete(OrganizationMember).where(
+                (OrganizationMember.user_id == user_id)
+                | (OrganizationMember.organization_id.in_(owner_org_ids))
+            )
         )
         await self.session.exec(
             delete(OrganizationInvite).where(

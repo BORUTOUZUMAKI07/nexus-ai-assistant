@@ -53,13 +53,31 @@ logger = structlog.get_logger(__name__)
 _compiled_graph: Any | None = None
 
 
+def _safety_short_circuited(state: AgentState) -> bool:
+    """True when the ARQ safety flag fired on this turn.
+
+    The flag is a hard stop: it must mean "answer with no external tools", not
+    merely "skip the tool the orchestrator had planned". Without re-checking it
+    on every route, the short circuit was undone one hop later -- the orchestrator
+    returned to ``critic_grader``, the CRAG gate could set ``needs_web_search``,
+    and ``route_after_critic`` then dispatched the very web tool the flag exists
+    to prevent (P1 #14). Safety routing has to be enforced where the routing
+    decision is made, not only where the flag was first observed.
+    """
+    flags = state.get("arq_flags") or {}
+    return bool(flags.get("safety_flag"))
+
+
 def route_after_orchestrator(
     state: AgentState,
-) -> Literal["subagent_dispatcher", "tool_node", "critic_grader"]:
+) -> Literal["subagent_dispatcher", "tool_node", "critic_grader", "synthesizer"]:
     """
     Conditional routing — decides next node after orchestrator.
-    Priority: subagent dispatch > tool calls > RAG quality gate (critic) > synthesis.
+    Priority: safety short-circuit > subagent dispatch > tool calls > RAG
+    quality gate (critic) > synthesis.
     """
+    if _safety_short_circuited(state):
+        return "synthesizer"
     if state.get("subagent_dispatches"):
         return "subagent_dispatcher"
     if state.get("pending_tool_calls"):
@@ -73,6 +91,10 @@ def route_after_critic(state: AgentState) -> Literal["tool_node", "synthesizer"]
     missing local RAG grounding) go through the web-search tool before
     synthesis; 'relevant' verdicts synthesize with local citations directly.
     """
+    if _safety_short_circuited(state):
+        # The critic can set needs_web_search on its own; the safety flag has to
+        # win here too or the web tool runs anyway (P1 #14).
+        return "synthesizer"
     if state.get("needs_web_search") or state.get("pending_tool_calls"):
         return "tool_node"
     return "synthesizer"
@@ -188,6 +210,7 @@ def _build_workflow() -> StateGraph:
             "subagent_dispatcher": "subagent_dispatcher",
             "tool_node": "tool_node",
             "critic_grader": "critic_grader",
+            "synthesizer": "synthesizer",
         },
     )
     workflow.add_conditional_edges(

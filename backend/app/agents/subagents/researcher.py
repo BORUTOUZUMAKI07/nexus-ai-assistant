@@ -51,6 +51,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from contextvars import ContextVar
 from typing import Any
 
 import structlog
@@ -60,6 +61,14 @@ from backend.app.services.rag.base import needs_scraping
 from backend.app.services.tools.web_search import web_search_service
 
 logger = structlog.get_logger(__name__)
+
+# Per-turn model-call counter, isolated per asyncio task. The module-level
+# `researcher_subagent` singleton is shared by every concurrent turn, so a plain
+# instance attribute let two simultaneous research runs corrupt each other's
+# budget -- one turn could spend the other's calls and silently skip its own
+# synthesis (P1 #15). A ContextVar gives each task its own copy while keeping the
+# `calls_used` attribute the methods and tests already use.
+_research_calls_used: ContextVar[int] = ContextVar("research_calls_used", default=0)
 
 RESEARCHER_SYSTEM_PROMPT = """You are the Nexus Research Specialist.
 Your job is to search the web, inspect sources, and synthesize factual, objective findings.
@@ -163,7 +172,19 @@ class ResearcherSubagent:
         # cannot observe a settings change halfway through and end up with an
         # inconsistent budget.
         self.max_model_calls = max(1, settings.RESEARCH_MAX_MODEL_CALLS)
-        self.calls_used = 0
+
+    @property
+    def calls_used(self) -> int:
+        """Model calls spent this turn, isolated per asyncio task.
+
+        Backed by a ContextVar rather than an instance attribute because the
+        module-level singleton is shared by concurrent turns (P1 #15).
+        """
+        return _research_calls_used.get()
+
+    @calls_used.setter
+    def calls_used(self, value: int) -> None:
+        _research_calls_used.set(value)
 
     # -- model-call budget ---------------------------------------------------
 

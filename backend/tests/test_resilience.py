@@ -130,11 +130,11 @@ async def test_coder_subagent_succeeds_on_first_attempt(monkeypatch):
     async def _completion(*args, **kwargs):
         return "```python\nprint('hi')\n```"
 
-    async def _execution_success(code, *args, **kwargs):
-        return {"success": True, "stdout": "hi", "charts": []}
+    async def _execution_success(*args, **kwargs):
+        return {"status": "success", "result": {"success": True, "stdout": "hi", "charts": []}}
 
     monkeypatch.setattr(coder_module, "ai_client", SimpleNamespace(completion=_completion))
-    monkeypatch.setattr(coder_module, "code_executor", SimpleNamespace(execute_python=_execution_success))
+    monkeypatch.setattr(coder_module, "tool_gateway", SimpleNamespace(execute_tool=_execution_success))
 
     res = await coder_subagent.execute(task_description="print hi")
 
@@ -150,14 +150,14 @@ async def test_coder_subagent_retries_then_succeeds(monkeypatch):
 
     attempts = {"n": 0}
 
-    async def _execution_flaky(code, *args, **kwargs):
+    async def _execution_flaky(*args, **kwargs):
         attempts["n"] += 1
         if attempts["n"] < 3:
-            return {"success": False, "error": "syntax error"}
-        return {"success": True, "stdout": "hi", "charts": []}
+            return {"status": "error", "error": "syntax error"}
+        return {"status": "success", "result": {"success": True, "stdout": "hi", "charts": []}}
 
     monkeypatch.setattr(coder_module, "ai_client", SimpleNamespace(completion=_completion))
-    monkeypatch.setattr(coder_module, "code_executor", SimpleNamespace(execute_python=_execution_flaky))
+    monkeypatch.setattr(coder_module, "tool_gateway", SimpleNamespace(execute_tool=_execution_flaky))
 
     res = await coder_subagent.execute(task_description="print hi", max_retries=2)
 
@@ -170,11 +170,11 @@ async def test_coder_subagent_fails_after_exhausting_retries(monkeypatch):
     async def _completion(*args, **kwargs):
         return "```python\nprint('hi')\n```"
 
-    async def _execution_fail(code, *args, **kwargs):
-        return {"success": False, "error": "persistent bug"}
+    async def _execution_fail(*args, **kwargs):
+        return {"status": "error", "error": "persistent bug"}
 
     monkeypatch.setattr(coder_module, "ai_client", SimpleNamespace(completion=_completion))
-    monkeypatch.setattr(coder_module, "code_executor", SimpleNamespace(execute_python=_execution_fail))
+    monkeypatch.setattr(coder_module, "tool_gateway", SimpleNamespace(execute_tool=_execution_fail))
 
     res = await coder_subagent.execute(task_description="print hi", max_retries=2)
 

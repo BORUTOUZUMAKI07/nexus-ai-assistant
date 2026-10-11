@@ -14,6 +14,7 @@ from backend.app.domain.conversation.models import (
 )
 from backend.app.domain.file.models import File, FileChunk, FileMetadata
 from backend.app.domain.plan.models import Plan
+from backend.app.domain.run.models import AgentRun, RunEvent
 from backend.app.domain.tool.models import ToolCall
 from backend.app.domain.usage.models import UsageLog
 from sqlmodel import delete, select
@@ -177,6 +178,16 @@ class ConversationRepository(BaseRepository[Conversation]):
             delete(FileMetadata).where(FileMetadata.file_id.in_(select(File.id).where(File.conversation_id == conv_id)))
         )
         await self.session.exec(delete(File).where(File.conversation_id == conv_id))
+
+        # Run log (§9.27): RunEvent → AgentRun. Both carry NO-ACTION FKs back to
+        # the conversation (RunEvent via run_id, AgentRun via conversation_id),
+        # so they MUST be removed before the conversation row. They used to be
+        # omitted, and every delete of a conversation that had been run raised an
+        # IntegrityError -- which also aborted account erasure, since GDPR
+        # deletion walks conversations through this method.
+        run_sub = select(AgentRun.id).where(AgentRun.conversation_id == conv_id)
+        await self.session.exec(delete(RunEvent).where(RunEvent.run_id.in_(run_sub)))
+        await self.session.exec(delete(AgentRun).where(AgentRun.conversation_id == conv_id))
 
         await self.session.delete(conversation)
         await self.session.commit()

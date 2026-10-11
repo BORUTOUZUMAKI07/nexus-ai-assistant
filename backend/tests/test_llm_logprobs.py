@@ -225,8 +225,10 @@ class TestForwarding:
             logprobs=True,
         )
 
-        # `response_format` is splatted into the router call, so it arrives as
-        # top-level keys rather than under a `response_format` key. Asserting
-        # the shape that actually reaches the provider, since asserting the
-        # wrong one would pass for the wrong reason or fail for no reason.
-        assert captured.get("type") == "json_object"
+        # `response_format` must reach the router *as `response_format`*, not
+        # splatted into top-level keys: the splatted form sent `type=` (which
+        # every provider ignores), so JSON mode was silently off. P1 #10.
+        assert captured.get("response_format") == {"type": "json_object"}
+        assert "type" not in captured
+        # The logprob channel survives alongside it.
+        assert captured.get("logprobs") is True

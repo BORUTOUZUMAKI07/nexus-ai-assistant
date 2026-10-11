@@ -221,9 +221,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Brand Header */}
       <div className="p-4 flex items-center justify-between border-b border-[var(--border-subtle)]">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center">
-            <Sparkles className="w-4 h-4 text-[var(--accent-ink)]" />
-          </div>
+          <img src="/nexus-logo.svg" alt="Nexus" className="w-8 h-8 rounded-lg" />
           <div>
             <h1 className="font-semibold text-sm tracking-tight text-[var(--text-primary)]">
               Nexus AI

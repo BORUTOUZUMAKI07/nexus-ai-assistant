@@ -7,9 +7,13 @@ Every delivery is recorded in ``webhook_deliveries`` and signed with
 can verify authenticity. Delivery is best-effort with bounded retries
 (``WEBHOOK_MAX_ATTEMPTS``); failures are surfaced via endpoints/redeliver.
 """
+import asyncio
 import hashlib
 import hmac
+import ipaddress
+import json
 import secrets
+import socket
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import UUID
@@ -18,10 +22,97 @@ import httpx
 import structlog
 from backend.app.core.config import settings
 from backend.app.domain.webhook.models import WebhookDelivery, WebhookEndpoint
+from backend.app.services.tools.web_search import (
+    _PRIVATE_NETS,
+    _SSRF_BLOCKED_HOSTS,
+    _is_reserved_ip,
+)
 from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
+
+
+def _encode_webhook_body(body: dict) -> bytes:
+    """The single serialization used for BOTH signing and the wire body.
+
+    ``httpx``'s ``json=`` re-serializes with compact separators and
+    ``ensure_ascii=False``, which differs from ``json.dumps(body, default=str)``.
+    Signing one form and sending the other made every receiver's HMAC
+    verification fail. Sign and send the exact same bytes.
+    """
+    return json.dumps(body, default=str).encode("utf-8")
+
+
+def _is_forbidden_host(host: str) -> bool:
+    """True when a hostname is a literal private/reserved address or a blocked name."""
+    hostname = host.rstrip(".").lower()
+    if (
+        hostname in _SSRF_BLOCKED_HOSTS
+        or hostname.endswith(".local")
+        or hostname.endswith(".internal")
+    ):
+        return True
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return (
+        not ip.is_global
+        or _is_reserved_ip(ip)
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_private
+    )
+
+
+async def _ensure_public_webhook_url(url: str) -> str:
+    """SSRF guard for outbound webhook targets.
+
+    A user-supplied webhook URL is fetched by this server, so it must not be
+    allowed to point at loopback, private, link-local or cloud-metadata
+    addresses (``http://169.254.169.254/...`` was previously delivered to
+    verbatim). Reuses the web-scrape guard's protected ranges. A hostname is
+    additionally resolved and rejected if *any* returned address is non-global;
+    an unresolvable hostname is allowed through, because the delivery then simply
+    fails and this keeps tests/offline runs free of a DNS dependency.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Webhook URL must be a valid http(s) URL.")
+    if parsed.username or parsed.password:
+        raise ValueError("Webhook URL must not contain embedded credentials.")
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if not host:
+        raise ValueError("Webhook URL must include a hostname.")
+    if _is_forbidden_host(host):
+        raise ValueError("Webhook URL must not target a private/internal address.")
+
+    try:
+        ipaddress.ip_address(host)
+        return url  # literal public IP already vetted above
+    except ValueError:
+        pass
+
+    try:
+        resolved = await asyncio.to_thread(socket.getaddrinfo, host, None)
+    except Exception:
+        return url  # unresolvable: the delivery will fail on its own
+    for _family, _socktype, _proto, _canon, sockaddr in resolved:
+        try:
+            addr = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if (
+            not addr.is_global
+            or _is_reserved_ip(addr)
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+        ):
+            raise ValueError("Webhook URL resolves to a private/internal address.")
+    return url
 
 
 class WebhookService:
@@ -41,6 +132,7 @@ class WebhookService:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError("Webhook URL must be a valid http(s) URL.")
+        await _ensure_public_webhook_url(url)
         events = [e for e in (events or []) if e]
         if not events:
             events = ["message.completed"]
@@ -153,7 +245,7 @@ class WebhookService:
             "timestamp": datetime.now(UTC).isoformat(),
             "payload": delivery.payload_json or {},
         }
-        raw = __import__("json").dumps(body, default=str).encode("utf-8")
+        raw = _encode_webhook_body(body)
         signature = hmac.new(endpoint.secret.encode(), raw, hashlib.sha256).hexdigest()
 
         headers = {
@@ -164,6 +256,9 @@ class WebhookService:
             "User-Agent": "nexus-webhook/1.0",
         }
         try:
+            # Re-validate at send time as well: an endpoint URL is stored and may
+            # later resolve to a private/internal address (DNS rebinding).
+            await _ensure_public_webhook_url(endpoint.url)
             status_code = await self.http_sender(endpoint.url, headers, body)
             delivery.status = "delivered" if 200 <= status_code < 300 else "failed"
             delivery.http_status = status_code
@@ -180,7 +275,12 @@ class WebhookService:
 
     async def _default_sender(self, url: str, headers: dict, payload: dict) -> int:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(url, json=payload, headers=headers)
+            # Send the exact bytes that were signed. ``json=payload`` would let
+            # httpx re-serialize compactly and every receiver's HMAC check would
+            # fail against the body it actually received (P0 #11).
+            resp = await client.post(
+                url, content=_encode_webhook_body(payload), headers=headers
+            )
             return resp.status_code
 
 
@@ -188,7 +288,7 @@ async def retry_failed_deliveries(
     session: AsyncSession, max_attempts: int | None = None
 ) -> int:
     """Re-attempt failed deliveries up to WEBHOOK_MAX_ATTEMPTS. Returns retried count."""
-    limit = settings.WEBHOOK_MAX_ATTEMPTS
+    limit = max_attempts if max_attempts is not None else settings.WEBHOOK_MAX_ATTEMPTS
     service = WebhookService(session)
     res = await session.exec(
         select(WebhookDelivery).where(

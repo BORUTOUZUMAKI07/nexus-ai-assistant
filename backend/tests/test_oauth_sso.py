@@ -774,6 +774,35 @@ def test_sso_new_account_stores_provider_identity():
     assert user.oauth_sub == "idp-subject-123"
 
 
+def test_sso_login_refuses_email_of_an_account_already_linked_elsewhere():
+    """The email fallback must not hand over an account already bound to a
+    different provider subject.
+
+    Previously the link was skipped but the caller was still logged in as that
+    account, so a recycled/reassigned address (or a second IdP sharing the
+    email) inherited it -- the exact takeover the subject-first order aims to
+    prevent. It must refuse instead.
+    """
+    fake = FakeSession()
+    linked = User(
+        email="sso@nexus.ai",
+        username="linked",
+        is_verified=True,
+        oauth_provider="other-idp",
+        oauth_sub="a-different-subject",
+    )
+    fake.seed(User, [linked])
+    svc = AuthService(fake)
+
+    with pytest.raises(AuthenticationError, match="already linked"):
+        _await(svc.sso_login(_identity()))
+
+    # The existing linkage is untouched and no duplicate account is created.
+    assert linked.oauth_provider == "other-idp"
+    assert linked.oauth_sub == "a-different-subject"
+    assert len(fake.rows.get(User, [])) == 1
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

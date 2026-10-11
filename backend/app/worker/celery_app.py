@@ -19,7 +19,13 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
+    # Hard limit SIGKILLs the child; a soft limit below it raises
+    # SoftTimeLimitExceeded *inside* the task first, so the task's own error path
+    # can mark the row failed before the kill (P1 #16, paired with the stale
+    # reclaim in FileRepository.claim_indexing for platforms where hard kill
+    # wins anyway).
     task_time_limit=300,
+    task_soft_time_limit=270,
     worker_concurrency=4,
     worker_prefetch_multiplier=1,
     # Worker-hygiene (HLD: queue load leveling): recycle a child after 50 tasks

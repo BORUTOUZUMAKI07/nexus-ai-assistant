@@ -441,8 +441,13 @@ class LiteLLMService:
 
         # Provider-specific structured-output and logprob requests are forwarded
         # as loose kwargs, which is how `drop_params=True` lets a provider that
-        # cannot do them ignore the request instead of failing the call.
-        _provider_kwargs: dict[str, Any] = dict(response_format) if response_format else {}
+        # cannot do them ignore the request instead of failing the call. The
+        # structured-output request must stay namespaced as ``response_format=``:
+        # splatting the dict itself sent ``type="json_object"`` as a top-level
+        # kwarg, which every provider ignored, so JSON mode was silently off.
+        _provider_kwargs: dict[str, Any] = (
+            {"response_format": response_format} if response_format else {}
+        )
         if logprobs:
             _provider_kwargs["logprobs"] = True
             # Providers cap this and drop the request if it is out of range;
@@ -464,6 +469,12 @@ class LiteLLMService:
 
         response = None
         last_exc: Exception | None = None
+        # Tokens burned by attempts that produced an empty-but-billable response
+        # before the fallback chain found a usable one. The provider charges for
+        # them, so the spend meter must too -- otherwise the wasted attempts are
+        # invisible to AGENT_LOOP_TOKEN_BUDGET and a provider that returns empty
+        # output can multiply a run's real cost fourfold with no ceiling tick.
+        _discarded_tokens = 0
         for _attempt_group in _attempt_groups:
             _eff_tokens = min(max(max_tokens, 1), 1000) if _attempt_group in ("fast_chat", "complex_reasoning") else max_tokens
 
@@ -514,6 +525,13 @@ class LiteLLMService:
                 model=_attempt_group,
                 attempt_group=_attempt_group,
             )
+            # The provider billed this attempt; count it before discarding so the
+            # retry is not free in the spend meter.
+            _usage = getattr(response, "usage", None)
+            if _usage:
+                _discarded_tokens += (getattr(_usage, "prompt_tokens", 0) or 0) + (
+                    getattr(_usage, "completion_tokens", 0) or 0
+                )
             response = None  # Mark as invalid so we try next group
 
         if response is None:
@@ -539,7 +557,8 @@ class LiteLLMService:
         # including the planner, router, critic and subagents, and any call
         # site added later. A hand-maintained counter in each node would
         # undercount precisely when a new node is added and nobody updates it.
-        charge_tokens(input_tokens + output_tokens)
+        # Discarded fallback attempts are included (see above).
+        charge_tokens(_discarded_tokens + input_tokens + output_tokens)
         logger.info(
             "llm_completion_ok",
             model=group,
@@ -603,7 +622,6 @@ class LiteLLMService:
                     duration_ms=int((_time.perf_counter() - _start) * 1000),
                 )
                 raise
-            await self._breaker.record_success(group)
             logger.info(
                 "llm_stream_started",
                 model=group,
@@ -619,6 +637,19 @@ class LiteLLMService:
                     if delta:
                         _streamed_chars += len(delta)
                         yield delta
+                # #33: the breaker used to be told "success" the moment the
+                # request was accepted, so a stream that then died mid-flight, or
+                # returned nothing at all, left it closed. A stream that produced
+                # no content is a provider failure, not a healthy call.
+                if _streamed_chars == 0:
+                    await self._breaker.record_failure(group)
+                    logger.warning("llm_stream_empty_output", model=group)
+                else:
+                    await self._breaker.record_success(group)
+            except Exception as exc:
+                await self._breaker.record_failure(group)
+                logger.warning("llm_stream_failed", model=group, error=str(exc))
+                raise
             finally:
                 # Always release the upstream SSE connection, including when the
                 # consumer generator is closed early (client disconnect) or a

@@ -2,7 +2,9 @@
 Application Settings — loaded from environment / .env file.
 All optional keys default to None (free-tier compatible).
 """
+import json
 import logging
+import os
 import secrets
 from pathlib import Path
 from typing import cast
@@ -40,6 +42,53 @@ PUBLISHED_EXAMPLE_SECRETS: frozenset[str] = frozenset(
         "nexus-aes256-key-32bytes-long!!",
     }
 )
+
+
+# Non-production secret persistence.
+#
+# In a non-production environment a missing/placeholder SECRET_KEY or
+# ENCRYPTION_KEY used to be regenerated on *every* boot. For ENCRYPTION_KEY that
+# is silent data loss: every BYOK ``api_keys`` row encrypted under the previous
+# process's key becomes undecryptable the moment the process restarts -- which
+# includes a staging restart, not just a throwaway dev box. Generated values are
+# now written to a gitignored file and reused, so the key is stable across
+# restarts and shared by every worker on the host. An environment that supplies
+# the keys explicitly is unaffected. Override the location with
+# ``NEXUS_DEV_SECRETS_FILE`` (tests point it at a temp path).
+_DEV_SECRETS_PATH = Path(
+    os.environ.get("NEXUS_DEV_SECRETS_FILE")
+    or (Path(__file__).resolve().parents[2] / ".dev_secrets.json")
+)
+
+
+def _load_dev_secrets() -> dict[str, str]:
+    try:
+        return cast("dict[str, str]", json.loads(_DEV_SECRETS_PATH.read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        logger.warning("dev_secrets_file_unreadable", error_type=type(exc).__name__)
+        return {}
+
+
+def _store_dev_secret(name: str, value: str) -> None:
+    data = _load_dev_secrets()
+    data[name] = value
+    try:
+        _DEV_SECRETS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _DEV_SECRETS_PATH.write_text(json.dumps(data), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("dev_secret_not_persisted", name=name, error_type=type(exc).__name__)
+
+
+def _stable_dev_secret(name: str, generator) -> str:
+    """Return a persisted non-production secret, creating it on first boot."""
+    existing = _load_dev_secrets().get(name)
+    if existing:
+        return existing
+    value = generator()
+    _store_dev_secret(name, value)
+    return cast("str", value)
 
 
 class Settings(BaseSettings):
@@ -726,11 +775,15 @@ class Settings(BaseSettings):
                 )
         else:
             if not self.SECRET_KEY or self.SECRET_KEY in PUBLISHED_EXAMPLE_SECRETS:
-                self.SECRET_KEY = secrets.token_urlsafe(48)
-                logger.info("generated_random_development_secret_key")
+                self.SECRET_KEY = _stable_dev_secret(
+                    "SECRET_KEY", lambda: secrets.token_urlsafe(48)
+                )
+                logger.info("using_stable_development_secret_key")
             if not self.ENCRYPTION_KEY or self.ENCRYPTION_KEY in PUBLISHED_EXAMPLE_SECRETS:
-                self.ENCRYPTION_KEY = secrets.token_hex(32)  # 64 hex chars → 32 bytes
-                logger.info("generated_random_development_encryption_key")
+                self.ENCRYPTION_KEY = _stable_dev_secret(
+                    "ENCRYPTION_KEY", lambda: secrets.token_hex(32)  # 64 hex chars → 32 bytes
+                )
+                logger.info("using_stable_development_encryption_key")
 
         if not self.PROMPT_DIR:
             self.PROMPT_DIR = str(Path(__file__).resolve().parent.parent / "prompt_templates")

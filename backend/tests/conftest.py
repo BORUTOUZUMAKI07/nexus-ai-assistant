@@ -30,6 +30,7 @@ sys.path.insert(0, str(tests_dir))
 # stack after every run. Env vars override the .env file, so force it off before
 # any backend module constructs the settings singleton.
 import os  # noqa: E402
+import tempfile  # noqa: E402
 
 # Tests must not ship traces to LangSmith either, for the same reason Sentry is
 # switched off below: backend/.env sets LANGSMITH_TRACING=true because the *app*
@@ -74,6 +75,16 @@ os.environ["SENTRY_DSN"] = ""
 # `make backend` still exports (viewer.py's "inactive" status in tests is the
 # honest reading of this).
 os.environ["NEW_RELIC_ENABLED"] = "false"
+
+# Fourth guard: keep the non-production secret store out of the working tree.
+# config.py now *persists* generated SECRET_KEY/ENCRYPTION_KEY (P0 #9) so a
+# restart no longer silently rotates the encryption key and orphans encrypted
+# BYOK keys. Without this, the suite would drop backend/.dev_secrets.json into
+# the repo on every run. Same position rule again: it is read at settings
+# construction, which the import below triggers.
+os.environ["NEXUS_DEV_SECRETS_FILE"] = str(
+    Path(tempfile.gettempdir()) / "nexus_pytest_dev_secrets.json"
+)
 
 import backend.app.infrastructure.cache.redis_client as cache_module  # noqa: E402
 import redis.asyncio as redis  # noqa: E402

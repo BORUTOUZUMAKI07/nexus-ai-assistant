@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from backend.app.domain.conversation.models import Conversation, Message
 from backend.app.domain.file.models import File
+from backend.app.domain.org.models import Organization, OrganizationMember
 from backend.app.domain.usage.models import UsageLog
 from backend.app.domain.user.models import APIKey, User, UserMemory, UserSettings
 from backend.app.services import account_service as account_module
@@ -207,3 +208,47 @@ def test_delete_unknown_user_raises():
     fake = FakeSession()
     with pytest.raises(ValueError):
         _await(AccountService(fake).delete_account(uuid4()))
+
+
+def test_delete_account_keeps_co_members_of_shared_orgs(monkeypatch):
+    """Deleting a user must not erase other members of an org the user merely
+    belongs to. The old delete dropped every member of every org the user was in
+    (``organization_id IN (their member orgs)``), silently removing co-members.
+    """
+    fake = FakeSession()
+    user, _ = _seed_user_data(fake)
+
+    owner = User(email="owner@example.com", username="owner")
+    co_member = User(email="co@example.com", username="co.member")
+    fake.seed(User, [owner, co_member])
+
+    # Org the deleted user OWNS: it (and all its memberships) must go.
+    owned = Organization(name="Owned", slug="owned", owner_id=user.id)
+    # Org the deleted user merely BELONGS to; someone else owns it.
+    shared = Organization(name="Shared", slug="shared", owner_id=owner.id)
+    fake.seed(Organization, [owned, shared])
+
+    my_owned_membership = OrganizationMember(organization_id=owned.id, user_id=user.id, role="owner")
+    my_shared_membership = OrganizationMember(organization_id=shared.id, user_id=user.id, role="member")
+    co_membership = OrganizationMember(organization_id=shared.id, user_id=co_member.id, role="member")
+    owner_membership = OrganizationMember(organization_id=shared.id, user_id=owner.id, role="owner")
+    fake.seed(
+        OrganizationMember,
+        [my_owned_membership, my_shared_membership, co_membership, owner_membership],
+    )
+
+    fake_conv_repo = FakeConvRepo()
+    monkeypatch.setattr(account_module, "ConversationRepository", lambda session: fake_conv_repo)
+    _await(AccountService(fake).delete_account(user.id))
+
+    surviving_ids = {m.id for m in fake.rows.get(OrganizationMember, [])}
+    # The user's own memberships are gone, everywhere.
+    assert my_owned_membership.id not in surviving_ids
+    assert my_shared_membership.id not in surviving_ids
+    # Co-members of the shared org survive -- the bug erased them.
+    assert co_membership.id in surviving_ids
+    assert owner_membership.id in surviving_ids
+    # Only the owned org is deleted; the shared one survives.
+    surviving_orgs = {o.id for o in fake.rows.get(Organization, [])}
+    assert owned.id not in surviving_orgs
+    assert shared.id in surviving_orgs

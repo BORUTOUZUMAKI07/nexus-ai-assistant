@@ -125,10 +125,8 @@ export default function SignInPage() {
     <div className="flex min-h-screen items-center justify-center bg-[var(--bg-main)] px-4">
       <div className="w-full max-w-md">
         <div className="mb-8 flex flex-col items-center text-center">
-          <Link href="/" className="flex items-center gap-3">
-            <span className="grid h-10 w-10 place-items-center rounded-lg bg-[var(--accent)] shadow-float" aria-hidden="true">
-              <Sparkles className="text-[var(--accent-foreground)]" size={22} strokeWidth={2.2} />
-            </span>
+          <Link href="/" className="flex items-center justify-center">
+            <img src="/nexus-logo.svg" alt="Nexus" className="h-14 w-14 rounded-xl shadow-sm" />
           </Link>
           <h1 className="mt-5 text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
             {mode === "login" ? "Welcome back" : "Create your account"}
