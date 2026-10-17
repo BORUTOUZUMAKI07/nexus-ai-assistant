@@ -1,12 +1,14 @@
 # Render Blueprint — Layer-2 OpenTelemetry Collector (free tier).
 #
-# One free web service that receives the app's OTLP logs and scraped /metrics
+# One free web service that receives the app's OTLP logs, metrics and traces
 # and forwards them to New Relic (Layer-3 sink). The app itself stays where it
 # deploys today (backend service / Docker) — only the collector goes here.
 #
 # Render forwards public HTTPS :443 to $PORT, so the OTLP/HTTP receiver must
-# listen on 4318 (see docker/otel-collector-config.yaml, which also documents
-# the optional basicauth lock-down for this public endpoint).
+# listen on 4318 (see docker/otel-collector-config.yaml). Because that endpoint
+# is public, it is protected by HTTP basic auth — set OTLP_AUTH_USER /
+# OTLP_AUTH_PASSWORD here and match them on the app (OTLP_AUTH_* in the backend
+# environment).
 #
 # No Render health check: the agent's /healthz lives on :13133, which Render
 # can't reach through the single public port.
@@ -23,11 +25,13 @@ services:
         sync: false
       - key: ENVIRONMENT
         value: production
-      - key: METRICS_TOKEN
+      - key: SERVICE_VERSION
+        value: "1.0.0"
+      # HTTP basic auth for the public OTLP receiver. Generate a real secret and
+      # set the same pair on the backend app (backend/.env: OTLP_AUTH_*).
+      - key: OTLP_AUTH_USER
         sync: false
-      # The app's public URL for /metrics scraping. Set to your deployed
-      # backend URL, e.g. https://nexus-backend.onrender.com
-      - key: METRICS_SCRAPE_TARGET
-        value: "https://nexus-backend.onrender.com"
+      - key: OTLP_AUTH_PASSWORD
+        sync: false
       - key: PORT
         value: "4318"

@@ -26,6 +26,12 @@ export interface SendMessageOptions {
   imageDataUrl?: string; // base64 data URL for inline image
   /** Plan mode: draft an actionable plan first, run only after approval */
   planMode?: boolean;
+  /**
+   * Generate an image from the prompt instead of sending it as a chat turn.
+   * Set by the `/image` slash command or the toolbar image button; the page
+   * routes it to the hook's `generateImage` rather than `sendMessage`.
+   */
+  generateImage?: boolean;
 }
 
 interface ChatInputProps {
@@ -46,29 +52,30 @@ const PROMPT_TEMPLATES = [
     title: "Senior Code Review",
     desc: "Evaluate correctness, security & performance",
     prompt:
-      "Please perform a senior-level code review on the following code:\n\n```\n\n```\n\nEvaluate: 1. Correctness 2. Security vulnerabilities 3. Edge cases & performance.",
+      "Perform a senior-level code review of the code below. Evaluate correctness, security, edge cases, and performance. Report each finding with its severity and a concrete fix, then give an overall verdict and an improved version of the code.\n\n```\n\n```",
   },
   {
     title: "Deep Research Brief",
     desc: "Structured multi-perspective analysis",
     prompt:
-      "Produce a comprehensive, structured research brief on: \n\nInclude: Executive Summary, Key Findings, Technical Impact, Challenges, and Actionable Recommendations.",
+      "Produce a comprehensive, structured research brief on the topic below. Cover an executive summary, key findings, technical impact, open challenges, and actionable recommendations. Cite verifiable sources and separate established facts from open questions.\n\nTopic: <your topic here>",
   },
   {
     title: "Root Cause Debugging",
     desc: "Diagnose stack trace & fix",
     prompt:
-      "Diagnose this error traceback and provide the minimal verified fix:\n\n```\n\n```",
+      "Diagnose the root cause of the error below and provide the minimal verified fix. Explain the failure mechanism, the precise change to make, and how to verify the fix. If the traceback is incomplete, say what is missing.\n\n```\n\n```",
   },
   {
     title: "System Architecture",
     desc: "Design components & data flow",
     prompt:
-      "Design an enterprise-grade system architecture for: \n\nDetail: Service boundaries, DB schemas, cache strategy, scalability bottlenecks, and failure modes.",
+      "Design an enterprise-grade system architecture for the requirement below. Detail service boundaries, data models, cache and async strategy, scalability limits, and failure modes, and justify each key decision.\n\nRequirement: <your requirement here>",
   },
 ];
 
 const SLASH_COMMANDS = [
+  { command: "/image", label: "Generate Image", desc: "Create an image from a prompt (free)", icon: "🎨" },
   { command: "/code", label: "Code Subagent", desc: "Activate Python sandbox & code agent", icon: "⚡" },
   { command: "/web", label: "Web Search", desc: "Enable live web search (CRAG)", icon: "🌐" },
   { command: "/deep", label: "Deep Agent", desc: "LangGraph Tree-of-Thought reasoning", icon: "🧠" },
@@ -89,6 +96,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [enableCode, setEnableCode] = useState(false);
   const [agentMode, setAgentMode] = useState<"fast" | "deep">("deep");
   const [planMode, setPlanMode] = useState(false);
+  // When true, the next send is an image-generation prompt rather than a chat
+  // turn. Toggled by the `/image` command or the toolbar button; reset after
+  // sending so the default stays "chat".
+  const [imageMode, setImageMode] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
 
@@ -150,7 +161,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   const applySlashCommand = (cmd: typeof SLASH_COMMANDS[0]) => {
-    if (cmd.command === "/code") { setEnableCode(true); setContent(""); }
+    if (cmd.command === "/image") { setImageMode(true); setContent(""); }
+    else if (cmd.command === "/code") { setEnableCode(true); setContent(""); }
     else if (cmd.command === "/web") { setEnableWeb(true); setContent(""); }
     else if (cmd.command === "/deep") { setAgentMode("deep"); setContent(""); }
     else if (cmd.command === "/doc") { fileInputRef.current?.click(); setContent(""); }
@@ -178,12 +190,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       agentMode,
       imageDataUrl: imageDataUrl ?? undefined,
       planMode,
+      generateImage: imageMode,
     };
     onSendMessage(content, options);
     setContent("");
     setAttachments([]);
     setImageDataUrl(null);
     setImageName("");
+    setImageMode(false);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -256,7 +270,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   // ── Voice recording ──────────────────────────────────────────────────────
 
+  // AbortController for the in-flight transcription fetch. Stored in a ref so
+  // the unmount cleanup effect can cancel it without being in the dependency
+  // array of the transcribeBlob callback.
+  const transcribeAbortRef = useRef<AbortController | null>(null);
+
 const transcribeBlob = useCallback(async (blob: Blob) => {
+    const ac = new AbortController();
+    transcribeAbortRef.current = ac;
     setIsTranscribing(true);
     try {
       const formData = new FormData();
@@ -264,6 +285,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
       const res = await fetch("/api/audio/transcribe", {
         method: "POST",
         body: formData,
+        signal: ac.signal,
       });
       if (!res.ok) throw new Error("Transcription failed");
       const data = (await res.json()) as { text: string };
@@ -283,8 +305,13 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
           }
         }, 50);
       }
-    } catch {
-      alert("Transcription error – please try again.");
+    } catch (err) {
+      // DOMException name "AbortError" means the fetch was cancelled because
+      // the component unmounted — silently swallow it so the user never sees
+      // a spurious alert after they navigated away.
+      if (err instanceof Error && err.name !== "AbortError") {
+        alert("Transcription error – please try again.");
+      }
     } finally {
       setIsTranscribing(false);
     }
@@ -321,8 +348,9 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
     setIsRecording(false);
   }, []);
 
-  // Release the microphone if the component unmounts mid-recording
-  // (switching conversations or signing out while the mic is live).
+  // Release the microphone and cancel any in-flight transcription fetch if
+  // the component unmounts mid-recording (switching conversations or signing
+  // out while the mic is live).
   useEffect(() => {
     return () => {
       const rec = mediaRecorderRef.current;
@@ -333,6 +361,9 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
           // recorder already in a terminal state
         }
       }
+      // Cancel an in-flight transcription fetch so it cannot call setState
+      // after the component has unmounted.
+      transcribeAbortRef.current?.abort();
     };
   }, []);
 
@@ -364,7 +395,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
           </div>
         </div>
       )}
-      <div className="relative border border-[var(--border-strong)] rounded-2xl bg-[var(--bg-surface-elevated)] p-2.5 shadow-2xl focus-within:border-[var(--accent)] transition-all">
+      <div className="relative border border-[var(--border-subtle)] rounded-2xl bg-[var(--bg-surface)] shadow-[0_4px_24px_rgba(0,0,0,0.08)] focus-within:border-[var(--accent)]/60 focus-within:shadow-[0_4px_24px_rgba(0,0,0,0.12),0_0_0_2px_var(--accent-soft)] transition-all duration-200 p-2">
         {/* Image Preview */}
         {imageDataUrl && (
           <div className="relative mb-2 inline-block">
@@ -480,7 +511,9 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
           }}
           onKeyDown={handleKeyDown}
           placeholder={
-            isTranscribing
+            imageMode
+              ? "Describe the image you want Nexus to generate..."
+              : isTranscribing
               ? "Transcribing speech…"
               : isRecording
               ? "Recording… click 🎙️ again to stop"
@@ -488,7 +521,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
           }
           rows={1}
           disabled={isTranscribing}
-          className="w-full bg-transparent resize-none text-[var(--text-primary)] placeholder-[var(--text-faint)] text-sm px-2 py-1.5 outline-none focus:ring-0 leading-relaxed max-h-44 overflow-y-auto"
+          className="w-full bg-transparent resize-none text-[var(--text-primary)] placeholder-[var(--text-faint)] text-[0.9375rem] px-2 py-2 outline-none focus:ring-0 leading-relaxed max-h-52 overflow-y-auto tracking-[-0.006em]"
         />
 
         {/* Bottom Toolbar & Controls */}
@@ -529,6 +562,23 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
               title="Attach image for vision analysis"
             >
               <ImageIcon className="w-4 h-4" />
+            </button>
+
+            {/* Generate image (free, key-less) */}
+            <button
+              onClick={() => setImageMode((v) => !v)}
+              className={`p-1.5 rounded-lg transition-colors ${
+                imageMode
+                  ? "text-[var(--accent-ink)] bg-[var(--accent-soft)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)]"
+              }`}
+              title={
+                imageMode
+                  ? "Image mode on — your next message becomes the prompt"
+                  : "Generate an image from a prompt"
+              }
+            >
+              <Sparkles className="w-4 h-4" />
             </button>
 
             {/* Microphone / STT */}
@@ -684,7 +734,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
             {isLoading && (
               <button
                 onClick={onStop}
-                className="p-2 rounded-lg bg-[var(--status-danger)] hover:opacity-90 text-white transition-all"
+                className="p-2 rounded-xl bg-[var(--status-danger)] hover:opacity-90 text-white transition-all"
                 title="Stop generation"
               >
                 <StopCircle className="w-4 h-4" />
@@ -693,7 +743,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
             <button
               onClick={handleSend}
               disabled={!canSend}
-              className="p-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--accent-foreground)] transition-all active:scale-95 shadow-[0_0_12px_var(--accent-glow)]"
+              className="p-2.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-35 disabled:cursor-not-allowed text-[var(--accent-foreground)] transition-all active:scale-95 shadow-[0_0_16px_var(--accent-glow)]"
               title={isLoading ? "Queue message (Enter)" : "Send message (Enter)"}
             >
               <Send className="w-4 h-4" />

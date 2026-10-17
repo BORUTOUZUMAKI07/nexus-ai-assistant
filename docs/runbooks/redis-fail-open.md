@@ -38,7 +38,7 @@ path (model call) and authentication flows that need Redis-held state degrade.
 ## When fail-open is NOT safe
 - **Idempotency**: duplicate POSTs during the outage were not deduped. Tell
    clients to retry idempotently; the `Idempotency-Key` contract still applies.
-- **OAuth state**: an in-flight browser SSO flow started before the outage may
+- **OAuth state**: an in-flight browser OAuth flow started before the outage may
    fail its callback; users retry. Verified-email find-or-create still works —
    only the state exchange degrades.
 

@@ -1,0 +1,6 @@
+# Local-only override (untracked). A native postgres.exe holds host :5432 on
+# this machine, so publish the container on :55432 to match backend/.env.
+services:
+  postgres:
+    ports: !override
+      - "55432:5432"

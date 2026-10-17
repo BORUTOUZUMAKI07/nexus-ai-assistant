@@ -20,7 +20,7 @@ export async function GET(_req: Request, { params }: Ctx) {
   const res = await backendFetch(`/auth/oauth/${provider}`, { method: "GET" });
   const text = await res.text();
   if (!text) {
-    return NextResponse.json({ detail: "sso_unavailable" }, { status: res.status });
+    return NextResponse.json({ detail: "oauth_unavailable" }, { status: res.status });
   }
   try {
     return NextResponse.json(JSON.parse(text), { status: res.status });

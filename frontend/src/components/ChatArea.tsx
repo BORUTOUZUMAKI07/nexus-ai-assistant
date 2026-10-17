@@ -2,9 +2,9 @@
 
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useCopyFeedback, useCopyToggle } from "@/lib/clipboard";
+import { modelDisplayName } from "@/lib/models";
 import {
   User,
-  Bot,
   ChevronDown,
   ChevronUp,
   Copy,
@@ -30,6 +30,7 @@ import {
   Scale,
 } from "lucide-react";
 import { ArtifactItem } from "./ArtifactCanvas";
+import { NexusMark } from "./NexusMark";
 
 export interface PlanReviewItem {
   id: string;
@@ -329,30 +330,37 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
   const handleCopyCode = () => copyCode(code);
 
   return (
-    <div className="my-3 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--code-block-bg)] dark-island font-mono text-xs">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-surface-elevated)] border-b border-[var(--border-subtle)] text-[11px] text-[var(--text-muted)]">
-        <span className="font-semibold uppercase tracking-wider text-[var(--accent-ink)]">
-          {language || "code"}
+    <div className="my-4 rounded-xl overflow-hidden border border-[var(--border-subtle)] bg-[var(--code-block-bg)] font-mono text-xs">
+      <div className="flex items-center justify-between px-4 py-2.5 bg-[var(--bg-surface-elevated)] border-b border-[var(--border-subtle)]">
+        <span className="flex items-center gap-2">
+          <span className="flex gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-[var(--code-dot-close)]" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[var(--code-dot-minimize)]" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[var(--code-dot-maximize)]" />
+          </span>
+          <span className="font-semibold uppercase tracking-wider text-[10px] text-[var(--text-muted)] ml-1">
+            {language || "code"}
+          </span>
         </span>
         <button
           onClick={handleCopyCode}
-          className="flex items-center gap-1 px-2 py-0.5 rounded hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer text-[11px] font-sans"
           title="Copy code"
         >
           {copied ? (
             <>
               <Check className="w-3.5 h-3.5 text-[var(--status-success)]" />
-              <span className="text-[var(--status-success)] font-sans text-[10px]">Copied!</span>
+              <span className="text-[var(--status-success)]">Copied!</span>
             </>
           ) : (
             <>
               <Copy className="w-3.5 h-3.5" />
-              <span className="font-sans text-[10px]">Copy</span>
+              <span>Copy</span>
             </>
           )}
         </button>
       </div>
-      <div className="p-3.5 overflow-x-auto text-[var(--text-secondary)] leading-relaxed text-[12px]">
+      <div className="px-5 py-4 overflow-x-auto text-[var(--text-secondary)] leading-relaxed text-[13px]">
         <pre className="!bg-transparent !p-0 !m-0 !border-0 font-mono">
           <code>{code}</code>
         </pre>
@@ -385,7 +393,7 @@ const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
       <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-surface-elevated)] border-b border-[var(--border-subtle)] text-[11px] text-[var(--text-muted)]">
         <span className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-[var(--accent-ink)] font-mono">
           <GitBranch className="w-3.5 h-3.5 text-[var(--accent-ink)]" />
-          Mermaid Diagram
+          Diagram Source
         </span>
         <button
           onClick={handleCopyCode}
@@ -542,7 +550,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
               // H1 / Title
               if (trimmed.startsWith("# ")) {
                 return (
-                  <h1 key={bIdx} className="text-lg font-bold text-[var(--text-primary)] mt-3 mb-1.5">
+                  <h1 key={bIdx} className="text-[1.2rem] font-bold text-[var(--text-primary)] mt-5 mb-2 leading-snug tracking-tight">
                     {trimmed.replace(/^#\s+/, "")}
                   </h1>
                 );
@@ -551,7 +559,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
               // H2
               if (trimmed.startsWith("## ")) {
                 return (
-                  <h2 key={bIdx} className="text-base font-semibold text-[var(--text-primary)] mt-3 mb-1.5 flex items-center gap-1.5">
+                  <h2 key={bIdx} className="text-[1.05rem] font-semibold text-[var(--text-primary)] mt-4 mb-1.5 leading-snug tracking-tight flex items-center gap-1.5">
                     {trimmed.replace(/^##\s+/, "")}
                   </h2>
                 );
@@ -560,7 +568,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
               // H3
               if (trimmed.startsWith("### ")) {
                 return (
-                  <h3 key={bIdx} className="text-sm font-semibold text-[var(--text-primary)] mt-2 mb-1">
+                  <h3 key={bIdx} className="text-[0.975rem] font-semibold text-[var(--text-primary)] mt-3 mb-1 leading-snug">
                     {trimmed.replace(/^###\s+/, "")}
                   </h3>
                 );
@@ -582,8 +590,8 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
               if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
                 const itemText = trimmed.replace(/^[-*]\s+/, "");
                 return (
-                  <div key={bIdx} className="flex items-start gap-2 my-1 text-sm">
-                    <span className="text-[var(--accent-ink)] font-bold mt-1 text-xs">•</span>
+                  <div key={bIdx} className="flex items-start gap-2 my-1.5">
+                    <span className="text-[var(--accent-ink)] font-bold shrink-0 select-none" style={{ marginTop: "0.25em", fontSize: "0.7em" }}>●</span>
                     <span className="flex-1">{formatInline(itemText)}</span>
                   </div>
                 );
@@ -593,8 +601,8 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
               const numMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
               if (numMatch) {
                 return (
-                  <div key={bIdx} className="flex items-start gap-2 my-1 text-sm">
-                    <span className="font-mono text-xs text-[var(--accent-ink)] font-semibold min-w-4 mt-0.5">
+                  <div key={bIdx} className="flex items-start gap-2 my-1.5">
+                    <span className="font-mono text-[0.8em] text-[var(--accent-ink)] font-semibold min-w-5 shrink-0 tabular-nums" style={{ marginTop: "0.15em" }}>
                       {numMatch[1]}.
                     </span>
                     <span className="flex-1">{formatInline(numMatch[2])}</span>
@@ -609,7 +617,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
 
               // Regular paragraph
               return (
-                <p key={bIdx} className="my-1 text-sm leading-relaxed">
+                <p key={bIdx} className="my-1 leading-relaxed">
                   {formatInline(line)}
                 </p>
               );
@@ -685,6 +693,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [resolving, setResolving] = useState(false);
   const [resolved, setResolved] = useState<"approve" | "reject" | "modify" | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  // The currently-playing backend-TTS audio element and the object URL it was
+  // created from. Both are torn down together so a revoked URL can never
+  // outlive its element (or vice versa).
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
   // Collapsed by default. The verdict is metadata about the turn, not the
   // answer, and a permanently-open panel above the transcript would compete
   // with the reply the user actually asked for. It is there for the case where
@@ -727,22 +740,100 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     -1
   );
 
-  const handleTTS = useCallback((msgId: string, text: string) => {
-    if (!window.speechSynthesis) return;
-    if (speakingId === msgId) {
-      window.speechSynthesis.cancel();
-      setSpeakingId(null);
-      return;
+  // Stop whatever is currently speaking: the backend audio element and the
+  // browser's own synthesizer. Idempotent, so every caller can call it freely.
+  const stopSpeech = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      audioRef.current = null;
     }
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.rate = 1.0;
-    utt.pitch = 1.0;
-    utt.onend = () => setSpeakingId(null);
-    utt.onerror = () => setSpeakingId(null);
-    setSpeakingId(msgId);
-    window.speechSynthesis.speak(utt);
-  }, [speakingId]);
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }, []);
+
+  /**
+   * Read a message aloud.
+   *
+   * Prefers the backend's edge-tts voice (`GET /api/audio/speech`, free and
+   * key-less) because it is consistent across browsers and works where the
+   * browser has no installed voices at all. Falls back to `speechSynthesis`
+   * when the backend is unreachable or returns nothing, so the button is never
+   * a silent no-op.
+   */
+  const handleTTS = useCallback(
+    async (msgId: string, text: string) => {
+      if (speakingId === msgId) {
+        stopSpeech();
+        setSpeakingId(null);
+        return;
+      }
+      stopSpeech();
+      setSpeakingId(msgId);
+
+      // `stopSpeech` is also called from `onended`/`onerror`, which can fire
+      // after a different message started speaking; only clear the id if this
+      // message is still the one on screen.
+      const finish = () => setSpeakingId((cur) => (cur === msgId ? null : cur));
+
+      // The backend caps speech at 4000 characters. Trim here rather than let
+      // the request 400 and silently fall through to the browser voice on every
+      // long answer.
+      const requestText = text.slice(0, 4000).trim();
+      if (requestText) {
+        try {
+          const res = await fetch(
+            `/api/audio/speech?text=${encodeURIComponent(requestText)}`
+          );
+          if (res.ok) {
+            const blob = await res.blob();
+            if (blob.size > 0) {
+              const url = URL.createObjectURL(blob);
+              const audio = new Audio(url);
+              audioRef.current = audio;
+              audioUrlRef.current = url;
+              audio.onended = () => {
+                stopSpeech();
+                finish();
+              };
+              audio.onerror = () => {
+                stopSpeech();
+                finish();
+              };
+              await audio.play();
+              return;
+            }
+          }
+        } catch {
+          /* unreachable or refused: fall through to the browser voice */
+        }
+      }
+
+      // Browser fallback. Clear any half-created audio element first.
+      stopSpeech();
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        const utt = new SpeechSynthesisUtterance(text);
+        utt.rate = 1.0;
+        utt.pitch = 1.0;
+        utt.onend = finish;
+        utt.onerror = finish;
+        window.speechSynthesis.speak(utt);
+      } else {
+        finish();
+      }
+    },
+    [speakingId, stopSpeech]
+  );
+
+  // Cancel any running TTS when ChatArea unmounts (e.g. navigating away or
+  // switching conversations while a message is being read aloud). Without this,
+  // the browser keeps speaking after the component is gone.
+  useEffect(() => stopSpeech, [stopSpeech]);
 
   const handleCopy = (id: string, text: string) => copyText(id, text);
 
@@ -758,10 +849,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       setHitlOpen(false);
       setHitlNote("");
     } catch {
-      // The hook now rethrows nothing on failure -- it records the error and
-      // deliberately keeps `pendingHITL` so the card stays actionable. Guard
-      // here too so a rejection can never mark the decision as resolved and
-      // collapse the card the user still needs.
+      // The hook re-throws when the backend does not record the decision, so a
+      // failed submit lands here and must NOT mark the request resolved: the
+      // card stays actionable and the hook shows the error. Retiring the card
+      // on a failure is the "looks finished but produced nothing" loss this
+      // whole flow exists to avoid -- the hook keeps `pendingHITL` for exactly
+      // this reason.
     } finally {
       setResolving(false);
     }
@@ -771,20 +864,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     <div
       ref={scrollRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto px-4 py-6 md:px-12 space-y-6"
+      className="flex-1 overflow-y-auto px-4 py-8 md:px-8 space-y-2"
     >
       {messages.length === 0 && (
-        <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto py-24 space-y-4">
-          <div className="w-12 h-12 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] flex items-center justify-center">
-            <Sparkles className="w-6 h-6 text-[var(--accent-ink)]" />
+        <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto py-24 space-y-5">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[var(--accent-soft)] to-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center shadow-sm">
+            <Sparkles className="w-7 h-7 text-[var(--accent-ink)]" />
           </div>
-          <h2 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">
-            How can Nexus help you today?
-          </h2>
-          <p className="text-sm text-[var(--text-muted)] leading-relaxed">
-            Research the live web, query your knowledge base, write and run
-            code, and keep human approvals for sensitive actions.
-          </p>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
+              How can Nexus help you today?
+            </h2>
+            <p className="text-[0.9375rem] text-[var(--text-muted)] leading-relaxed max-w-sm mx-auto">
+              Research the live web, query your knowledge base, write and run
+              code, and keep human approvals for sensitive actions.
+            </p>
+          </div>
         </div>
       )}
 
@@ -884,57 +979,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               >
                 Modify…
               </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Critic verdict / evidence score.
-          This block used not to exist at all: the backend emitted both frames
-          on every finished run, the BFF route dropped them, and the user was
-          never told. The gap was invisible from the backend because the frames
-          were written to the database and the API contract still held. */}
-      {turnVerdict && (
-        <div className="max-w-3xl mx-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3.5">
-          <button
-            onClick={() => setVerdictOpen((v) => !v)}
-            aria-expanded={verdictOpen}
-            className="w-full flex items-center justify-between gap-2 text-left"
-          >
-            <span className="flex items-center gap-2 text-xs font-semibold text-[var(--text-secondary)]">
-              <ScaleIcon verdict={turnVerdict} />
-              {turnVerdict.revision_count > 0
-                ? `Answer revised ${turnVerdict.revision_count}× before delivery`
-                : "Answer passed review on first draft"}
-            </span>
-            <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wide">
-              <ScorePill score={turnVerdict.evidence_score} />
-              {/* Three states, not two. `null` is the backend not reporting the
-                  gate at all, which is not the same as it passing, and
-                  rendering it as a green "passed" would be a claim nobody made. */}
-              {turnVerdict.evidence_gate_passed === false ? (
-                <span className="px-2 py-0.5 rounded bg-[var(--status-warning)]/10 text-[var(--status-warning)] border border-[var(--status-warning)]/30">
-                  Low evidence
+              {/* The approval POST resumes the graph inline and can take tens of
+                  seconds. Without this the buttons merely grey out and the
+                  Approve click looks like it did nothing, which is the exact
+                  complaint the ceiling above exists to prevent. */}
+              {resolving && (
+                <span
+                  role="status"
+                  aria-live="polite"
+                  className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]"
+                >
+                  <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                  Working…
                 </span>
-              ) : turnVerdict.evidence_gate_passed === true ? (
-                <span className="px-2 py-0.5 rounded bg-[var(--status-success)]/10 text-[var(--status-success)] border border-[var(--status-success)]/30">
-                  Evidence gate passed
-                </span>
-              ) : null}
-              <ChevronDown
-                className={`w-3.5 h-3.5 text-[var(--text-muted)] transition-transform ${verdictOpen ? "rotate-180" : ""}`}
-              />
-            </span>
-          </button>
-
-          {verdictOpen && turnVerdict.critique && (
-            <div className="mt-3 pt-3 border-t border-[var(--border-subtle)]">
-              <p className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-muted)] mb-1">
-                What the reviewer flagged
-              </p>
-              <p className="text-xs text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap">
-                {turnVerdict.critique}
-              </p>
+              )}
             </div>
           )}
         </div>
@@ -960,19 +1018,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         return (
           <div
             key={msg.id}
-            className={`flex gap-3.5 max-w-3xl mx-auto ${
+            className={`group flex gap-3 max-w-3xl mx-auto ${
               isUser ? "justify-end" : "justify-start"
-            }`}
+            } px-2`}
           >
             {/* Assistant Avatar */}
             {!isUser && (
-              <div className="w-8 h-8 rounded-lg bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center text-[var(--text-primary)] shrink-0 mt-1">
-                <Bot className="w-4 h-4 text-[var(--text-secondary)]" />
+              <div className="w-7 h-7 rounded-lg bg-[var(--accent-soft)] border border-[var(--accent)]/20 flex items-center justify-center shrink-0 mt-0.5">
+                <NexusMark className="w-3.5 h-3.5 text-[var(--accent-ink)]" />
               </div>
             )}
 
             {/* Message Bubble Body */}
-            <div className={`flex flex-col space-y-2 max-w-[85%] ${isUser ? "items-end" : "items-start"}`}>
+            <div className={`flex flex-col space-y-2 ${isUser ? "items-end max-w-[82%]" : "items-start flex-1 min-w-0"}`}>
               {/* Thought Process Drawer with Live Timer & Stage Badges */}
               {!isUser && hasThought && (
                 <ThoughtDrawer
@@ -982,48 +1040,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 />
               )}
 
-              {/* Artifact Card trigger if code/document detected */}
-              {artifact && onOpenArtifact && (
-                <div className="w-full p-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] flex items-center justify-between gap-3 hover:border-[var(--accent)]/50 transition-colors">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <FileCode className="w-4 h-4 text-[var(--accent-ink)] shrink-0" />
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold text-[var(--text-primary)] truncate">
-                        {artifact.title}
-                      </div>
-                      <span className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)]">
-                        {artifact.language} • {artifact.content.split("\n").length} lines
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {onSaveArtifact && (
-                      <button
-                        onClick={() => onSaveArtifact(artifact)}
-                        className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent-ink)] hover:border-[var(--accent)]/50 transition-all"
-                        title="Save artifact (persisted + versioned)"
-                      >
-                        <Save className="w-3 h-3" />
-                        Save
-                      </button>
-                    )}
-                    <button
-                      onClick={() => onOpenArtifact(artifact)}
-                      className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-[var(--accent-soft)] text-[var(--accent-ink)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)] transition-all"
-                    >
-                      Open in Canvas
-                      <ExternalLink className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {/* Main Text Bubble */}
               <div
-                className={`p-4 rounded-xl text-sm leading-relaxed prose-nexus border ${
+                className={`prose-nexus ${
                   isUser
-                    ? "bg-[var(--bg-surface-elevated)] text-[var(--text-primary)] border-[var(--border-strong)] rounded-tr-none shadow-sm"
-                    : "glass-card text-[var(--text-primary)] rounded-tl-none"
+                    ? "px-4 py-3 rounded-2xl rounded-tr-sm bg-[var(--bg-surface-elevated)] border border-[var(--border-strong)] text-[var(--text-primary)] shadow-sm max-w-full"
+                    : "text-[var(--text-primary)] w-full"
                 }`}
               >
                 {/* Inline image for user messages */}
@@ -1040,9 +1062,56 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 ) : (
                   <>
                     <MarkdownRenderer content={msg.content} />
-                    {/* Streaming cursor pulse on the last assistant message */}
+                    {/*
+                      A generated image renders from `imageDataUrl`, not from the
+                      markdown body: a base64 data URL inlined into `content`
+                      would be re-parsed by the renderer and held twice. The
+                      download anchor uses the data URL directly, so saving works
+                      with no extra request.
+                    */}
+                    {msg.imageDataUrl && (
+                      <figure className="mt-3 space-y-1.5">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={msg.imageDataUrl}
+                          alt={msg.content || "Generated image"}
+                          className="max-h-[440px] w-auto rounded-xl border border-[var(--border-subtle)]"
+                        />
+                        <a
+                          href={msg.imageDataUrl}
+                          download="nexus-image.jpg"
+                          className="inline-block text-[11px] text-[var(--text-muted)] hover:text-[var(--accent-ink)] transition-colors"
+                        >
+                          Download image
+                        </a>
+                      </figure>
+                    )}
+                    {/*
+                      Live activity chip.
+
+                      The run is a background task that streams frames, but
+                      until the first token arrives the assistant bubble is
+                      empty and the only progress signal sat at the bottom of
+                      the transcript, attached to nothing. This travels with the
+                      message it describes: "Thinking…" before the first token,
+                      "Writing…" once text starts landing. Both are driven by
+                      state the view already has (`isLoading`, `msg.content`),
+                      so it needs no new event type and cannot fall out of sync
+                      with the answer it labels.
+                    */}
                     {isLoading && msgIndex === lastAssistantIdx && (
-                      <span className="inline-block w-1.5 h-4 bg-[var(--accent)] ml-0.5 animate-pulse rounded-sm align-middle" />
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className="mt-2 flex items-center gap-2 text-xs text-[var(--text-muted)]"
+                      >
+                        <span aria-hidden="true" className="flex items-center gap-1">
+                          <span className="stream-dot" />
+                          <span className="stream-dot" />
+                          <span className="stream-dot" />
+                        </span>
+                        {msg.content ? "Writing…" : "Thinking…"}
+                      </div>
                     )}
                   </>
                 )}
@@ -1099,9 +1168,48 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 )}
               </div>
 
-              {/* Message Footer Toolbar */}
+              {/* Artifact card — below the answer, not above it. The card is an
+                  action on the finished reply ("Save", "Open in Canvas"), so it
+                  belongs after the text the way the feedback toolbar does,
+                  rather than as a header the answer appears to be introducing. */}
+              {artifact && onOpenArtifact && (
+                <div className="w-full p-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] flex items-center justify-between gap-3 hover:border-[var(--accent)]/50 transition-colors">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <FileCode className="w-4 h-4 text-[var(--accent-ink)] shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-[var(--text-primary)] truncate">
+                        {artifact.title}
+                      </div>
+                      <span className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-muted)]">
+                        {artifact.language} • {artifact.content.split("\n").length} lines
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {onSaveArtifact && (
+                      <button
+                        onClick={() => onSaveArtifact(artifact)}
+                        className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent-ink)] hover:border-[var(--accent)]/50 transition-all"
+                        title="Save artifact (persisted + versioned)"
+                      >
+                        <Save className="w-3 h-3" />
+                        Save
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onOpenArtifact(artifact)}
+                      className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-[var(--accent-soft)] text-[var(--accent-ink)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)] transition-all"
+                    >
+                      Open in Canvas
+                      <ExternalLink className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Message Footer Toolbar - fades in on hover */}
               {!isUser && (
-                <div className="flex items-center gap-2 text-[var(--text-muted)] text-xs px-1">
+                <div className="flex items-center gap-1.5 text-[var(--text-muted)] text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-150 px-0.5">
                   <button
                     onClick={() => handleCopy(msg.id, msg.content)}
                     className="hover:text-[var(--text-primary)] p-1 rounded transition-colors"
@@ -1109,9 +1217,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   >
                     {copiedId === msg.id ? <Check className="w-3.5 h-3.5 text-[var(--status-success)]" /> : <Copy className="w-3.5 h-3.5" />}
                   </button>
-                  {/* TTS button – browser speechSynthesis, 0 cost */}
+                  {/* TTS button – backend edge-tts, browser speechSynthesis fallback, 0 cost */}
                   <button
-                    onClick={() => handleTTS(msg.id, msg.content)}
+                    onClick={() => void handleTTS(msg.id, msg.content)}
                     className={`p-1 rounded transition-colors ${
                       speakingId === msg.id
                         ? "text-[var(--accent-ink)] animate-pulse"
@@ -1144,8 +1252,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     </>
                   )}
                   {msg.model && (
-                    <span className="text-[10px] text-[var(--text-faint)] font-mono ml-auto">
-                      {msg.model}
+                    <span
+                      className="text-[10px] text-[var(--text-faint)] font-mono ml-auto"
+                      title={`Model: ${msg.model}`}
+                    >
+                      {modelDisplayName(msg.model)}
                     </span>
                   )}
                 </div>
@@ -1154,19 +1265,82 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
             {/* User Avatar */}
             {isUser && (
-              <div className="w-8 h-8 rounded-lg bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center text-[var(--text-muted)] shrink-0 mt-1">
-                <User className="w-4 h-4" />
+              <div className="w-7 h-7 rounded-full bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center text-[var(--text-muted)] shrink-0 mt-0.5">
+                <User className="w-3.5 h-3.5" />
               </div>
             )}
           </div>
         );
       })}
 
-      {/* Pulsing indicator when loading and no streaming message yet */}
+      {/* Critic verdict / evidence score — below the transcript, because it is
+          metadata *about* the answer, not a header that precedes it. It used to
+          render above every message, which read as if it introduced the user's
+          prompt. Collapsed by default: it is there for the case where the
+          evidence gate failed and nothing else in the UI says so.
+          The block did not exist at all originally: the backend emitted both
+          frames on every finished run, the BFF route dropped them, and the user
+          was never told. */}
+      {turnVerdict && (
+        <div className="max-w-3xl mx-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3.5 mt-2">
+          <button
+            onClick={() => setVerdictOpen((v) => !v)}
+            aria-expanded={verdictOpen}
+            className="w-full flex items-center justify-between gap-2 text-left"
+          >
+            <span className="flex items-center gap-2 text-xs font-semibold text-[var(--text-secondary)]">
+              <ScaleIcon verdict={turnVerdict} />
+              {turnVerdict.revision_count > 0
+                ? `Answer revised ${turnVerdict.revision_count}× before delivery`
+                : "Answer passed review on first draft"}
+            </span>
+            <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wide">
+              <ScorePill score={turnVerdict.evidence_score} />
+              {/* Three states, not two. `null` is the backend not reporting the
+                  gate at all, which is not the same as it passing, and
+                  rendering it as a green "passed" would be a claim nobody made. */}
+              {turnVerdict.evidence_gate_passed === false ? (
+                <span className="px-2 py-0.5 rounded bg-[var(--status-warning)]/10 text-[var(--status-warning)] border border-[var(--status-warning)]/30">
+                  Low evidence
+                </span>
+              ) : turnVerdict.evidence_gate_passed === true ? (
+                <span className="px-2 py-0.5 rounded bg-[var(--status-success)]/10 text-[var(--status-success)] border border-[var(--status-success)]/30">
+                  Evidence gate passed
+                </span>
+              ) : null}
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-[var(--text-muted)] transition-transform ${verdictOpen ? "rotate-180" : ""}`}
+              />
+            </span>
+          </button>
+
+          {verdictOpen && turnVerdict.critique && (
+            <div className="mt-3 pt-3 border-t border-[var(--border-subtle)]">
+              <p className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-muted)] mb-1">
+                What the reviewer flagged
+              </p>
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap">
+                {turnVerdict.critique}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Thinking dots indicator when loading and no streaming message yet */}
       {isLoading && lastAssistantIdx === -1 && (
-        <div className="max-w-3xl mx-auto flex items-center gap-2 text-xs text-[var(--text-muted)] font-mono px-4 py-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] animate-pulse">
-          <Sparkles className="w-3.5 h-3.5 text-[var(--accent-ink)] animate-spin" />
-          <span>Nexus is working…</span>
+        <div className="max-w-3xl mx-auto px-2">
+          <div className="flex gap-3 items-start">
+            <div className="w-7 h-7 rounded-lg bg-[var(--accent-soft)] border border-[var(--accent)]/20 flex items-center justify-center shrink-0">
+              <NexusMark className="w-3.5 h-3.5 text-[var(--accent-ink)]" />
+            </div>
+            <div className="flex items-center gap-1.5 py-3">
+              <span className="sr-only">Nexus is working…</span>
+              <span aria-hidden="true" className="w-2 h-2 rounded-full bg-[var(--text-muted)] animate-bounce" style={{ animationDelay: "0ms" }} />
+              <span aria-hidden="true" className="w-2 h-2 rounded-full bg-[var(--text-muted)] animate-bounce" style={{ animationDelay: "150ms" }} />
+              <span aria-hidden="true" className="w-2 h-2 rounded-full bg-[var(--text-muted)] animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
+          </div>
         </div>
       )}
     </div>

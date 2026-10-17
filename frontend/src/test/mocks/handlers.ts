@@ -13,12 +13,6 @@ export const mockConversations = [
   },
 ]
 
-export const mockTokenPair = {
-  access_token: "test-access-token",
-  refresh_token: "test-refresh-token",
-  token_type: "bearer",
-}
-
 export const mockUser = {
   id: "user-1",
   email: "test@nexus.ai",
@@ -32,7 +26,7 @@ export const mockSettings = {
   id: "st-1",
   user_id: "user-1",
   theme: "dark",
-  default_model: "llama-3.3-70b-versatile",
+  default_model: "complex_reasoning",
   system_prompt_override: "You are Nexus AI, a precise production assistant.",
   temperature: 0.7,
   max_tokens: 8192,
@@ -337,8 +331,8 @@ export const handlers = [
   http.get("/api/auth/oauth/:provider", () =>
     HttpResponse.json({
       authorization_url:
-        "https://idp.example/authorize?response_type=code&client_id=nexus-test&state=test-sso-state&code_challenge_method=S256",
-      state: "test-sso-state",
+        "https://idp.example/authorize?response_type=code&client_id=nexus-test&state=test-oauth-state&code_challenge_method=S256",
+      state: "test-oauth-state",
       provider: "oidc",
     })
   ),
@@ -346,6 +340,11 @@ export const handlers = [
   // IdP redirect destination: the proxy route writes httpOnly cookies and
   // bounces to /app — no JSON body reaches the page script.
   http.get("/api/auth/oauth/:provider/callback", () => HttpResponse.json({})),
+
+  // Alias of the line above: `/api/auth/callback/:provider` re-exports the same
+  // GET. Mocked so the route/mock parity test sees it as reachable — a route
+  // with no mock is one a component test can never exercise.
+  http.get("/api/auth/callback/:provider", () => HttpResponse.json({})),
 
   http.post("/api/auth/refresh", () =>
     HttpResponse.json({
@@ -501,6 +500,24 @@ export const handlers = [
     HttpResponse.json({ text: "How do I add a new conversation hook?" })
   ),
 
+  // Speech synthesis and image generation are the other two zero-cost media
+  // paths. Both are proxied by their own BFF route; without a mock here the
+  // component layer would fall through to a server that does not exist under
+  // jsdom, and api-parity would flag the routes as untestable.
+  http.get("/api/audio/speech", () =>
+    HttpResponse.arrayBuffer(new Uint8Array([1, 2, 3]).buffer, {
+      headers: { "Content-Type": "audio/mpeg" },
+    })
+  ),
+
+  http.post("/api/images/generate", () =>
+    HttpResponse.json({
+      image_data_url: "data:image/png;base64,iVBORw0KGgo=",
+      model: "flux",
+      prompt: "a red panda",
+    })
+  ),
+
   http.post("/api/files/rag/query", () =>
     HttpResponse.json({
       citations: [
@@ -557,6 +574,47 @@ export const handlers = [
       label: body.label ?? null,
     })
   }),
+  http.delete("/api/settings/keys/:id", () =>
+    HttpResponse.json(null, { status: 204 })
+  ),
+
+  // ── Projects ────────────────────────────────────────────────────────────
+  // These mirror the BFF routes at `/api/projects` and `/api/projects/:id`;
+  // `api-parity.test.ts` requires every route to have a mock so the path is
+  // reachable from the component layer.
+  http.get("/api/projects", () => HttpResponse.json([])),
+  http.post("/api/projects", async ({ request }) => {
+    const body = (await request.json()) as { name: string }
+    return HttpResponse.json(
+      {
+        id: "project-new-1",
+        name: body.name,
+        description: null,
+        created_at: "2026-10-01T10:00:00Z",
+        updated_at: "2026-10-01T10:00:00Z",
+      },
+      { status: 201 }
+    )
+  }),
+  http.patch("/api/projects/:projectId", async ({ request, params }) => {
+    const body = (await request.json()) as {
+      name?: string
+      description?: string | null
+    }
+    // Echo the id back, not a hardcoded one: a client that patches an existing
+    // row replaces it by id, and a mock that returns a different id makes that
+    // replace impossible to exercise (a rename would look like a no-op).
+    return HttpResponse.json({
+      id: params.projectId ?? "project-new-1",
+      name: body.name ?? "Project",
+      description: body.description ?? null,
+      created_at: "2026-10-01T10:00:00Z",
+      updated_at: "2026-10-01T10:00:00Z",
+    })
+  }),
+  http.delete("/api/projects/:projectId", () =>
+    HttpResponse.json(null, { status: 204 })
+  ),
 
   // ── HITL ────────────────────────────────────────────────────────────────
   http.post("/api/hitl", () => HttpResponse.json({ status: "received" })),

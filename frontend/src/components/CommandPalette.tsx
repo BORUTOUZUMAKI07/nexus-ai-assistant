@@ -5,6 +5,7 @@ import {
   MessageSquare,
   Plus,
   FileText,
+  FolderKanban,
   Sliders,
   BarChart2,
   Shield,
@@ -13,7 +14,6 @@ import {
   Moon,
   Monitor,
   LogOut,
-  Palette,
   Pin,
 } from "lucide-react";
 import {
@@ -26,10 +26,10 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { MODELS } from "@/lib/models";
-import { ACCENTS, useTheme } from "@/lib/theme";
+import { useTheme } from "@/lib/theme";
 import type { ConversationItem } from "@/components/Sidebar";
 
-export type AppTab = "chat" | "files" | "settings" | "usage" | "admin";
+export type AppTab = "chat" | "files" | "projects" | "settings" | "usage" | "admin";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -60,7 +60,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onSignOut,
   showAdmin = false,
 }) => {
-  const { setMode, setAccent } = useTheme();
+  const { setMode } = useTheme();
 
   // Global shortcut. Toggles, so the same chord closes it.
   useEffect(() => {
@@ -84,6 +84,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const nav: { tab: AppTab; label: string; Icon: React.ElementType }[] = [
     { tab: "chat", label: "Go to Chat", Icon: MessageSquare },
     { tab: "files", label: "Go to Knowledge", Icon: FileText },
+    { tab: "projects", label: "Go to Projects", Icon: FolderKanban },
     { tab: "usage", label: "Go to Usage", Icon: BarChart2 },
     { tab: "settings", label: "Go to Settings", Icon: Sliders },
     ...(showAdmin ? [{ tab: "admin" as AppTab, label: "Go to Admin", Icon: Shield }] : []),
@@ -152,21 +153,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           <CommandItem value="theme system mode auto" onSelect={run(() => setMode("system"))}>
             <Monitor className="h-4 w-4" aria-hidden="true" /> Match system theme
           </CommandItem>
-          {ACCENTS.map((a) => (
-            <CommandItem
-              key={a.id}
-              value={`accent color ${a.label}`}
-              onSelect={run(() => setAccent(a.id))}
-            >
-              <Palette className="h-4 w-4" aria-hidden="true" />
-              Accent: {a.label}
-              <span
-                className="ml-auto h-3 w-3 rounded-full border border-[var(--border-strong)]"
-                style={{ background: a.swatch }}
-                aria-hidden="true"
-              />
-            </CommandItem>
-          ))}
         </CommandGroup>
 
         {onSignOut && (

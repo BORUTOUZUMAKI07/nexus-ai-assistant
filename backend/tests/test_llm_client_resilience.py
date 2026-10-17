@@ -11,7 +11,6 @@ breaker closed.
 import contextlib
 
 import pytest
-
 from backend.app.infrastructure.ai import litellm_client as lc
 
 

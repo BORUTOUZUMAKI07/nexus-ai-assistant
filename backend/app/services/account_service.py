@@ -11,8 +11,9 @@ from uuid import UUID
 
 import structlog
 from backend.app.domain.artifact.models import Artifact, ArtifactVersion
-from backend.app.domain.conversation.models import Conversation, Message
+from backend.app.domain.conversation.models import Conversation, Message, Project
 from backend.app.domain.conversation.repository import ConversationRepository
+from backend.app.domain.experiment.models import BanditReward
 from backend.app.domain.file.models import File, FileChunk, FileMetadata
 from backend.app.domain.hook.models import HookPolicy
 from backend.app.domain.org.models import Organization, OrganizationInvite, OrganizationMember
@@ -177,13 +178,20 @@ class AccountService:
         storage_paths = [f.storage_path for f in user_files if f.storage_path]
 
         # 1. Conversations (handles branches, attachments, tool calls, messages,
-        #    conversation-scoped files + chunks + usage in one cascade).
+        #    conversation-scoped files + chunks + usage in one cascade). The
+        #    cascade is committed once at the end (``commit=False``) so a FK
+        #    failure anywhere rolls the whole erasure back instead of leaving the
+        #    account half-deleted with no row to retry from.
         conversations = (await self.session.exec(
             select(Conversation).where(Conversation.user_id == user_id)
         )).all()
         conv_repo = ConversationRepository(self.session)
         for conv in conversations:
-            await conv_repo.delete(conv)
+            await conv_repo.delete(conv, commit=False)
+
+        # 1b. User-owned projects. ``conversations.project_id`` references
+        #     ``projects.id``, so this MUST follow the conversation cascade.
+        await self.session.exec(delete(Project).where(Project.user_id == user_id))
 
         # 2. Remaining user-scoped files (conversation_id NULL) + their children.
         file_ids = select(File.id).where(File.user_id == user_id)
@@ -210,9 +218,11 @@ class AccountService:
         org_ids = select(Organization.id).where(Organization.owner_id == user_id)
         await self.session.exec(delete(HookPolicy).where(HookPolicy.org_id.in_(org_ids)))
 
-        # 4. Usage + cost telemetry.
+        # 4. Usage + cost + bandit-reward telemetry (all carry a live FK to
+        #    users.id, so a row left behind blocks the final user delete).
         await self.session.exec(delete(UsageLog).where(UsageLog.user_id == user_id))
         await self.session.exec(delete(CostLog).where(CostLog.user_id == user_id))
+        await self.session.exec(delete(BanditReward).where(BanditReward.user_id == user_id))
 
         # 5. Prompt templates + versions authored by the user.
         template_ids = select(PromptTemplate.id).where(PromptTemplate.user_id == user_id)

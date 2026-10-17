@@ -1,7 +1,7 @@
 # Nexus AI Assistant — API & FastMCP Reference
 
 > Generated from the **live OpenAPI schema** (`app.openapi()` at commit
-> `9b6181a`): **99 paths · 116 operations**, all under `/api/v1` except
+> `9b6181a`): **103 paths · 123 operations**, all under `/api/v1` except
 > where noted. This is a hand-maintained summary; the interactive Swagger UI
 > at `/docs` is always authoritative.
 >
@@ -41,7 +41,7 @@
   *before* `/oauth/{provider}` on purpose: FastAPI matches in registration
   order, and a literal path registered after a catch-all is captured as a
   provider named `providers` and answered with the "unconfigured" 404 —
-  indistinguishable from SSO being off, with no test red. Returns names and a
+  indistinguishable from OAuth being off, with no test red. Returns names and a
   boolean only.
 - `GET /auth/oauth/{provider}` (`google` | `github`) → returns the provider
   authorization URL; `POST /auth/oauth/{provider}/callback` → exchanges the
@@ -64,6 +64,37 @@
 | GET | `/conversations/{conversation_id}/runs/{run_id}/stream` | **re-attach to a run** (replay + tail; honours `Last-Event-ID`) |
 | POST | `/conversations/{conversation_id}/plan` | generate a plan (plan mode) |
 | GET | `/conversations/{conversation_id}/plans` | list conversation plans |
+
+**Model selection.** The stream request body accepts an optional `model` field.
+It must be one of the two answer groups the deployment can route
+(`fast_chat` → Qwen 3.8 27B on Groq; `complex_reasoning` → GPT-OSS 120B on
+Groq, the default). `resolve_answer_model` whitelists it server-side: an
+unknown value, or an internal group the user may not pick (e.g.
+`vision_analysis`), degrades to the default rather than dropping the request out
+of the router's fallback chain. A run reports the model that *actually answered*
+(via a `model_info` frame) so a provider fallback is visible rather than hidden
+behind the picker's label.
+
+**Free media paths.** TTS uses edge-tts (key-less; requires `edge-tts>=7.3.0`),
+chat and STT use Groq's free tier, and image generation uses Pollinations
+(key-less). Only the text and vision models need an API key: `GROQ_API_KEY`
+(chat/STT) and `GEMINI_API_KEY` (vision, embeddings, the `gemini_free` text
+fallback, and the STT fallback). STT fails over to Gemini too: Groq is the only
+provider `litellm.atranscription` can reach here (it has no router fallback), so
+the same 403-at-the-egress that chat survives would otherwise take speech-to-text
+down outright — `/audio/transcribe` retries the audio on Gemini, which
+transcribes it through the multimodal chat path. Set `STT_FALLBACK_ENABLED=false`
+to disable.
+
+**The free fallback layer.** Answer synthesis tries
+`Groq → Gemini → OpenRouter`, so one free provider being down does not fail the
+turn: `gemini_free` (`gemini/gemini-3.5-flash-lite`) is the last real fallback
+before the 2.6B `liquid_fallback`, and it is what keeps a request answerable when
+Groq is denied at the egress and OpenRouter's account-wide
+`free-models-per-day` cap is exhausted. `vision_analysis` leads with
+`gemini-3.5-flash` and falls through `gemini_free → vision_fallback` under
+demand. The group that actually answered is reported by the `model_info` frame,
+never assumed from the picker.
 
 ## Plans & artifacts
 
@@ -108,16 +139,17 @@
 | GET | `/account/export` · `DELETE /account` | data export / account deletion |
 | GET | `/prompts/templates` · POST `/prompts/templates` · `GET /prompts/skills` | prompt templates & skills |
 
-## Orgs, shares, webhooks, audio
+## Orgs, shares, webhooks, audio & images
 
 | Method | Path | Description |
 |---|---|---|
 | GET/POST | `/orgs` · GET/DELETE `/orgs/{org_id}` · `POST /orgs/{org_id}/leave` | organization CRUD |
 | POST | `/orgs/{org_id}/invites` · `POST /orgs/invites/accept` · `GET/DELETE /orgs/{org_id}/members[/{user_id}]` · `GET /orgs/{org_id}/usage-summary` | membership |
 | GET/POST/DELETE | `/shares/{conversation_id}` | public conversation sharing (TTL) |
-| GET/POST | `/webhooks` · PATCH/DELETE `/webhooks/{endpoint_id}` · `GET /webhooks/{endpoint_id}/deliveries` · `POST /webhooks/{endpoint_id}/redeliver` | webhooks |
+| GET/POST | `/webhooks` · PATCH/DELETE `/webhooks/{endpoint_id}` · `GET /webhooks/{endpoint_id}/deliveries` · `POST /webhooks/{endpoint_id}/redeliver/{delivery_id}` | webhooks |
 | GET | `/audio/speech` | TTS (edge-tts, key-less) |
-| POST | `/audio/transcribe` | STT |
+| POST | `/audio/transcribe` | STT (Groq Whisper, falls back to Gemini if Groq is unreachable) |
+| POST | `/images/generate` | image generation (Pollinations, key-less; returns a base64 data URL) |
 
 ## Admin (`get_current_admin` required)
 
@@ -170,7 +202,7 @@ file IO, elicitations). Every request is gated — a Bearer JWT, the
 - File uploads: multipart; `MAX_UPLOAD_SIZE_MB` enforced before buffering.
 - Every documented route above was confirmed present in the live schema; the
   counts at the top were regenerated from `app.openapi()` on 2026-10-04
-  (99 paths / 116 operations). Regenerate from `/openapi.json` if it drifts.
+  (103 paths / 123 operations). Regenerate from `/openapi.json` if it drifts.
 - **Stream rejoin**: `POST /conversations/{id}/stream` returns `X-Nexus-Run-Id`.
   `GET /conversations/{id}/runs/{run_id}/stream` re-attaches to that run and
   honours `Last-Event-ID`; it 404s with `{"detail": "run_not_found"}` for a run

@@ -78,6 +78,12 @@ async def upload_file(
         chunks.append(part)
     file_bytes = b"".join(chunks)
     try:
+        if conversation_id is not None:
+            from backend.app.domain.conversation.repository import ConversationRepository
+            convo = await ConversationRepository(session).get_by_id(conversation_id, user_id=current_user.id)
+            if not convo:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+
         db_file = await file_svc.upload(
             file_bytes=file_bytes,
             filename=filename,

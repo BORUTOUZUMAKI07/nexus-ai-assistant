@@ -31,6 +31,7 @@ describe("ChatInput", () => {
       agentMode: "deep",
       imageDataUrl: undefined,
       planMode: false,
+      generateImage: false,
     })
     expect((textarea as HTMLTextAreaElement).value).toBe("")
   })
@@ -50,6 +51,7 @@ describe("ChatInput", () => {
       agentMode: "deep",
       imageDataUrl: undefined,
       planMode: false,
+      generateImage: false,
     })
   })
 
@@ -71,6 +73,7 @@ describe("ChatInput", () => {
       agentMode: "deep",
       imageDataUrl: undefined,
       planMode: false,
+      generateImage: false,
     })
   })
 
@@ -91,6 +94,7 @@ describe("ChatInput", () => {
       agentMode: "deep",
       imageDataUrl: undefined,
       planMode: true,
+      generateImage: false,
     })
   })
 
@@ -149,7 +153,63 @@ describe("ChatInput", () => {
     fireEvent.change(fileInput, { target: { files: [file] } })
 
     expect(screen.getByText("notes.md")).toBeInTheDocument()
+
     fireEvent.click(screen.getByText("notes.md").closest("div")!.querySelector("button")!)
     expect(screen.queryByText("notes.md")).not.toBeInTheDocument()
+  })
+
+  it("sets generateImage when the /image slash command is used", () => {
+    render(<ChatInput onSendMessage={onSendMessage} isLoading={false} />)
+    const textarea = screen.getByPlaceholderText(
+      "Ask Nexus anything, write code, search live web..."
+    )
+    fireEvent.change(textarea, { target: { value: "/image" } })
+    // The slash popover lists the command; applying it flips image mode and
+    // clears the typed command so the prompt itself is what gets sent.
+    fireEvent.mouseDown(screen.getByText("Generate Image"))
+    fireEvent.change(textarea, { target: { value: "a red panda" } })
+    fireEvent.click(screen.getByTitle("Send message (Enter)"))
+
+    expect(onSendMessage).toHaveBeenCalledWith(
+      "a red panda",
+      expect.objectContaining({ generateImage: true })
+    )
+  })
+
+  it("sets generateImage when the image-mode toolbar button is toggled", () => {
+    render(<ChatInput onSendMessage={onSendMessage} isLoading={false} />)
+    fireEvent.click(screen.getByTitle("Generate an image from a prompt"))
+    const textarea = screen.getByPlaceholderText(
+      "Describe the image you want Nexus to generate..."
+    )
+    fireEvent.change(textarea, { target: { value: "a blue whale" } })
+    fireEvent.click(screen.getByTitle("Send message (Enter)"))
+
+    expect(onSendMessage).toHaveBeenCalledWith(
+      "a blue whale",
+      expect.objectContaining({ generateImage: true })
+    )
+  })
+
+  it("resets image mode after sending", () => {
+    render(<ChatInput onSendMessage={onSendMessage} isLoading={false} />)
+    fireEvent.click(screen.getByTitle("Generate an image from a prompt"))
+    const textarea = screen.getByPlaceholderText(
+      "Describe the image you want Nexus to generate..."
+    )
+    fireEvent.change(textarea, { target: { value: "first" } })
+    fireEvent.click(screen.getByTitle("Send message (Enter)"))
+
+    // Back to chat mode: the normal placeholder returns and a plain send no
+    // longer carries generateImage.
+    expect(
+      screen.getByPlaceholderText("Ask Nexus anything, write code, search live web...")
+    ).toBeInTheDocument()
+    fireEvent.change(textarea, { target: { value: "second" } })
+    fireEvent.click(screen.getByTitle("Send message (Enter)"))
+    expect(onSendMessage).toHaveBeenLastCalledWith(
+      "second",
+      expect.objectContaining({ generateImage: false })
+    )
   })
 })

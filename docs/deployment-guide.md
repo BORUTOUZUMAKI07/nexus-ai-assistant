@@ -2,22 +2,26 @@
 
 > Verified against the source at `1f43c89` (main). Supersedes the earlier
 > guide (which claimed Next.js 14, "22 SQLModel tables", `pip install -e .`,
-> and Upstash Redis — all outdated). **Next.js is 16.3.4, the schema has 35
+> and Upstash Redis — all outdated). **Next.js is 16.4.2, the schema has 38
 > tables, deps are managed with `uv sync`, Redis/Qdrant run locally via
 > docker-compose, and object storage is Supabase Storage (hosted).**
+
+> Note (2026-10-16): the frontend moved to **Next.js 16.4.2** (a security
+> release: the 16.3.x line carried a critical `next/og` RCE) and the schema to
+> **38 tables**.
 
 ## Production architecture
 
 | Component | Runtime notes |
 |---|---|
 | **Backend API** | FastAPI via uvicorn (or gunicorn+uvicorn workers) on a Docker host. `backend/Dockerfile` is the official image. |
-| **Frontend** | Next.js **16.3.4** standalone output; `frontend/Dockerfile` builds it. |
-| **Database** | PostgreSQL with **pgvector** (`pgvector/pgvector:pg16` locally) — 35 SQLModel tables. Supabase/Postgres-compatible hosts work. |
+| **Frontend** | Next.js **16.4.2** standalone output; `frontend/Dockerfile` builds it. |
+| **Database** | PostgreSQL with **pgvector** (`pgvector/pgvector:pg16` locally) — 38 SQLModel tables. Supabase/Postgres-compatible hosts work. |
 | **Vector store** | Qdrant (hybrid dense+sparse). Local container `qdrant/qdrant` in compose. |
 | **Redis** | Cache, rate-limiting, and Celery broker. Local `redis:7-alpine` in compose. `REDIS_URL=redis://localhost:6379/0` locally. |
 | **Object storage** | Supabase Storage over its REST API (`SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` + `STORAGE_BUCKET`). No S3/R2/MinIO server — the boto3 layer was removed. |
 | **Async tasks** | Celery worker + beat (file indexing, eval dispatch). |
-| **Observability** | Zero-dependency Prometheus `/metrics` (in-process truth) + OTLP logs → Layer-2 collector (`docker-compose` / `render.yaml`) → New Relic; LangSmith traces; Sentry errors. |
+| **Observability** | In-process `MetricsCollector` exported over **OTLP (logs + metrics + traces)** to the Layer-2 collector → New Relic (`docker-compose` / `render.yaml`); `/metrics` kept as a local Prometheus debug surface; LangSmith agent traces; Sentry errors. |
 
 CI/CD artifacts:
 - `.github/workflows/release.yml` — on git tags: `docker buildx` builds and
@@ -115,8 +119,8 @@ DATABASE_URL=postgresql+asyncpg://nexus:nexus@localhost:5432/nexus_dev \
   uv run alembic upgrade head
 ```
 
-**All 35 SQLModel tables** are initialized with indexes automatically
-(verified: `SQLModel.metadata.tables` contains exactly 35 tables). New models
+**All 38 SQLModel tables** are initialized with indexes automatically
+(verified: `SQLModel.metadata.tables` contains exactly 38 tables). New models
 must be imported in `backend/app/infrastructure/database/engine.py` and
 `backend/migrations/env.py`, and need a hand-written Alembic revision.
 
@@ -164,7 +168,7 @@ npm run start              # NODE_ENV=production server (scripts/serve.js)
 Point the frontend at the backend via `BACKEND_URL` (server-side env; a legacy
 `NEXT_PUBLIC_API_URL` is also honored, falling back to
 `http://127.0.0.1:8000`). The BFF route handlers under `frontend/src/app/api/**`
-forward requests with cookies. Frontend `package.json` pins **next 16.3.4**,
+forward requests with cookies. Frontend `package.json` pins **next 16.4.2**,
 react 19.2.8, typescript 5, vitest 4, playwright.
 
 > Vercel note: the old guide suggested Vercel with `NEXT_PUBLIC_API_URL`.

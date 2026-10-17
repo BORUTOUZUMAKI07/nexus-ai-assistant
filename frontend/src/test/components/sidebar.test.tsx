@@ -28,7 +28,7 @@ function renderSidebar(overrides: Partial<Parameters<typeof Sidebar>[0]> = {}) {
     onDeleteConversation: vi.fn(),
     activeTab: "chat" as const,
     setActiveTab: vi.fn(),
-    currentModel: "llama-3.3-70b-versatile",
+    currentModel: "complex_reasoning",
     onChangeModel: vi.fn(),
     onSignOut: vi.fn(),
     ...overrides,
@@ -45,9 +45,9 @@ describe("Sidebar", () => {
   it("renders the brand and model selector with the current model", () => {
     renderSidebar()
     expect(screen.getByText("Nexus AI")).toBeInTheDocument()
-    expect(screen.getByRole("combobox")).toHaveValue("llama-3.3-70b-versatile")
-    expect(screen.getByRole("option", { name: /Llama 3.3 70B/ })).toBeInTheDocument()
-    expect(screen.getByRole("option", { name: /DeepSeek R1/ })).toBeInTheDocument()
+    expect(screen.getByRole("combobox")).toHaveValue("complex_reasoning")
+    expect(screen.getByRole("option", { name: /Nexus Reasoning/ })).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: /Nexus Fast/ })).toBeInTheDocument()
   })
 
   it("splits pinned and recent conversations", () => {

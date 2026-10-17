@@ -5,7 +5,7 @@ Tests for wiring of the previously-dead service modules:
   - Quality metrics
   - Structured-output routing with raw fallback (orchestrator node)
   - Critic subagent self-refinement loop in the synthesizer node
-  - CAG prompt caching in the prompt compiler
+  - static-context prompt caching in the prompt compiler
   - Celery file-indexing task dispatch config
   - Admin evaluation router handlers
 """
@@ -62,6 +62,45 @@ async def test_record_cost_log_persists_aggregate_cost_entry(monkeypatch):
     assert result.input_cost == 0.59
     assert result.output_cost == 0.0
     assert len(result.billing_period) == 7  # YYYY-MM
+
+
+# ─── 1b. Usage service pass-through ──────────────────────────────────────────
+
+
+async def test_usage_service_log_usage_persists_the_schema_it_is_handed():
+    """The run executor calls ``usage_svc.log_usage(UsageLogCreate(...))``.
+
+    The method briefly took a wide keyword signature instead and forwarded
+    ``self._repo.log_usage(user_id=...)`` -- a repository method whose only
+    parameter is a ``UsageLogCreate`` -- so every call raised and was swallowed by
+    ``_persist_reply``'s broad handler, silently dropping the usage row while
+    still returning the message id. This pins the delegation contract: the
+    schema is the unit of transfer, so a caller may keep the fields a keyword
+    signature could not (``message_id``, ``latency_ms``, ``metadata_json``).
+    """
+    from backend.app.domain.usage.models import UsageLog
+    from backend.app.domain.usage.schemas import UsageLogCreate
+    from backend.app.services.usage_service import UsageService
+
+    from tests.fakes import FakeSession
+
+    session = FakeSession()
+    svc = UsageService(session)
+
+    log_in = UsageLogCreate(
+        user_id=uuid.uuid4(),
+        model="groq/test",
+        prompt_tokens=3,
+        completion_tokens=4,
+        metadata_json={"quality": {"is_valid": True}},
+    )
+
+    row = await svc.log_usage(log_in)
+
+    assert isinstance(row, UsageLog)
+    assert row.total_tokens == 7
+    assert row.metadata_json == {"quality": {"is_valid": True}}
+    assert row in session.added
 
 
 # ─── 2. Evidence Gate ────────────────────────────────────────────────────────
@@ -230,16 +269,16 @@ async def test_synthesizer_bounds_revisions_when_critic_keeps_rejecting(monkeypa
     assert update["messages"][0].content == "draft"  # accepted as-is
 
 
-# ─── 6. CAG Prompt Caching ────────────────────────────────────────────────────
+# ─── 6. Static-Context Prompt Caching ────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_prompt_compiler_cag_cache_hit(monkeypatch):
+async def test_prompt_compiler_static_context_cache_hit(monkeypatch):
     from backend.app.services import prompt_compiler as pc_module
 
     monkeypatch.setattr(
         pc_module,
-        "cag_service",
+        "static_context_cache",
         MagicMock(get_static_context=AsyncMock(return_value="CACHED PROMPT 123")),
     )
     result = await prompt_compiler.compile_system_prompt_cached(
@@ -249,7 +288,7 @@ async def test_prompt_compiler_cag_cache_hit(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_prompt_compiler_cag_miss_compiles_and_falls_back_when_redis_down(monkeypatch):
+async def test_prompt_compiler_static_context_miss_compiles_and_falls_back_when_redis_down(monkeypatch):
     from backend.app.services import prompt_compiler as pc_module
 
     written = {}
@@ -261,7 +300,7 @@ async def test_prompt_compiler_cag_miss_compiles_and_falls_back_when_redis_down(
         written[key] = content
         return True
 
-    monkeypatch.setattr(pc_module, "cag_service", MagicMock(
+    monkeypatch.setattr(pc_module, "static_context_cache", MagicMock(
         get_static_context=raise_get,
         set_static_context=fake_set,
     ))
@@ -275,7 +314,7 @@ async def test_prompt_compiler_cag_miss_compiles_and_falls_back_when_redis_down(
 
 
 @pytest.mark.asyncio
-async def test_prompt_compiler_cag_skips_caching_for_dynamic_inputs(monkeypatch):
+async def test_prompt_compiler_static_context_skips_caching_for_dynamic_inputs(monkeypatch):
     from backend.app.services import prompt_compiler as pc_module
 
     async def raise_get(_key):
@@ -283,7 +322,7 @@ async def test_prompt_compiler_cag_skips_caching_for_dynamic_inputs(monkeypatch)
 
     never_set = MagicMock(side_effect=AssertionError("should not call set for dynamic input"))
 
-    monkeypatch.setattr(pc_module, "cag_service", MagicMock(
+    monkeypatch.setattr(pc_module, "static_context_cache", MagicMock(
         get_static_context=raise_get,
         set_static_context=never_set,
     ))

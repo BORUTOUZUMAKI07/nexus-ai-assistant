@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import secrets
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -67,7 +68,7 @@ def _load_dev_secrets() -> dict[str, str]:
     except FileNotFoundError:
         return {}
     except Exception as exc:
-        logger.warning("dev_secrets_file_unreadable", error_type=type(exc).__name__)
+        logger.warning("dev_secrets_file_unreadable error_type=%s", type(exc).__name__)
         return {}
 
 
@@ -78,17 +79,19 @@ def _store_dev_secret(name: str, value: str) -> None:
         _DEV_SECRETS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _DEV_SECRETS_PATH.write_text(json.dumps(data), encoding="utf-8")
     except Exception as exc:
-        logger.warning("dev_secret_not_persisted", name=name, error_type=type(exc).__name__)
+        logger.warning(
+            "dev_secret_not_persisted name=%s error_type=%s", name, type(exc).__name__
+        )
 
 
-def _stable_dev_secret(name: str, generator) -> str:
+def _stable_dev_secret(name: str, generator: Callable[[], str]) -> str:
     """Return a persisted non-production secret, creating it on first boot."""
     existing = _load_dev_secrets().get(name)
     if existing:
         return existing
     value = generator()
     _store_dev_secret(name, value)
-    return cast("str", value)
+    return value
 
 
 class Settings(BaseSettings):
@@ -143,7 +146,7 @@ class Settings(BaseSettings):
     # restores the strict behaviour.
     REFRESH_REUSE_GRACE_SECONDS: int = Field(default=10)
 
-    # ── OAuth / SSO (Authorization Code + PKCE) ────────────────────────────────
+    # ── OAuth / OAuth (Authorization Code + PKCE) ────────────────────────────────
     # Two first-class providers: Google (OIDC; the userinfo `email_verified`
     # claim gates the login) and GitHub (OAuth2; a verified email — primary
     # preferred — is fetched from /user/emails, which GitHub's userinfo lacks).
@@ -152,13 +155,13 @@ class Settings(BaseSettings):
     GOOGLE_OAUTH_CLIENT_ID: str | None = Field(default=None, description="Google OAuth client id")
     GOOGLE_OAUTH_CLIENT_SECRET: str | None = Field(default=None, description="Google OAuth client secret")
     GOOGLE_OAUTH_REDIRECT_URI: str = Field(
-        default="http://localhost:8000/api/v1/auth/oauth/google/callback",
+        default="http://localhost:3000/api/auth/oauth/google/callback",
         description="Google redirect_uri — must match the authorized URI in Google Cloud Console",
     )
     GITHUB_OAUTH_CLIENT_ID: str | None = Field(default=None, description="GitHub OAuth client id")
     GITHUB_OAUTH_CLIENT_SECRET: str | None = Field(default=None, description="GitHub OAuth client secret")
     GITHUB_OAUTH_REDIRECT_URI: str = Field(
-        default="http://localhost:8000/api/v1/auth/oauth/github/callback",
+        default="http://localhost:3000/api/auth/oauth/github/callback",
         description="GitHub redirect_uri — must match the authorized URI in the GitHub OAuth App",
     )
     # Lifetime of the stored PKCE state codes (one-time use).
@@ -223,6 +226,9 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = Field(default=6333)
     QDRANT_API_KEY: str | None = None
     QDRANT_COLLECTION_NAME: str = Field(default="nexus_knowledge")
+    # Quantization tier: "binary" (1-bit BQ with 32x RAM reduction + oversampling rescore)
+    # or "int8" (Scalar quantization, 4x RAM reduction, default).
+    QDRANT_QUANTIZATION: str = Field(default="int8", description="int8 | binary")
 
     # ── LLM Providers ──────────────────────────────────────────────────────────
     GROQ_API_KEY: str | None = None
@@ -230,10 +236,11 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str | None = None
     # Declared for operators who set them expecting direct-provider routing.
     # Nothing in this codebase reads them: every model in the LiteLLM Router's
-    # model_list is an OpenRouter deployment, and a bare OpenAI/Anthropic/
-    # Together model id would not resolve to any registered model_group, so
-    # routing one in would fail rather than switch provider. Kept as pass-through
-    # env for litellm itself, which reads these from the process environment.
+    # model_list is a Groq, Gemini or OpenRouter deployment, and a bare
+    # OpenAI/Anthropic/Together model id would not resolve to any registered
+    # model_group, so routing one in would fail rather than switch provider. Kept
+    # as pass-through env for litellm itself, which reads them from the process
+    # environment.
     OPENAI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None
     TOGETHER_API_KEY: str | None = None
@@ -255,6 +262,16 @@ class Settings(BaseSettings):
     # ── Embeddings ─────────────────────────────────────────────────────────────
     EMBEDDING_MODEL: str = Field(default="models/gemini-embedding-001")
     EMBEDDING_DIMENSION: int = Field(default=768)
+    # Local FastEmbed model used as the offline embedding fallback in
+    # services/rag/retrieval.py when GEMINI_API_KEY is unset. It must be a
+    # fastembed-loaderable model (e.g. BAAI/bge-base-en-v1.5 = 768-dim, matching
+    # EMBEDDING_DIMENSION) and is deliberately distinct from EMBEDDING_MODEL,
+    # which names the Gemini endpoint id. This used to pass EMBEDDING_MODEL into
+    # the fallback, so a Gemini id ("models/gemini-embedding-001") was handed
+    # to fastembed, which can never load it — the fallback was broken on two
+    # axes (module not installed AND wrong model name) and masked by the API key
+    # being set. Guarded by test_rag_embedding_fallback.py.
+    FASTEMBED_MODEL: str = Field(default="BAAI/bge-base-en-v1.5")
     # FlashRank cross-encoder used to re-order retrieved chunks. Must be one of
     # the names FlashRank ships (ms-marco-TinyBERT-L-2-v2, ms-marco-MiniLM-L-12-v2,
     # ms-marco-MultiBERT-L-12) — NOT a HuggingFace cross-encoder path.
@@ -360,14 +377,18 @@ class Settings(BaseSettings):
     PII_REDACTION_ENABLED: bool = Field(default=False)
     PII_REDACTION_REPLACEMENT: str = Field(default="[REDACTED]")
 
-    # ── Observability: New Relic via Layer-2 collector (OTLP logs) ───────────
-    # The app exports structured logs over OTLP/HTTP to the OpenTelemetry
-    # collector (docker-compose "otel-collector" service, or the Render web
-    # service in render.yaml). The collector owns the NEW_RELIC_LICENSE_KEY and
-    # forwards everything on — the app never holds vendor credentials. /metrics
-    # stays the in-process source of truth (the collector scrapes it); traces
-    # remain LangSmith's job. No-op when disabled, the endpoint is unset, or
-    # the [observability] extras are not installed.
+    # ── Observability: New Relic via Layer-2 collector (OTLP) ───────────────
+    # The app exports structured logs, metrics and traces over OTLP/HTTP to the
+    # OpenTelemetry collector (docker-compose "otel-collector" service, or the
+    # Render web service). The collector owns the NEW_RELIC_LICENSE_KEY and
+    # forwards everything on — the app never holds vendor credentials, and its
+    # public receiver requires basic auth (OTLP_AUTH_*). The app's /metrics
+    # endpoint stays as a local debug view but is no longer scraped by the
+    # collector: metrics travel over OTLP, so per-worker counts are aggregated
+    # instead of undercounted. LangSmith remains the LLM/agent trace view; this
+    # pipeline supplies the infra/ops trace view. Strict no-op when disabled,
+    # when the endpoint is unset, or when the [observability] extras are not
+    # installed.
     NEW_RELIC_ENABLED: bool = Field(default=False)
     NEW_RELIC_OTLP_ENDPOINT: str = Field(
         default="http://localhost:4318",
@@ -377,8 +398,20 @@ class Settings(BaseSettings):
         ),
     )
     NEW_RELIC_EXPORT_INTERVAL_SECONDS: int = Field(
-        default=30, description="How often to flush the OTLP log batch to the collector (seconds)"
+        default=30, description="How often to flush the OTLP batch to the collector (seconds)"
     )
+    # HTTP basic auth for the collector's OTLP receiver (which is a public
+    # endpoint in the Render deployment). Empty means "send no Authorization
+    # header" — correct when the collector runs unauthenticated. Set BOTH to
+    # the same pair the collector uses (docker-compose env OTLP_AUTH_*). The
+    # values are intentionally not defaulted to a literal here: a hardcoded
+    # credential in Python trips bandit, and an empty default is honest — the
+    # documented local flow copies them from .env.example.
+    OTLP_AUTH_USER: str = Field(default="")
+    OTLP_AUTH_PASSWORD: str = Field(default="")
+    # Reported as the OTel `service.version` resource attribute on every signal,
+    # so a metric or trace can be attributed to a release.
+    SERVICE_VERSION: str = Field(default="dev")
 
     # ── Response Caching (semantic-cost redaction) ───────────────────────────
     # Exact-normalized-query response cache for the synchronous message path.
@@ -387,6 +420,28 @@ class Settings(BaseSettings):
     RESPONSE_CACHE_ENABLED: bool = Field(default=False)
     RESPONSE_CACHE_TTL_SECONDS: int = Field(default=3600)
     RESPONSE_CACHE_MIN_LENGTH: int = Field(default=8, description="Minimum query length eligible for caching")
+
+    # Semantic variant of the response cache above: catches paraphrases the
+    # exact-match key cannot ("what is the capital of France?" vs "France's
+    # capital?"). It embeds each query, which is one extra embedding call per
+    # request on the query path -- a real cost, so it is off by default and the
+    # cost/benefit is measurable by flipping this flag. Requires
+    # RESPONSE_CACHE_ENABLED (the master switch). Strictly fail-open: any
+    # embedding or store error is a miss, never a failed request.
+    RESPONSE_CACHE_SEMANTIC_ENABLED: bool = Field(default=False)
+    RESPONSE_CACHE_SEMANTIC_THRESHOLD: float = Field(
+        default=0.95,
+        description="Cosine similarity a paraphrase must clear to reuse a cached "
+        "answer. High on purpose: too low and a different question is answered "
+        "with someone else's text.",
+    )
+    RESPONSE_CACHE_SEMANTIC_MAX_ENTRIES: int = Field(
+        default=50,
+        description="Recent queries kept per (user, model, prompt_variant) bucket. "
+        "Comparison is a bounded linear scan because plain Redis has no vector "
+        "index; this caps the per-request cost.",
+    )
+    RESPONSE_CACHE_SEMANTIC_EMBED_TIMEOUT_SECONDS: float = Field(default=3.0)
 
     # ── Experiments / Canary-Shadow (safe release) ───────────────────────────
     # Deterministic user-bucket assignment for shadow/gradual prompt release.
@@ -423,6 +478,24 @@ class Settings(BaseSettings):
         default=6.0,
         description="Hard ceiling on the HyDE call. Retrieval must not wait on "
         "generation, so this fails to the template rather than to an error.",
+    )
+
+    # Query decomposition (multi-hop retrieval). Multi-query rewriting produces
+    # lexical *variants* of one question; decomposition is the other half -- one
+    # question that is really two ("compare X and Y", "what is X and how does it
+    # relate to Y") is split into its sub-questions so each is searched on its
+    # own terms. Heuristic and LLM-free on purpose: a per-query model call is
+    # real cost on free tiers, and clause splitting catches the common cases.
+    # Only fires on clear multi-hop signals, so single questions are unchanged.
+    RAG_DECOMPOSITION_ENABLED: bool = Field(default=True)
+    RAG_DECOMPOSITION_MAX_SUBQUERIES: int = Field(
+        default=3,
+        description="Cap on parts a query is split into. Each sub-query is a "
+        "separate retrieval, so this bounds the extra search cost.",
+    )
+    RAG_DECOMPOSITION_MIN_CHARS: int = Field(
+        default=40,
+        description="Queries shorter than this are never multi-hop.",
     )
 
     # ── Typed decisions (services/decision.py) ─────────────────────────────────
@@ -479,6 +552,26 @@ class Settings(BaseSettings):
     CHILD_CHUNK_SIZE: int = Field(default=128, description="Child chunk target tokens")
     CHILD_CHUNK_OVERLAP: int = Field(default=32, description="Child chunk overlap tokens")
     MAX_UPLOAD_SIZE_MB: int = Field(default=50)
+    # Audio upload ceiling for /audio/transcribe. This was read as
+    # `getattr(settings, "MAX_AUDIO_MB", 25)` -- a setting that did not exist, so
+    # the default was the only value it ever took and a config override silently
+    # did nothing (audit finding #8). It is a real field now.
+    MAX_AUDIO_MB: int = Field(default=25)
+
+    # ── Static Corpus / "CAG-lite" (opt-in, off by default) ────────────────────
+    # A fixed shared knowledge base injected as a stable prefix so that a
+    # provider's automatic prefix caching can hit between turns. It does *not*
+    # avoid retrieval, and on free tiers it does not use explicit context
+    # caching (Anthropic-style) unless the provider already does. It is useful
+    # only if STATIC_CORPUS_PATH points to a real static corpus; when disabled
+    # or missing it is inert. Fail-open and never raises at runtime.
+    STATIC_CORPUS_ENABLED: bool = Field(default=False)
+    STATIC_CORPUS_PATH: str = Field(
+        default="",
+        description="File or directory (.md/.txt). If a directory, files are "
+        "read in deterministic order and concatenated.",
+    )
+    STATIC_CORPUS_MAX_CHARS: int = Field(default=20000)
 
     # ── Async Indexing (Celery) ───────────────────────────────────────────────
     # When True, /files/upload persists the file + DB row and dispatches
@@ -497,7 +590,7 @@ class Settings(BaseSettings):
         description="Version of the agent graph (nodes/routing). Bump on behavioural graph changes.",
     )
     PROMPT_SET_VERSION: str = Field(
-        default="2026-09-30",
+        default="2026-10-13",
         description="Version of the prompt_templates/*.txt set. Bump whenever any template file changes.",
     )
 
@@ -711,6 +804,35 @@ class Settings(BaseSettings):
     TTS_VOICE: str = Field(default="en-US-AriaNeural")
     TTS_FORMAT: str = Field(default="mp3")
 
+    # ── Image generation (free, key-less) ─────────────────────────────────────
+    # Pollinations.ai renders an image from a URL with no key and no billing --
+    # the only genuinely free image generator in this deployment (Gemini's image
+    # models are ``limit: 0`` on the free tier). The master switch makes the
+    # feature disable-able without a redeploy stopping the rest of the API.
+    IMAGE_GENERATION_ENABLED: bool = Field(
+        default=True,
+        description="Master switch for the free image-generation endpoint (Pollinations, key-less)",
+    )
+    IMAGE_DEFAULT_WIDTH: int = Field(default=1024)
+    IMAGE_DEFAULT_HEIGHT: int = Field(default=1024)
+    IMAGE_MAX_PROMPT_CHARS: int = Field(default=1000)
+    IMAGE_REQUEST_TIMEOUT_SECONDS: float = Field(default=60.0)
+
+    # ── Speech-to-text (STT) ──────────────────────────────────────────────────
+    # Groq Whisper is the primary (free tier, fast). It is a single point of
+    # failure: litellm's `atranscription` has no router fallback (its provider
+    # branches are openai/azure/nvidia_riva/soniox/bedrock, and Groq is reached
+    # as the openai-compatible one), so a network egress denial -- a 403 under
+    # some VPNs, the exact symptom recorded for the chat providers -- takes STT
+    # down entirely while chat survives on its fallback chain. When the primary
+    # fails we retry on Gemini, which transcribes audio through the multimodal
+    # chat path (the browser records `audio/webm`, which Gemini accepts) and is
+    # free and reachable over 443. Set STT_FALLBACK_ENABLED=false to disable.
+    STT_PRIMARY_MODEL: str = Field(default="groq/whisper-large-v3")
+    STT_FALLBACK_ENABLED: bool = Field(default=True)
+    STT_FALLBACK_MODEL: str = Field(default="gemini/gemini-3.5-flash-lite")
+    STT_FALLBACK_TIMEOUT_SECONDS: float = Field(default=60.0)
+
     # ── Email (Free Gmail SMTP or Resend) ──────────────────────────────────────
     SMTP_HOST: str = Field(default="smtp.gmail.com")
     SMTP_PORT: int = Field(default=587)
@@ -764,7 +886,7 @@ class Settings(BaseSettings):
         if self.ENVIRONMENT == "production":
             missing = [
                 name
-                for name in ("SECRET_KEY", "ENCRYPTION_KEY")
+                for name in ("SECRET_KEY", "ENCRYPTION_KEY", "JWT_SECRET_KEY")
                 if not getattr(self, name) or getattr(self, name) in PUBLISHED_EXAMPLE_SECRETS
             ]
             if missing:
@@ -779,6 +901,11 @@ class Settings(BaseSettings):
                     "SECRET_KEY", lambda: secrets.token_urlsafe(48)
                 )
                 logger.info("using_stable_development_secret_key")
+            if not self.JWT_SECRET_KEY or self.JWT_SECRET_KEY in PUBLISHED_EXAMPLE_SECRETS:
+                self.JWT_SECRET_KEY = _stable_dev_secret(
+                    "JWT_SECRET_KEY", lambda: secrets.token_urlsafe(48)
+                )
+                logger.info("using_stable_development_jwt_secret_key")
             if not self.ENCRYPTION_KEY or self.ENCRYPTION_KEY in PUBLISHED_EXAMPLE_SECRETS:
                 self.ENCRYPTION_KEY = _stable_dev_secret(
                     "ENCRYPTION_KEY", lambda: secrets.token_hex(32)  # 64 hex chars → 32 bytes

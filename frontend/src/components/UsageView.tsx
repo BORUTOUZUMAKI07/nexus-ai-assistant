@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React from "react";
 import {
   BarChart3,
   Zap,
@@ -12,7 +12,7 @@ import {
   RefreshCw,
   AlertCircle,
 } from "lucide-react";
-import { fetchUsage, UsageStats } from "@/lib/api";
+import { useUsage } from "@/lib/queries";
 
 interface StatCardProps {
   icon: React.ReactNode;
@@ -35,30 +35,26 @@ const StatCard: React.FC<StatCardProps> = ({ icon, label, value, hint }) => (
 );
 
 export const UsageView: React.FC = () => {
-  const [stats, setStats] = useState<UsageStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Server state on the query client: it dedupes a re-mount, survives a tab
+  // switch, and gives the view a real loading/error model instead of three
+  // hand-rolled flags.
+  const usageQuery = useUsage();
+  const stats = usageQuery.data ?? null;
+  // `isPending` is "no data yet", so the skeleton shows on the first load only.
+  // The Refresh button tracks `isFetching`, which is also true during a
+  // background refetch — matching the old spinner-while-reloading behaviour.
+  const isLoading = usageQuery.isPending;
+  const error = usageQuery.error
+    ? usageQuery.error instanceof Error
+      ? usageQuery.error.message
+      : "Could not load usage data"
+    : null;
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const data = await fetchUsage();
-      setStats(data);
-    } catch (err) {
-      setStats(null);
-      setError(
-        err instanceof Error ? err.message : "Could not load usage data"
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-  }, [load]);
+  // Named no-arg wrapper so the Refresh button's `onClick`/`disabled` stay as
+  // they were; `refetch` returns a promise the click handler does not await.
+  const load = () => {
+    void usageQuery.refetch();
+  };
 
   return (
     <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto space-y-8">
@@ -73,10 +69,10 @@ export const UsageView: React.FC = () => {
         </div>
         <button
           onClick={load}
-          disabled={isLoading}
+          disabled={usageQuery.isFetching}
           className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors disabled:opacity-50"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} />
+          <RefreshCw className={`w-3.5 h-3.5 ${usageQuery.isFetching ? "animate-spin" : ""}`} />
           Refresh
         </button>
       </div>

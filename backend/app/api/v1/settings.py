@@ -88,3 +88,15 @@ async def save_api_key(
     return await settings_svc.save_api_key(
         current_user.id, key_in.provider, key_in.key_value, key_in.label
     )
+
+
+@router.delete("/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_api_key(
+    key_id: UUID,
+    current_user: User = Depends(get_current_user),
+    settings_svc: UserSettingsService = Depends(get_user_settings_service),
+):
+    try:
+        await settings_svc.delete_api_key(current_user.id, key_id)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message)

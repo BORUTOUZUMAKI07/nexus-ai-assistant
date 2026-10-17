@@ -12,6 +12,7 @@ import {
   forkConversation,
   sendMessageFeedback,
   updateConversation,
+  listOAuthProviders,
 } from "@/lib/api"
 
 const API = "/api"
@@ -183,6 +184,31 @@ describe("api client", () => {
     ).rejects.toThrow("Incorrect email or password.")
   })
 
+  it("renders a 422 validation array as readable text, not [object Object]", async () => {
+    // FastAPI returns `detail` as an array of {loc, msg, type} objects for a
+    // request-validation failure. Before the fix, `new Error(array)` stringified
+    // it to "[object Object]" and the sign-in page showed exactly that.
+    server.use(
+      http.post(`${API}/auth/login`, () =>
+        HttpResponse.json(
+          {
+            detail: [
+              {
+                loc: ["body", "email"],
+                msg: "value is not a valid email address",
+                type: "value_error",
+              },
+            ],
+          },
+          { status: 422 }
+        )
+      )
+    )
+    await expect(
+      loginUser({ email: "not-an-email", password: "password123" })
+    ).rejects.toThrow("value is not a valid email address")
+  })
+
   it("fetches the usage summary envelope", async () => {
     const usage = await fetchUsage()
     expect(usage.total_tokens).toBe(142850)
@@ -225,6 +251,38 @@ describe("previously unmocked endpoints", () => {
   it("forks with a default branch name when none is given", async () => {
     const forked = await forkConversation("conv-100", "msg-2")
     expect(forked.title).toBe("Forked Branch")
+  })
+
+  it("omits a client-side fork point so the backend forks at the latest message", async () => {
+    // A live turn's transcript id is `msg-<ts>`, not a UUID. Sending it as
+    // `fork_message_id` made the whole fork fail with a 422 uuid_parsing error:
+    // the request must carry only the branch name instead.
+    let sent: Record<string, unknown> | null = null
+    server.use(
+      http.post("/api/conversations/:id/fork", async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({ id: "conv-forked", title: "Branch A" })
+      })
+    )
+
+    await forkConversation("conv-100", "msg-1792077303790", "Branch A")
+
+    expect(sent).toEqual({ branch_name: "Branch A" })
+  })
+
+  it("sends a server fork point when the caller has a real message UUID", async () => {
+    const serverId = "123e4567-e89b-12d3-a456-426614174000"
+    let sent: Record<string, unknown> | null = null
+    server.use(
+      http.post("/api/conversations/:id/fork", async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({ id: "conv-forked", title: "Branch A" })
+      })
+    )
+
+    await forkConversation("conv-100", serverId, "Branch A")
+
+    expect(sent).toEqual({ branch_name: "Branch A", fork_message_id: serverId })
   })
 
   it("sends the fork point and echoes the recorded feedback back", async () => {
@@ -293,5 +351,91 @@ describe("previously unmocked endpoints", () => {
     await expect(
       updateConversation("conv-404", { title: "Nope" }),
     ).rejects.toThrow(/404/)
+  })
+})
+
+/**
+ * The sign-in probe for which OAuth providers a deployment can actually use.
+ *
+ * It is unauthenticated and runs before the page has a session, so its failure
+ * mode has to degrade to "no OAuth buttons", never to an error. It retries a
+ * gateway failure because the first request can land while the backend is still
+ * binding its port (the documented 30-60s cold start), which used to leave the
+ * sign-in page with no OAuth and no second attempt. `baseDelayMs: 0` keeps these
+ * tests instantaneous and deterministic — the backoff's *shape* is asserted by
+ * the call counts, not by wall-clock sleeps.
+ */
+describe("OAuth provider discovery", () => {
+  const providerList = (names: string[]) => ({
+    providers: names.map((name) => ({ name, configured: true })),
+  })
+
+  it("retries a transient failure until the provider list arrives", async () => {
+    let calls = 0
+    server.use(
+      http.get(`${API}/auth/oauth/providers`, () => {
+        calls += 1
+        return calls < 3
+          ? HttpResponse.json({ detail: "backend_unavailable" }, { status: 503 })
+          : HttpResponse.json(providerList(["google", "github"]))
+      }),
+    )
+
+    const result = await listOAuthProviders({ attempts: 3, baseDelayMs: 0 })
+
+    expect(calls).toBe(3)
+    expect(result.map((p) => p.name)).toEqual(["google", "github"])
+  })
+
+  it("gives up after the attempt budget and reports no providers", async () => {
+    let calls = 0
+    server.use(
+      http.get(`${API}/auth/oauth/providers`, () => {
+        calls += 1
+        return HttpResponse.json({ detail: "backend_unavailable" }, { status: 503 })
+      }),
+    )
+
+    const result = await listOAuthProviders({ attempts: 3, baseDelayMs: 0 })
+
+    expect(calls).toBe(3)
+    expect(result).toEqual([])
+  })
+
+  it("does not retry a definitive 4xx, which another attempt cannot change", async () => {
+    let calls = 0
+    server.use(
+      http.get(`${API}/auth/oauth/providers`, () => {
+        calls += 1
+        return HttpResponse.json({ detail: "forbidden" }, { status: 403 })
+      }),
+    )
+
+    const result = await listOAuthProviders({ attempts: 3, baseDelayMs: 0 })
+
+    expect(calls).toBe(1)
+    expect(result).toEqual([])
+  })
+
+  it("stops retrying once the caller aborts, so an unmounted page stops probing", async () => {
+    const controller = new AbortController()
+    let calls = 0
+    server.use(
+      http.get(`${API}/auth/oauth/providers`, () => {
+        calls += 1
+        // The page unmounts while the first attempt is still in flight.
+        controller.abort()
+        return HttpResponse.json({ detail: "backend_unavailable" }, { status: 503 })
+      }),
+    )
+
+    const result = await listOAuthProviders({
+      attempts: 4,
+      baseDelayMs: 0,
+      signal: controller.signal,
+    })
+
+    expect(calls).toBe(1)
+    expect(result).toEqual([])
   })
 })

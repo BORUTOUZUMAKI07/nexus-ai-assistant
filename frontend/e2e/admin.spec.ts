@@ -49,8 +49,8 @@ test.describe("Admin Center", () => {
     await expect(page.getByText("Staff Engineer")).toBeVisible()
     await expect(page.getByText("admin", { exact: true })).toBeVisible()
     await expect(page.getByText("user", { exact: true })).toBeVisible()
-    await expect(page.getByText("Active")).toBeVisible()
-    await expect(page.getByText("Disabled")).toBeVisible()
+    await expect(page.getByText("Active", { exact: true })).toBeVisible()
+    await expect(page.getByText("Disabled", { exact: true })).toBeVisible()
   })
 
   test("disables and re-enables a user", async ({ page }) => {

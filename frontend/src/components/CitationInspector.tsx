@@ -35,7 +35,10 @@ export const CitationInspector: React.FC<CitationInspectorProps> = ({
 
   if (!citation) return null;
 
-  const matchPercent = Math.min(100, Math.max(1, Math.round(citation.score * 100)));
+  const matchPercent =
+    citation.score !== undefined && citation.score !== null && !isNaN(citation.score)
+      ? Math.min(100, Math.max(0, Math.round(citation.score * 100)))
+      : 0;
 
   const handleCopy = () => copySnippet(citation.content_snippet);
 

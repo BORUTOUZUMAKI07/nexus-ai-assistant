@@ -167,6 +167,10 @@ class IngestionService:
                 if hasattr(self._retriever, "generate_embeddings_batch")
                 else [await self._retriever.generate_embedding(t) for t in chunk_texts]
             )
+            if len(dense_vectors) != len(chunks):
+                raise RuntimeError(
+                    f"Embedding batch size mismatch: {len(dense_vectors)} vectors for {len(chunks)} chunks"
+                )
 
             for c, dense_vec in zip(chunks, dense_vectors):
                 sparse_dict = self._retriever.generate_sparse_vector(c.content)
@@ -306,6 +310,10 @@ class IngestionService:
                 if hasattr(self._retriever, "generate_embeddings_batch")
                 else [await self._retriever.generate_embedding(t) for t in child_texts]
             )
+            if len(dense_vectors) != len(child_items):
+                raise RuntimeError(
+                    f"Embedding batch size mismatch: {len(dense_vectors)} vectors for {len(child_items)} child chunks"
+                )
 
             for (parent, parent_row, child, embedded_text), dense_vec in zip(child_items, dense_vectors):
                 sparse_dict = self._retriever.generate_sparse_vector(embedded_text)

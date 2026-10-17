@@ -101,7 +101,9 @@ class AuditService:
 
         # Model provenance — last 24h usage by model + variant coverage.
         try:
-            usage = (await self._session.exec(select(UsageLog))).all()
+            usage = (
+                await self._session.exec(select(UsageLog).order_by(UsageLog.created_at.desc()).limit(10000))
+            ).all()
             by_model: dict[str, dict[str, Any]] = {}
             for row in usage:
                 bucket = by_model.setdefault(row.model or "unknown", {"count": 0, "providers": set(), "variants": set()})
@@ -126,7 +128,9 @@ class AuditService:
 
         # Prompt provenance
         try:
-            versions = (await self._session.exec(select(PromptVersion))).all()
+            versions = (
+                await self._session.exec(select(PromptVersion).order_by(PromptVersion.created_at.desc()).limit(2000))
+            ).all()
             sections["prompt_provenance"] = {
                 "version_count": len(versions),
                 "latest_timestamp": max((v.created_at.isoformat() for v in versions), default=None),
@@ -138,7 +142,7 @@ class AuditService:
         # Red-team battery (persisted runs)
         try:
             runs = (
-                await self._session.exec(select(RedTeamRun).order_by(RedTeamRun.created_at.desc()))
+                await self._session.exec(select(RedTeamRun).order_by(RedTeamRun.created_at.desc()).limit(500))
             ).all()
             latest = runs[0] if runs else None
             sections["red_team"] = (
@@ -158,7 +162,11 @@ class AuditService:
 
         # GDPR evidence
         try:
-            audit_rows = (await self._session.exec(select(AuditLog))).all()
+            audit_rows = (
+                await self._session.exec(
+                    select(AuditLog).order_by(AuditLog.created_at.desc()).limit(2000)
+                )
+            ).all()
             gdpr_counts: dict[str, int] = {"gdpr_export": 0, "gdpr_erasure": 0}
             for row in audit_rows:
                 if row.action in _GDPR_ACTIONS:
@@ -170,7 +178,11 @@ class AuditService:
 
         # Evaluation histogram
         try:
-            evals = (await self._session.exec(select(EvaluationLog))).all()
+            evals = (
+                await self._session.exec(
+                    select(EvaluationLog).order_by(EvaluationLog.created_at.desc()).limit(2000)
+                )
+            ).all()
             by_evaluator: dict[str, dict[str, int]] = {}
             for row in evals:
                 bucket = by_evaluator.setdefault(row.evaluator or "unknown", {"count": 0, "passed": 0})
@@ -196,7 +208,7 @@ class AuditService:
     async def redteam_runs(self, limit: int = 5) -> list[dict[str, Any]]:
         """Recent red-team runs in reverse-chronological order (audit trail)."""
         runs = (
-            await self._session.exec(select(RedTeamRun).order_by(RedTeamRun.created_at.desc()))
+            await self._session.exec(select(RedTeamRun).order_by(RedTeamRun.created_at.desc()).limit(min(limit, 2000)))
         ).all()
         return [
             {

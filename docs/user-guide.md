@@ -1,6 +1,6 @@
 # Nexus AI Assistant — User Guide
 
-> Written against the frontend at `1f43c89` (Next.js 16.3.4). The app
+> Written against the frontend at `1f43c89` (Next.js 16.4.2). The app
 > combines a streaming chat with plan mode, RAG knowledge base, artifacts,
 > settings, usage, and admin views.
 
@@ -15,7 +15,7 @@
      points somewhere you did not intend.)
    - Frontend: `cd frontend && npm install && npm run dev`
 2. Open `http://localhost:3000`.
-3. Create an account (**Sign Up**) or sign in (**Sign In**). SSO (OAuth) is
+3. Create an account (**Sign Up**) or sign in (**Sign In**). OAuth is
    also available from the sign-in screen; email verification and optional
    2FA (TOTP) protect the account.
 

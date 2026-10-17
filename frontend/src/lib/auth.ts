@@ -51,6 +51,42 @@ export function authCookieOptions(request: Request): typeof AUTH_COOKIE_OPTIONS 
 }
 
 /**
+ * The public origin the browser actually used, taken from the request's `Host`
+ * header rather than from `request.url`.
+ *
+ * Why this is not just `new URL(request.url).origin`
+ * ──────────────────────────────────────────────────
+ * The deployed frontend is the Next.js standalone server, which binds
+ * `0.0.0.0` (see `scripts/serve.js` and the runner stage of the Dockerfile).
+ * Next builds a route handler's `request.url` from that *bound* host, so inside
+ * the OAuth callback `request.url` is `http://0.0.0.0:3000/...` no matter what
+ * the browser asked for. A redirect built as `new URL(path, request.url)` is
+ * therefore answered with `Location: http://0.0.0.0:3000/...`, which is a
+ * different *host* from the one the browser is on (`localhost`, or the real
+ * domain in production).
+ *
+ * That matters because a successful OAuth exchange sets host-only httpOnly
+ * session cookies on the response to the `localhost` request. A redirect to
+ * `0.0.0.0` is a different host, so the browser does not send them: the user
+ * arrives at `/app` unauthenticated and the whole sign-in appears broken even
+ * though every backend step succeeded. The `Host` header is the browser's
+ * origin and survives every proxy; `x-forwarded-host`/`x-forwarded-proto` are
+ * preferred when present so a TLS-terminating proxy is honoured.
+ *
+ * Falls back to `request.url`'s origin when no host header exists (a synthetic
+ * request, e.g. in a unit test).
+ */
+export function requestOrigin(request: Request): string {
+  const first = (value: string | null) => value?.split(",")[0]?.trim();
+  const host = first(request.headers.get("x-forwarded-host")) || request.headers.get("host");
+  if (!host) return new URL(request.url).origin;
+  const proto =
+    request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
+    new URL(request.url).protocol.replace(":", "");
+  return `${proto}://${host}`;
+}
+
+/**
  * Asks the server whether a session exists. The /api/auth/me route handler
  * verifies the httpOnly access cookie against the backend, so this works even
  * though the browser cannot read the cookie itself.

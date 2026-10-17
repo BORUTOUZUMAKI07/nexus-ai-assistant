@@ -17,7 +17,6 @@ logger = structlog.get_logger(__name__)
 # Single source of truth from settings (was hardcoded) so a renamed collection
 # or a different embedding model can't silently desync the app from the cluster.
 COLLECTION_NAME = settings.QDRANT_COLLECTION_NAME
-VECTOR_SIZE = settings.EMBEDDING_DIMENSION
 
 
 class QdrantService(IVectorStore):
@@ -98,11 +97,19 @@ class QdrantService(IVectorStore):
                         index=models.SparseIndexParams(on_disk=False)
                     )
                 },
-                quantization_config=models.ScalarQuantization(
-                    scalar=models.ScalarQuantizationConfig(
-                        type=models.ScalarType.INT8,
-                        quantile=0.99,
-                        always_ram=True,
+                quantization_config=(
+                    models.BinaryQuantization(
+                        binary=models.BinaryQuantizationConfig(
+                            always_ram=True,
+                        )
+                    )
+                    if getattr(settings, "QDRANT_QUANTIZATION", "int8") == "binary"
+                    else models.ScalarQuantization(
+                        scalar=models.ScalarQuantizationConfig(
+                            type=models.ScalarType.INT8,
+                            quantile=0.99,
+                            always_ram=True,
+                        )
                     )
                 ),
             )
@@ -171,11 +178,26 @@ class QdrantService(IVectorStore):
 
         payload_filter = models.Filter(must=must_filters) if must_filters else None
 
+        # When Binary Quantization is enabled, use oversampling=2.0 with rescore=True
+        # so Hamming distance candidates are rescored with exact cosine similarity.
+        search_params = (
+            models.SearchParams(
+                quantization=models.QuantizationSearchParams(
+                    ignore=False,
+                    rescore=True,
+                    oversampling=2.0,
+                )
+            )
+            if getattr(settings, "QDRANT_QUANTIZATION", "int8") == "binary"
+            else None
+        )
+
         prefetch_queries = [
             models.Prefetch(
                 query=dense_vector,
                 using="dense",
                 filter=payload_filter,
+                params=search_params,
                 limit=limit * 3,
             ),
             models.Prefetch(
@@ -273,8 +295,3 @@ class QdrantService(IVectorStore):
 
 # Singleton instance for backwards-compatibility
 vector_db = QdrantService()
-
-
-def get_vector_store() -> IVectorStore:
-    """Dependency provider returning the active IVectorStore implementation."""
-    return vector_db

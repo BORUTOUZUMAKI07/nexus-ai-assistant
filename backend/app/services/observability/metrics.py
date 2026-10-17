@@ -1,13 +1,21 @@
 """
 Metrics & System Performance Telemetry.
 Tracks latency percentiles, error rates, tool call frequency, and cache hit metrics.
+
+The same samples are also forwarded to OpenTelemetry instruments when the OTLP
+pipeline is wired (``services/observability/otel.py``); the in-process
+aggregation here stays as the source for the ``/metrics`` debug endpoint and the
+admin viewer. Forwarding is best-effort and never raises into a caller.
 """
 from collections import defaultdict
 from typing import Any
 
 import structlog
+from backend.app.services.observability.otel import get_meter
 
 logger = structlog.get_logger(__name__)
+
+_METER_NAME = "backend.app"
 
 
 class MetricsCollector:
@@ -17,18 +25,71 @@ class MetricsCollector:
         self._latencies: dict[str, list[float]] = defaultdict(list)
         self._counts: dict[str, int] = defaultdict(int)
         self._errors: dict[str, int] = defaultdict(int)
+        # OTel instruments are resolved lazily on first record: this collector
+        # is constructed at import time, before the MeterProvider is wired in
+        # the app lifespan. A no-op meter (provider not yet set) is *not*
+        # cached, so the real instruments are picked up once it is.
+        self._otel_resolved = False
+        self._otel_requests: Any = None
+        self._otel_errors: Any = None
+        self._otel_latency: Any = None
+
+    def _otel_instruments(self) -> None:
+        """Resolve OTel instruments once a MeterProvider is available."""
+        if self._otel_resolved:
+            return
+        meter = get_meter(_METER_NAME)
+        if meter is None:
+            return
+        try:
+            self._otel_requests = meter.create_counter(
+                "nexus_requests_total",
+                unit="1",
+                description="Requests recorded by the metrics collector.",
+            )
+            self._otel_errors = meter.create_counter(
+                "nexus_errors_total",
+                unit="1",
+                description="Errors recorded by exception spans / gateways.",
+            )
+            self._otel_latency = meter.create_histogram(
+                "nexus_latency_seconds",
+                unit="s",
+                description="Latency distribution per operation (seconds).",
+            )
+        except Exception:  # noqa: BLE001 - observability must not raise
+            return
+        self._otel_resolved = True
 
     def record_latency(self, operation: str, duration_ms: float) -> None:
         self._latencies[operation].append(duration_ms)
         # Keep sliding buffer of last 1,000 samples
         if len(self._latencies[operation]) > 1000:
             self._latencies[operation].pop(0)
+        self._otel_instruments()
+        if self._otel_latency is not None:
+            try:
+                self._otel_latency.record(duration_ms / 1000.0, {"operation": operation})
+            except Exception:  # noqa: BLE001 - observability must not raise
+                return
 
     def increment(self, counter_name: str, count: int = 1) -> None:
         self._counts[counter_name] += count
+        self._otel_instruments()
+        if self._otel_requests is not None:
+            try:
+                self._otel_requests.add(count, {"operation": counter_name})
+            except Exception:  # noqa: BLE001 - observability must not raise
+                return
 
     def record_error(self, error_type: str) -> None:
         self._errors[error_type] += 1
+        self._otel_instruments()
+        if self._otel_errors is not None:
+            try:
+                self._otel_errors.add(1, {"error": error_type})
+            except Exception:  # noqa: BLE001 - observability must not raise
+                return
 
     def get_summary(self) -> dict[str, Any]:
         stats: dict[str, Any] = {

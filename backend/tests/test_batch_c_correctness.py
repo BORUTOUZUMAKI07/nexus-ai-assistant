@@ -563,6 +563,72 @@ def _patch_firecrawl(monkeypatch, markdown: str, title: str = "Doc"):
     monkeypatch.setitem(__import__("sys").modules, "firecrawl", module)
 
 
+def _patch_firecrawl_object_metadata(
+    monkeypatch, markdown: str, title: str | None = "Doc"
+):
+    """A `firecrawl >= 4.x` result whose ``metadata`` is an object, not a dict.
+
+    The real SDK returns a pydantic ``DocumentMetadata``; it has a ``.title``
+    attribute and **no** ``.get``. The old code did ``metadata.get("title")``
+    unconditionally, so this shape raised ``AttributeError`` inside the try,
+    the surrounding ``except`` swallowed it, and every scrape silently fell
+    back to httpx -- the Firecrawl path was dead code that looked alive.
+    """
+
+    class _Metadata:
+        def __init__(self) -> None:
+            self.title = title
+
+    class _Result:
+        def __init__(self) -> None:
+            self.markdown = markdown
+            self.metadata = _Metadata()
+
+    class FakeApp:
+        def __init__(self, api_key=None, **kwargs):
+            self.api_key = api_key
+
+        def scrape_url(self, url, formats=None):
+            return _Result()
+
+    import types
+
+    module = types.ModuleType("firecrawl")
+    module.FirecrawlApp = FakeApp
+    monkeypatch.setitem(__import__("sys").modules, "firecrawl", module)
+
+
+async def test_scrape_url_reads_a_firecrawl_object_metadata(monkeypatch):
+    """The regression: a pydantic `metadata` object must not kill the provider.
+
+    The httpx fallback is patched to a *block page* on purpose, so a fallthrough
+    is observable: if the object-metadata path raises, the primary is abandoned,
+    the fallback rejects the block page, and the result is a failure instead of
+    the provider's real content. Asserting `success is True` therefore proves the
+    primary path survived, not merely that some scrape succeeded.
+    """
+    _patch_firecrawl_object_metadata(monkeypatch, GOOD_PAGE, title="Object Title")
+    _patch_httpx_fetch(monkeypatch, BLOCK_PAGE_HTML)
+    service = _scrape_service(monkeypatch, firecrawl_key="fc_real_key_value_here")
+
+    result = await service.scrape_url("https://example.com/article")
+
+    assert result["success"] is True
+    assert result["title"] == "Object Title"
+    assert "retrieval" in result["content"].lower()
+
+
+async def test_scrape_url_falls_back_to_the_url_when_object_title_is_absent(monkeypatch):
+    """A `DocumentMetadata` with no title must not become the string `"None"`."""
+    _patch_firecrawl_object_metadata(monkeypatch, GOOD_PAGE, title=None)
+    service = _scrape_service(monkeypatch, firecrawl_key="fc_real_key_value_here")
+
+    result = await service.scrape_url("https://example.com/article")
+
+    assert result["success"] is True
+    assert result["title"] == "https://example.com/article"
+
+
 async def test_scrape_url_falls_back_when_firecrawl_returns_a_block_page(monkeypatch):
     """The primary provider is challenged, the fallback is not.
 

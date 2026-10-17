@@ -25,12 +25,14 @@ jobs:
       - name: Security scans (bandit + pip-audit)
         # Same gates as the CI security job — rerun nightly because dependency
         # ceilings can land new advisories on a fresh `uv sync` even when PR
-        # CI was green. PYSEC-2026-1325 = ecdsa Minerva timing attack (ES*
-        # only; app signs HS256, no patched release) — see ci.yml for detail.
+        # CI was green. Two documented ignores, both no-patched-release and
+        # unreachable in this app: PYSEC-2026-1325 = ecdsa Minerva timing attack
+        # (ES* only; app signs HS256) and PYSEC-2026-4298 = python-jose
+        # algorithm confusion (decode pins `algorithms=[...]`). See ci.yml.
         shell: bash
         run: |
           uv run bandit -c pyproject.toml -r app -q
-          uv run pip-audit -l --skip-editable --ignore-vuln PYSEC-2026-1325
+          uv run pip-audit -l --skip-editable --ignore-vuln PYSEC-2026-1325 --ignore-vuln PYSEC-2026-4298
       - name: Run full backend test suite (unit + integration + e2e)
         shell: bash
         run: |
@@ -60,5 +62,5 @@ jobs:
           cache-dependency-path: ./frontend/package-lock.json
       - run: npm ci --legacy-peer-deps
       - name: npm audit (frontend lockfile)
-        run: npm audit --audit-level=high
+        run: npm run audit:gate
       - run: npm run test -- --coverage

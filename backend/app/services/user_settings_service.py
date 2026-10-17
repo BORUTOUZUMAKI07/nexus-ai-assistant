@@ -62,3 +62,8 @@ class UserSettingsService:
             raw_key=raw_key,
             label=label,
         )
+
+    async def delete_api_key(self, user_id: UUID, key_id: UUID) -> None:
+        success = await self._repo.delete_api_key(user_id, key_id)
+        if not success:
+            raise ResourceNotFoundError("APIKey", str(key_id))

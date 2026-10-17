@@ -188,6 +188,20 @@ def setup_logging() -> None:
         except Exception as exc:  # noqa: BLE001 - fail-open seam
             logger.warning("otlp_log_handler_setup_failed", error_type=type(exc).__name__)
 
+        # Same gate and same collector: wire OTLP traces and metrics so all
+        # three signals ship together. (Metrics are pushed, not scraped, so
+        # multi-worker counts aggregate rather than each reporting a fraction.)
+        try:
+            from backend.app.services.observability.otel import (
+                setup_otlp_metrics,
+                setup_otlp_tracing,
+            )
+
+            setup_otlp_tracing()
+            setup_otlp_metrics()
+        except Exception as exc:  # noqa: BLE001 - fail-open seam
+            logger.warning("otlp_signal_setup_failed", error_type=type(exc).__name__)
+
 
 # Root application logger instance
 logger = structlog.get_logger("nexus")

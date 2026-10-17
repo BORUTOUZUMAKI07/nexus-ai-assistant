@@ -12,20 +12,24 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from backend.app.core.config import settings
-from backend.app.domain.file.schemas import RAGCitation, RAGQueryResult
-from backend.app.services.observability.tracing import trace_span
-from backend.app.services.rag.answer_coverage import grade_answer_coverage
-from backend.app.services.rag.base import IReranker, IRetriever, IRewriter
-from backend.app.services.rag.citation import CitationService
-from backend.app.services.rag.citation import (
+
+from app.core.config import settings
+from app.domain.file.schemas import RAGCitation, RAGQueryResult
+from app.services.observability.tracing import trace_span
+from app.services.rag.answer_coverage import grade_answer_coverage
+from app.services.rag.base import IReranker, IRetriever, IRewriter
+from app.services.rag.citation import CitationService
+from app.services.rag.citation import (
     citation_service as _default_citation_service,
 )
-from backend.app.services.rag.query_rewriter import (
+from app.services.rag.query_decomposition import (
+    query_decomposer_service as _default_decomposer,
+)
+from app.services.rag.query_rewriter import (
     query_rewriter_service as _default_rewriter,
 )
-from backend.app.services.rag.reranking import reranker as _default_reranker
-from backend.app.services.rag.retrieval import (
+from app.services.rag.reranking import reranker as _default_reranker
+from app.services.rag.retrieval import (
     retrieval_service as _default_retrieval_service,
 )
 
@@ -43,12 +47,14 @@ class RAGService:
         retriever: IRetriever = _default_retrieval_service,
         reranker: IReranker = _default_reranker,
         rewriter: IRewriter = _default_rewriter,
+        decomposer=_default_decomposer,
         citation_service: CitationService = _default_citation_service,
         decision_client: object | None = None,
     ) -> None:
         self._retriever = retriever
         self._reranker = reranker
         self._rewriter = rewriter
+        self._decomposer = decomposer
         self._citation = citation_service
         # Left as None by default rather than importing ai_client here. The
         # decision layer must not be able to make module import order
@@ -89,6 +95,18 @@ class RAGService:
         async with trace_span("rag_query", {"query": query, "user_id": str(user_id), "top_k": top_k}):
             # 1. Query rewriting (multi-query expansion + conditional HyDE)
             queries = await self._rewriter.rewrite(query)
+            # 1a. Query decomposition (multi-hop) adds sub-queries when present.
+            try:
+                if settings.RAG_DECOMPOSITION_ENABLED and self._decomposer:
+                    subs = await self._decomposer.decompose(query)
+                    if subs:
+                        queries = list(dict.fromkeys(queries + subs))
+                        queries = queries[: max(1, len(queries))]
+            except Exception as exc:  # pragma: no cover - fail-open
+                logger.warning(
+                    "rag_decomposition_failed_fail_open",
+                    error_type=type(exc).__name__,
+                )
 
             # 2. Multi-query hybrid search with Dense MMR (child→parent resolved & diversified)
             candidates = await self._retriever.retrieve_multi(

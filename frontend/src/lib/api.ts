@@ -13,7 +13,7 @@ import { clearSession, SESSION_EXPIRED_EVENT } from "./auth";
 
 // ─── Types (mirror backend Pydantic schemas) ────────────────────────────────
 
-export type ConversationMode = "normal" | "agent" | "code" | "research";
+export type ConversationMode = "normal" | "agent" | "code" | "research" | "fast";
 
 export interface Conversation {
   id: string;
@@ -21,7 +21,16 @@ export interface Conversation {
   model: string;
   is_pinned: boolean;
   is_archived: boolean;
+  project_id: string | null;
   token_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -168,11 +177,41 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
   return { ...(extra ?? {}) };
 }
 
+/**
+ * Reduce a parsed error-payload value to a human-readable string.
+ *
+ * A business error carries `detail` as a string, but a FastAPI
+ * request-validation failure (HTTP 422) carries it as an *array* of
+ * `{loc, msg, type}` objects. Handing that array to `new Error(...)`
+ * stringifies it as "[object Object]", and the sign-in page rendered that
+ * verbatim -- telling the user nothing about which field was rejected.
+ */
+function errorMessageFrom(value: unknown): string | null {
+  if (typeof value === "string") return value.trim() ? value : null;
+  if (Array.isArray(value)) {
+    const messages = value
+      .map((item) =>
+        item && typeof item === "object" && "msg" in item
+          ? String((item as { msg: unknown }).msg)
+          : null,
+      )
+      .filter((msg): msg is string => Boolean(msg && msg.trim()));
+    return messages.length > 0 ? messages.join("; ") : null;
+  }
+  if (value && typeof value === "object" && "msg" in value) {
+    const msg = (value as { msg: unknown }).msg;
+    return typeof msg === "string" && msg.trim() ? msg : null;
+  }
+  return null;
+}
+
 async function parseError(res: Response, fallback: string): Promise<Error> {
   const body = (await res.json().catch(() => null)) as
-    | { detail?: string; error?: string }
+    | { detail?: unknown; error?: unknown }
     | null;
-  return new Error(body?.detail ?? body?.error ?? fallback);
+  return new Error(
+    errorMessageFrom(body?.detail) ?? errorMessageFrom(body?.error) ?? fallback,
+  );
 }
 
 // Backend cold start (imports + schema sync) can take 30-60s, so gateway-style
@@ -644,7 +683,7 @@ export async function deleteConversation(id: string): Promise<void> {
 
 export async function updateConversation(
   id: string,
-  patch: { title?: string; is_pinned?: boolean; is_archived?: boolean }
+  patch: { title?: string; is_pinned?: boolean; is_archived?: boolean; project_id?: string | null }
 ): Promise<Conversation> {
   const res = await nexusFetch(`${API_BASE}/conversations/${id}`, {
     method: "PATCH",
@@ -655,18 +694,76 @@ export async function updateConversation(
   return res.json();
 }
 
+export async function fetchProjects(): Promise<Project[]> {
+  const res = await nexusFetch(`${API_BASE}/projects`, { headers: authHeaders() });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function createProject(name: string): Promise<Project> {
+  const res = await nexusFetch(`${API_BASE}/projects`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`Create project failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateProject(id: string, patch: { name?: string; description?: string | null }): Promise<Project> {
+  const res = await nexusFetch(`${API_BASE}/projects/${id}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Update project failed: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  const res = await nexusFetch(`${API_BASE}/projects/${id}`, { method: "DELETE", headers: authHeaders() });
+  if (!res.ok && res.status !== 404) throw new Error(`Delete project failed: ${res.status}`);
+}
+
+export async function moveConversationToProject(id: string, projectId: string | null): Promise<Conversation> {
+  const res = await nexusFetch(`${API_BASE}/conversations/${id}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ project_id: projectId }),
+  });
+  if (!res.ok) throw new Error(`Move conversation failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Fork a conversation at a message.
+ *
+ * `forkMessageId` is optional and is deliberately dropped unless it is a server
+ * message id (a UUID). A turn streamed live keeps a client-side `msg-<ts>` id
+ * until the transcript is reloaded from the server, so passing it through would
+ * have the backend reject the whole request with a 422 `uuid_parsing` error --
+ * which is exactly what "fork does nothing after a fresh answer" looked like.
+ * Omitting it makes the backend fork at the latest persisted message, the only
+ * fork point the UI offers.
+ */
+const SERVER_MESSAGE_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function forkConversation(
   id: string,
-  forkMessageId: string,
+  forkMessageId?: string | null,
   branchName?: string
 ): Promise<Conversation> {
+  const body: Record<string, unknown> = {
+    branch_name: branchName ?? "Forked Branch",
+  };
+  if (forkMessageId && SERVER_MESSAGE_ID_RE.test(forkMessageId)) {
+    body.fork_message_id = forkMessageId;
+  }
   const res = await nexusFetch(`${API_BASE}/conversations/${id}/fork`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({
-      fork_message_id: forkMessageId,
-      branch_name: branchName ?? "Forked Branch",
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Fork conversation failed: ${res.status}`);
   return res.json();
@@ -794,6 +891,16 @@ export async function addAPIKey(key: APIKeyCreate): Promise<APIKey> {
   return res.json();
 }
 
+export async function deleteAPIKey(id: string): Promise<void> {
+  const res = await nexusFetch(`${API_BASE}/settings/keys/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Delete API key failed: ${res.status}`);
+  }
+}
+
 // ─── Message Feedback ─────────────────────────────────────────────────────────
 
 export async function sendMessageFeedback(
@@ -819,6 +926,9 @@ export async function sendMessageFeedback(
 export async function sendHITLFeedback(
   feedback: HITLFeedback
 ): Promise<{ status: string }> {
+  // `/api/hitl` is a bespoke BFF route that reads `threadId`/`action`/`data`
+  // from the body and forwards them to `POST /api/v1/conversations/{threadId}/hitl`
+  // with the session bearer token attached server-side.
   const res = await nexusFetch(`${API_BASE}/hitl`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
@@ -887,45 +997,139 @@ export async function loginUser(payload: {
 /** The OAuth identity providers the sign-in page offers. */
 export type OAuthProviderName = "google" | "github";
 
-export interface SsoAuthorizationUrl {
+export interface OAuthAuthorizationUrl {
   authorization_url: string;
   state: string;
   provider: string;
 }
 
-export interface SsoProviderInfo {
+export interface OAuthProviderInfo {
   name: string;
   configured: boolean;
 }
 
 /**
- * Which SSO providers this deployment can actually complete a login with.
+ * Retry policy for the unauthenticated sign-in provider probe.
+ *
+ * Shorter than the app-wide default on purpose: this runs while the sign-in
+ * page is already usable, so a long stall only delays a hint. The window still
+ * covers the common cold-start race — the backend takes 30-60s to come up, and
+ * the first request can land while uvicorn is still binding — so a transient
+ * 503 heals itself instead of hiding OAuth until a manual reload. The caller
+ * aborts it on unmount, so navigating away stops the probing.
+ */
+const OAUTH_PROVIDERS_RETRY_ATTEMPTS = 4;
+const OAUTH_PROVIDERS_RETRY_BASE_DELAY_MS = 600;
+
+export interface OAuthProvidersOptions extends FetchRetryOptions {
+  /** Aborts in-flight retries; the sign-in page passes its effect's controller. */
+  signal?: AbortSignal;
+}
+
+/**
+ * `sleep`, but it resolves early (never rejects) when `signal` aborts.
+ *
+ * Retry pauses have to be interruptible for the same reason the request does:
+ * a component that has unmounted, or a navigation away, must not leave a timer
+ * that later fires and drives another attempt at a page that is gone.
+ */
+function sleepUntilAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      resolve();
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Exponential backoff with jitter, matching `fetchWithRetry`'s shape. */
+function oauthProvidersRetryDelayMs(attempt: number, baseDelayMs: number): number {
+  if (baseDelayMs <= 0) return 0;
+  return (
+    Math.min(baseDelayMs * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS) +
+    Math.random() * 250
+  );
+}
+
+/**
+ * Which OAuth providers this deployment can actually complete a login with.
  *
  * Asked for before the user has a session, so a failure here is not an auth
  * problem and must not be surfaced as one: it resolves to an empty list, which
- * hides the SSO section entirely. That is the right degradation — a sign-in
+ * hides the OAuth section entirely. That is the right degradation — a sign-in
  * page offering an IdP the server has no client secret for turns one failed
  * click into a support ticket.
+ *
+ * A *transient* failure (the proxy's 502/503/504 while the backend is starting)
+ * is retried with backoff, because the alternative is the bug this fixes: a
+ * user who opens /signin during the backend's cold start saw no OAuth buttons
+ * and no reason for their absence, and nothing re-asked. A definitive answer —
+ * 2xx, or a 4xx a retry cannot change — is returned immediately.
  */
-export async function listSsoProviders(): Promise<SsoProviderInfo[]> {
-  const res = await nexusFetch(`${API_BASE}/auth/oauth/providers`, {
-    method: "GET",
-  });
-  // Status first, shape second. The shape check alone covers every failure the
-  // app itself generates, because `backendFetch` answers a dead socket or a
-  // timeout with `{detail: "..."}` and no `providers` key. What it cannot cover
-  // is a status failure that still carries a valid body — a reverse proxy or
-  // CDN replaying a cached 200 while reporting 502. Reading that as a provider
-  // list would put SSO buttons on the page because a request *failed*.
-  if (!res.ok) {
-    return [];
+export async function listOAuthProviders(
+  options: OAuthProvidersOptions = {}
+): Promise<OAuthProviderInfo[]> {
+  const attempts = Math.max(
+    1,
+    options.attempts ?? OAUTH_PROVIDERS_RETRY_ATTEMPTS
+  );
+  const baseDelayMs = Math.max(
+    0,
+    options.baseDelayMs ?? OAUTH_PROVIDERS_RETRY_BASE_DELAY_MS
+  );
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (options.signal?.aborted) return [];
+
+    let res: Response;
+    try {
+      res = await nexusFetch(`${API_BASE}/auth/oauth/providers`, {
+        method: "GET",
+        signal: options.signal,
+      });
+    } catch {
+      // An aborted request is a navigation, not a failure to report.
+      if (options.signal?.aborted) return [];
+      if (attempt === attempts) return [];
+      await sleepUntilAbort(
+        oauthProvidersRetryDelayMs(attempt, baseDelayMs),
+        options.signal
+      );
+      continue;
+    }
+
+    // Only gateway statuses are worth another attempt; a 4xx cannot be improved
+    // by retrying (the same rule `fetchWithRetry` applies to every JSON call).
+    if (!TRANSIENT_STATUS.has(res.status)) {
+      // Status first, shape second. The shape check alone covers every failure
+      // the app itself generates, because `backendFetch` answers a dead socket
+      // or a timeout with `{detail: "..."}` and no `providers` key. What it
+      // cannot cover is a status failure that still carries a valid body — a
+      // reverse proxy or CDN replaying a cached 200 while reporting 502.
+      // Reading that as a provider list would put OAuth buttons on the page
+      // because a request *failed*.
+      if (!res.ok) return [];
+      try {
+        const body = (await res.json()) as { providers?: OAuthProviderInfo[] };
+        return Array.isArray(body.providers) ? body.providers : [];
+      } catch {
+        return [];
+      }
+    }
+
+    if (attempt === attempts) return [];
+    await sleepUntilAbort(
+      oauthProvidersRetryDelayMs(attempt, baseDelayMs),
+      options.signal
+    );
   }
-  try {
-    const body = (await res.json()) as { providers?: SsoProviderInfo[] };
-    return Array.isArray(body.providers) ? body.providers : [];
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 /**
@@ -934,12 +1138,12 @@ export async function listSsoProviders(): Promise<SsoProviderInfo[]> {
  * /api/auth/oauth/{provider}/callback where the httpOnly session cookies are
  * written.
  */
-export async function ssoLogin(provider: OAuthProviderName): Promise<SsoAuthorizationUrl> {
+export async function startOAuthLogin(provider: OAuthProviderName): Promise<OAuthAuthorizationUrl> {
   const res = await nexusFetch(`${API_BASE}/auth/oauth/${provider}`, { method: "GET" });
   if (!res.ok) {
     throw await parseError(res, "Single sign-on is not configured.");
   }
-  return (await res.json()) as SsoAuthorizationUrl;
+  return (await res.json()) as OAuthAuthorizationUrl;
 }
 
 // ─── Plans (plan-then-approve) ───────────────────────────────────────────────

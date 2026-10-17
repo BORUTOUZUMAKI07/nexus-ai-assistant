@@ -3,6 +3,7 @@ Graph Nodes for LangGraph Orchestration.
 Includes Bootstrap, Planner, Orchestrator, Subagent Dispatcher, Tool Execution (with HITL), and Synthesizer.
 Long-term memories from mem0 are injected into every prompt and saved after each response.
 """
+import asyncio
 from typing import Any
 from uuid import UUID
 
@@ -13,13 +14,19 @@ from backend.app.agents.subagents.coder import coder_subagent
 from backend.app.agents.subagents.critic import critic_subagent
 from backend.app.agents.subagents.researcher import researcher_subagent
 from backend.app.core.config import settings
+from backend.app.core.exceptions import ToolExecutionError
 from backend.app.core.spend import (
     bind_spend_meter,
     budget_exhausted,
     charge_step,
     current_spend_meter,
 )
-from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.infrastructure.ai.litellm_client import (
+    ai_client,
+    get_last_resolved_model,
+    group_primary_model,
+    resolve_answer_model,
+)
 from backend.app.services.confidence_action import apply_confidence_action
 from backend.app.services.context_compiler import context_compiler
 from backend.app.services.memory import long_term_memory
@@ -35,7 +42,7 @@ from backend.app.services.structured_output import (
 from backend.app.services.tools.evidence_gate import evidence_gate
 from backend.app.services.tools.tool_gateway import tool_gateway
 from langchain_core.messages import AIMessage
-from langgraph.config import get_config
+from langgraph.config import get_config, get_stream_writer
 
 logger = structlog.get_logger(__name__)
 
@@ -182,6 +189,42 @@ def _extract_text_content(content: Any) -> str:
     return str(content)
 
 
+#: The roles that mark the user's own turn. LangChain names it "human"; plain
+#: dicts seeded by tests and older call sites use "user".
+_USER_MESSAGE_ROLES = ("human", "user")
+
+
+def _message_content(message: Any) -> Any:
+    """Content of a state message, whatever shape it arrived in."""
+    if hasattr(message, "content"):
+        return message.content
+    if isinstance(message, dict):
+        return message.get("content", "")
+    return str(message)
+
+
+def _latest_user_content(messages: Any) -> Any:
+    """Content of the most recent human turn, or the last message if none.
+
+    ``messages[-1]`` is not the user's request by construction: the Tree of
+    Thoughts node used to append an ``AIMessage`` carrying its synthesized "best
+    approach", so every downstream reader of the tail -- the orchestrator's
+    router, the critic grader's retrieval query, the synthesizer's prompt, the
+    subagent dispatcher -- operated on that synthesis instead of the turn the
+    user typed. Reading the last *human* turn makes "the user's request" explicit
+    and stops the answer depending on whatever happens to be last. Falls back to
+    the final message so a transcript that carries no human marker (older state,
+    a hand-built fixture) keeps its previous meaning.
+    """
+    for message in reversed(list(messages)):
+        role = message.get("role") if isinstance(message, dict) else getattr(message, "type", None)
+        if role in _USER_MESSAGE_ROLES:
+            return _message_content(message)
+    if not messages:
+        return ""
+    return _message_content(messages[-1])
+
+
 def _bind_run_spend_meter(state: AgentState) -> None:
     """Bind the run's spend meter, seeded from any spend already on the state.
 
@@ -268,6 +311,81 @@ def meter_steps() -> int:
     return meter.steps if meter is not None else 0
 
 
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are Nexus AI, an enterprise-grade assistant. Answer the user's actual "
+    "request directly and in clear, well-organized prose.\n\n"
+    "Style:\n"
+    "- Lead with the answer or recommendation, then the supporting detail.\n"
+    "- Use Markdown only where it helps: short paragraphs, headings for a "
+    "genuinely multi-part answer, and bullet lists for parallel items. Do not "
+    "wrap a two-sentence answer in headings and lists.\n"
+    "- Emoji are optional emphasis, never structure. Use at most a few per "
+    "answer, and never in place of a heading.\n"
+    "- Match the length to the question; a simple question gets a direct answer.\n\n"
+    "Code:\n"
+    "- Fence every code block with its exact language identifier.\n"
+    "- Comment only where a decision is non-obvious; do not narrate every line.\n"
+    "- Prefer complete, runnable snippets when asked for an implementation.\n\n"
+    "Tools, sources, and actions:\n"
+    "- When you use a tool, fold its result into the answer as a finished fact, "
+    "not as a play-by-play of what you ran.\n"
+    "- Before a destructive or irreversible action (delete, export, upgrade, "
+    "publish), say plainly what you are about to change.\n"
+    "- If a request cannot be safely or honestly fulfilled, say so clearly and "
+    "offer the closest viable alternative.\n\n"
+    "Grounding and honesty:\n"
+    "- Ground the answer in any reference material supplied and cite only what "
+    "you actually used. Never invent sources, filenames, or APIs.\n"
+    "- If the request is ambiguous, ask one focused clarifying question rather "
+    "than guessing."
+)
+
+
+# -- Progressive delivery of the finished answer -----------------------------
+# The synthesizer produces the whole answer before its guardrails run: PII
+# redaction and the confidence hedge both operate on the complete text, so the
+# raw token stream cannot be handed to the client as it is generated without
+# letting an un-redacted draft reach the user and letting the screen disagree
+# with the row `run_executor` persists. Instead the final, already-sanitised
+# text is emitted as small `text_delta` frames through the graph's custom
+# stream. The executor accumulates *those same frames*, so what the user watches
+# arrive and what is stored are byte-for-byte the same string.
+_STREAM_CHUNK_CHARS = 20
+# The per-chunk pause exists only so the frames do not arrive in a single tick --
+# the UI would paint them together and the stream would look like a paste. A
+# ceiling keeps the added latency flat as answers grow: a 200-char reply and a
+# 20,000-char one take the same bounded time to deliver.
+_STREAM_MAX_SECONDS = 1.2
+
+
+async def _emit_answer_stream(response_text: str) -> None:
+    """Drip the finished answer to the client, if anyone is listening.
+
+    A no-op outside a runnable context (a direct unit call to
+    ``synthesizer_node``) and when the graph was invoked without
+    ``stream_mode="custom"`` -- there the writer is a no-op, so the pauses would
+    cost time and deliver nothing.
+    """
+    if not response_text:
+        return
+    try:
+        writer = get_stream_writer()
+    except Exception:
+        # `get_stream_writer` reads a config contextvar and raises outside a
+        # runnable context. Absence means nobody is streaming; it is not an
+        # error, and swallowing it is the whole fail-open contract here.
+        return
+
+    chunks = [
+        response_text[i : i + _STREAM_CHUNK_CHARS]
+        for i in range(0, len(response_text), _STREAM_CHUNK_CHARS)
+    ]
+    pause = min(0.02, _STREAM_MAX_SECONDS / len(chunks))
+    for piece in chunks:
+        writer({"type": "text_delta", "content": piece})
+        await asyncio.sleep(pause)
+
+
 async def bootstrap_node(state: AgentState) -> dict[str, Any]:
     """
     Step 0: Materialises session identity (user_id, conversation_id) and
@@ -278,14 +396,7 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
     plan_preamble = str(conf.get("plan_preamble") or "").strip()
     _bind_run_spend_meter(state)
     base_system_prompt = state.get("system_prompt") or (
-        "You are Nexus AI â€” an elite production assistant engineered for maximum clarity, intelligence, and elegance.\n\n"
-        "Format every response with clean, professional presentation:\n"
-        "- Direct, High-Value Answers: Start with a crisp, direct summary or solution before deep-diving.\n"
-        "- Structured Hierarchy: Use Markdown headers (`##`, `###`), bold keys, and clean bullet points to organize complex answers.\n"
-        "- Visual Anchors: Use intuitive emojis purposefully as section anchors (e.g., ðŸ“Œ Summary, ðŸ” Analysis, âš¡ Recommendation, ðŸ’¡ Tip, âš ï¸ Caution, ðŸš€ Next Steps).\n"
-        "- Code Excellence: Always fence code blocks with the exact language identifier (```python, ```typescript, ```bash, etc.) and include concise, insightful inline comments.\n"
-        "- Tables & Comparisons: When comparing architectures, libraries, or options, format them into clear Markdown tables.\n"
-        "- Tone: Polished, rigorous, helpful, and concise."
+        _DEFAULT_SYSTEM_PROMPT
     )
     if plan_preamble:
         # Plan mode: an approved plan was committed â€” the run must follow its
@@ -311,6 +422,7 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
         "subagent_dispatches": state.get("subagent_dispatches") or [],
         "subagent_outputs": state.get("subagent_outputs") or {},
         "tot_candidates": state.get("tot_candidates") or [],
+        "tot_synthesis": state.get("tot_synthesis") or "",
         "citations": state.get("citations") or [],
         "evidence_score": state.get("evidence_score", 0.0),
         "evidence_gate_passed": bool(state.get("evidence_gate_passed", False)),
@@ -339,11 +451,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     if not messages:
         return {"plan": None, "current_step": 0, "user_memories": []}
 
-    last_user_raw = (
-        messages[-1].content
-        if hasattr(messages[-1], "content")
-        else (messages[-1].get("content") if isinstance(messages[-1], dict) else str(messages[-1]))
-    )
+    last_user_raw = _latest_user_content(messages)
     if _has_image_content(last_user_raw):
         # Multimodal vision queries bypass planner
         return {"plan": None, "current_step": 0, "user_memories": [], "task_type": "vision"}
@@ -359,6 +467,13 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         )
         if memory_block:
             logger.info("mem0_memories_loaded_for_planner", user_id=user_id)
+
+    # Fast mode is a single direct answer: `route_after_planner` sends it straight
+    # to the synthesizer, so planning (and with it the orchestrator, subagents,
+    # tools and retrieval) is dropped. The memory block loaded above is kept, so
+    # fast mode still personalises; only the multi-step machinery is skipped.
+    if state.get("mode") == "fast":
+        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else []}
 
     # Determine if planning is needed
     # Cheap pre-check: skip the planner LLM round-trip entirely for short,
@@ -400,16 +515,19 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
 # constraint-check that classifies each request before tool dispatch.
 _ARQ_PROMPT_TEMPLATE = """
 You are a constraint-checker for an AI assistant. Analyse the user request below
-and return a compact JSON object with EXACTLY these keys â€” no others:
-  "needs_tool"   : true if the task requires an external tool (web search, code exec, file read)
-  "safety_flag"  : true if the request touches PII, harmful content, or violates AI safety policy
-  "recency_needed" : true if answering well requires real-time or post-training-cutoff data
-  "ambiguous"    : true if the request is underspecified and a clarifying question would help
+and return a compact JSON object with EXACTLY these keys and no others:
+  "needs_tool"    : true if the task requires an external tool (web search, code execution, file read)
+  "safety_flag"   : true if the request touches PII, harmful content, or violates AI safety policy
+  "recency_needed": true if answering well requires real-time or post-training-cutoff data
+  "ambiguous"     : true if the request is underspecified and a clarifying question would help
+
+Answer true for a key only when you are confident; when in doubt, false.
 
 User request: {query}
 
 Respond with ONLY the JSON object and nothing else.
 """
+
 
 
 async def _run_arq(query: str) -> dict[str, bool]:
@@ -455,11 +573,7 @@ async def orchestrator_node(state: AgentState) -> dict[str, Any]:
     before the synthesizer commits to an answer path.
     """
     messages = state.get("messages", [])
-    last_user_raw = (
-        messages[-1].content
-        if hasattr(messages[-1], "content")
-        else (messages[-1].get("content") if isinstance(messages[-1], dict) else "")
-    )
+    last_user_raw = _latest_user_content(messages)
     if _has_image_content(last_user_raw) or state.get("task_type") == "vision":
         logger.info("orchestrator_route_vision_direct")
         return {"action": "ANSWER", "task_type": "vision"}
@@ -485,18 +599,22 @@ async def orchestrator_node(state: AgentState) -> dict[str, Any]:
             "needs current or external information."
         )
 
-    # Run ARQ constraint-check and main routing decision concurrently to
-    # avoid adding an extra serial round-trip on every message.
+    # Run the routing decision and the ARQ constraint-check concurrently, so the
+    # extra ARQ round-trip does not add serial latency to every message.
     import asyncio as _asyncio
-    try:
-        action_task = _asyncio.ensure_future(
-            ai_client.completion(
-                messages=[{"role": "user", "content": router_prompt}],
-                model="fast_chat",
-                temperature=0.0,
-                max_tokens=16,
-            )
+
+    async def _decide_action() -> str:
+        # If test monkeypatched ai_client.completion, respect the mock
+        raw = await ai_client.completion(
+            messages=[{"role": "user", "content": router_prompt}],
+            model="fast_chat",
+            temperature=0.0,
+            max_tokens=16,
         )
+        return str(raw).strip().upper()
+
+    try:
+        action_task = _asyncio.ensure_future(_decide_action())
         arq_task = _asyncio.ensure_future(_run_arq(last_user_msg))
         action_raw, arq_flags = await _asyncio.gather(action_task, arq_task, return_exceptions=True)
 
@@ -551,7 +669,7 @@ async def subagent_dispatcher_node(state: AgentState) -> dict[str, Any]:
     dispatches = state.get("subagent_dispatches", [])
     messages = state.get("messages", [])
     mode = state.get("mode", "normal")
-    user_query = messages[-1].content if messages else ""
+    user_query = _latest_user_content(messages)
     outputs = state.get("subagent_outputs", {})
     pending = list(state.get("pending_tool_calls") or [])
 
@@ -561,13 +679,21 @@ async def subagent_dispatcher_node(state: AgentState) -> dict[str, Any]:
     elif "coder" in dispatches:
         res = await coder_subagent.execute(task_description=user_query)
         outputs["coder"] = res
-        if mode == "code":
-            code = res.get("code") or res.get("stdout") or res.get("synthesis")
-            if code:
-                pending.append({
-                    "name": "execute_python",
-                    "arguments": {"code": code[:20000]},
-                })
+        code = res.get("code") or res.get("stdout") or res.get("synthesis")
+        if res.get("status") == "requires_approval" and code:
+            # The coder wrote code the permission ladder flagged and deliberately
+            # did NOT run it. Queue it so ``tool_node`` raises the HITL interrupt;
+            # it executes only after a human approves. This is what makes the
+            # approval card reachable from ordinary chat, not just mode="code".
+            pending.append({
+                "name": "execute_python",
+                "arguments": {"code": code[:20000]},
+            })
+        elif mode == "code" and code:
+            pending.append({
+                "name": "execute_python",
+                "arguments": {"code": code[:20000]},
+            })
 
     return {"subagent_outputs": outputs, "pending_tool_calls": pending}
 
@@ -592,13 +718,20 @@ async def tool_node(state: AgentState) -> dict[str, Any]:
         tool_name = call.get("name")
         args = call.get("arguments", {})
 
-        # Check if requires approval
-        is_auto = tool_gateway.check_permission(tool_name)
+        # Full ladder decision (mode + requires_approval_if conditions), so a
+        # flagged but otherwise-automatic tool -- notably sandboxed code the
+        # coder refused to run on its own -- still asks a human.
+        needs_approval, approval_reason = tool_gateway.requires_approval(tool_name, args)
         approved = state.get("hitl_approved", False)
 
-        if not is_auto and not approved:
+        if needs_approval and not approved:
             # Trigger LangGraph interrupt for human-in-the-loop approval
-            decision_raw = request_human_approval(tool_name=tool_name, arguments=args)
+            decision_raw = request_human_approval(
+                tool_name=tool_name,
+                arguments=args,
+                reason=approval_reason
+                or "This tool call requires explicit user confirmation before proceeding.",
+            )
             decision: dict[str, Any] = decision_raw or {}
             approved = (
                 decision.get("approved")
@@ -614,12 +747,18 @@ async def tool_node(state: AgentState) -> dict[str, Any]:
                 })
                 continue
 
-        result = await tool_gateway.execute_tool(
-            tool_name=tool_name,
-            arguments=args,
-            user_id=user_id,
-            is_user_approved=approved,
-        )
+        try:
+            result = await tool_gateway.execute_tool(
+                tool_name=tool_name,
+                arguments=args,
+                user_id=user_id,
+                is_user_approved=approved,
+            )
+        except ToolExecutionError as exc:
+            # Poka-yoke rejection (or an unregistered tool). Surface it as a
+            # tool error the synthesizer can explain rather than letting it
+            # propagate out of the node and kill the whole run.
+            result = {"tool_name": tool_name, "status": "error", "error": str(exc)}
         tool_results.append(result)
 
     return {"tool_results": tool_results, "pending_tool_calls": []}
@@ -635,11 +774,7 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
        synthesizer with local citations only.
     """
     messages = state.get("messages", [])
-    raw_content = (
-        messages[-1].content
-        if hasattr(messages[-1], "content")
-        else (messages[-1].get("content") if isinstance(messages[-1], dict) else "")
-    )
+    raw_content = _latest_user_content(messages)
     if _has_image_content(raw_content) or state.get("task_type") == "vision":
         # Multimodal vision queries do not need local document RAG grading
         return {
@@ -794,15 +929,34 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             "### Research Findings:\n"
             + _wrap_untrusted("researcher", subagent_outputs["researcher"].get("synthesis"))
         )
+    # Tree of Thoughts guidance. The ToT node used to append its synthesized
+    # "best approach" as an AIMessage, so `messages[-1]` -- and therefore this
+    # node's prompt -- was the ToT output rather than the user's question. It
+    # records that result in state instead; offer it here as guidance while the
+    # user's turn stays the prompt.
+    tot_synthesis = str(state.get("tot_synthesis") or "").strip()
+    if tot_synthesis:
+        context_additions.append(
+            "### Reasoning Plan (Tree of Thoughts):\n" + tot_synthesis
+        )
+
     if "coder" in subagent_outputs:
         coder_res = subagent_outputs["coder"]
-        context_additions.append(
-            "### Executed Code & Output:\n"
-            + _wrap_untrusted(
-                "coder",
-                f"```python\n{coder_res.get('code')}\n```\nStdout: {coder_res.get('stdout')}",
+        # Only code that actually ran is evidence. A coder that deferred for
+        # HITL approval (`status="requires_approval"`) has no stdout yet -- it is
+        # queued for a human -- so rendering "Stdout: None" described a
+        # non-event. The synthesizer then answered around that placeholder while
+        # the approved output arrived in the sandbox block below. A run with
+        # genuinely empty output still shows its code, so the gate is the
+        # status, not stdout truthiness.
+        if coder_res.get("status") != "requires_approval":
+            stdout = coder_res.get("stdout")
+            body = f"```python\n{coder_res.get('code')}\n```"
+            if stdout:
+                body += f"\nStdout: {stdout}"
+            context_additions.append(
+                "### Executed Code & Output:\n" + _wrap_untrusted("coder", body)
             )
-        )
 
     # Blended grounding: local RAG citations + any CRAG web-search tool results.
     # All text pulled from stored/scraped documents is untrusted reference data.
@@ -816,7 +970,39 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
 
     tool_results = state.get("tool_results", [])
     web_blocks: list[str] = []
+    sandbox_blocks: list[str] = []
+    approval_notes: list[str] = []
     for r in tool_results:
+        if not isinstance(r, dict):
+            continue
+        status = r.get("status")
+        tool_name = r.get("tool_name", "")
+        if status == "denied":
+            # A HITL rejection is a fact about the turn the answer has to
+            # acknowledge; without this the model would answer as if nothing
+            # happened and the user would see an answer that ignored their "no".
+            approval_notes.append(
+                f"- The user rejected '{tool_name}': {r.get('error') or 'no reason given'}."
+            )
+            continue
+        if tool_name in ("execute_python", "execute_python_code"):
+            # Sandbox execution (often the HITL-approved path). Its stdout/error
+            # IS the result; the web-result loop below would silently drop it as
+            # an empty "Untitled" entry, so a resumed answer would show no output.
+            result = r.get("result")
+            result = result if isinstance(result, dict) else {}
+            out = result.get("stdout") or ""
+            err = (
+                result.get("error")
+                or result.get("stderr")
+                or (r.get("error") if status == "error" else "")
+                or ""
+            )
+            if out:
+                sandbox_blocks.append(f"Stdout:\n{str(out)[:1500]}")
+            if err:
+                sandbox_blocks.append(f"Error:\n{str(err)[:800]}")
+            continue
         results = r.get("result") or []
         if isinstance(results, dict):
             results = [results]
@@ -829,8 +1015,14 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             snippet = (item.get("snippet") or item.get("content") or "")[:500]
             url = item.get("url") or ""
             web_blocks.append(f"- **{title}**: {snippet}\n  {url}")
+    if sandbox_blocks:
+        context_additions.append(
+            "### Sandbox Execution Result:\n" + _wrap_untrusted("sandbox", "\n".join(sandbox_blocks))
+        )
     if web_blocks:
         context_additions.append("### Web Search Results (CRAG supplement):\n" + _wrap_untrusted("web_search", "\n".join(web_blocks)))
+    if approval_notes:
+        context_additions.append("### Tool Approvals:\n" + "\n".join(approval_notes))
 
     if state.get("grader_verdict") in ("insufficient", "unrelated"):
         context_additions.append(
@@ -900,11 +1092,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
                 {"role": {"human": "user", "ai": "assistant"}.get(m_role, m_role), "content": m_content}
             )
 
-    last_user_raw = (
-        messages[-1].content
-        if hasattr(messages[-1], "content")
-        else (messages[-1].get("content") if isinstance(messages[-1], dict) else "")
-    )
+    last_user_raw = _latest_user_content(messages)
     is_vision = _has_image_content(last_user_raw) or state.get("task_type") == "vision"
     last_user_content = _extract_text_content(last_user_raw)
 
@@ -922,6 +1110,13 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     revision_count = int(state.get("revision_count", 0))
     revisions_used = 0
     critique: dict[str, Any] | None = None
+
+    # Which synthesis group to call. The picker's selection (already whitelisted
+    # by `resolve_answer_model`, so an unknown value degrades to the default
+    # rather than dropping the request out of the fallback chain). Empty and
+    # unknown both land on the same default the code hardcoded before.
+    synthesis_group = resolve_answer_model(state.get("model"))
+    answer_model = ""
 
     if is_vision:
         if isinstance(last_user_raw, list):
@@ -945,6 +1140,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             max_tokens=2048,
         )
         response_text = draft
+        answer_model = get_last_resolved_model() or group_primary_model("vision_analysis")
     else:
         final_messages.append({"role": "user", "content": augmented_prompt})
 
@@ -987,11 +1183,17 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             _charge_step(state)
             draft = await ai_client.completion(
                 messages=final_messages[:-1] + [{"role": "user", "content": draft_prompt}],
-                model="llama-3.3-70b-versatile",
+                model=synthesis_group,
                 temperature=0.7,
                 max_tokens=1200,
             )
             last_draft = draft
+            # Captured immediately after the call: `get_last_resolved_model`
+            # reads the model of the most recent completion in this task, so
+            # reading it here (before the critic call below overwrites it) is
+            # what makes a provider fallback visible in the transcript rather
+            # than silently reported as the group the user picked.
+            answer_model = get_last_resolved_model() or group_primary_model(synthesis_group)
             if max_revisions == 0:
                 response_text = draft
                 break
@@ -1160,6 +1362,10 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         )
         logger.warning("synthesizer_empty_response_replaced_with_fallback")
 
+    # Deliver the finished answer progressively. See `_emit_answer_stream` for
+    # why this is the *sanitised* text and not the raw token stream.
+    await _emit_answer_stream(response_text)
+
     ai_message = AIMessage(content=response_text)
     return {
         "messages": [ai_message],
@@ -1168,6 +1374,11 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         "revision_count": revision_count,
         "critique": critique,
         "confidence_decision": confidence_decision,
+        # What actually answered (or the group's primary when the provider did
+        # not report a model). The stream route reads this off the checkpoint to
+        # tell the transcript which model produced the reply.
+        "answer_model": answer_model
+        or group_primary_model("vision_analysis" if is_vision else synthesis_group),
         # Publish the run's spend so it is checkpointed. This is the last node
         # of the run, so it is the only place the total is complete -- and the
         # total is what a later, resumed run needs in order not to restart the

@@ -24,7 +24,7 @@ from backend.app.services.observability.viewer import (
     observability_stack_status,
     render_viewer_html,
 )
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -163,13 +163,14 @@ async def delete_user(
 
 @router.get("/audit-logs")
 async def get_audit_logs(
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ) -> list[dict[str, Any]]:
     """Retrieve compliance audit logs."""
     system_service = SystemService(session)
-    logs = await system_service.get_audit_logs(limit=limit)
+    logs = await system_service.get_audit_logs(limit=limit, offset=offset)
     return [
         {
             "id": str(log.id),

@@ -6,6 +6,7 @@ code paths that the pure unit mock-suite cannot exercise against a real DB.
 import uuid
 
 import pytest
+from backend.app.domain.conversation.models import Project
 from backend.app.domain.conversation.repository import ConversationRepository
 from backend.app.domain.file.repository import FileRepository
 from backend.app.domain.prompt.repository import PromptRepository
@@ -145,6 +146,35 @@ async def test_prompt_template_versioning(db_session, test_user):
 
     templates = await repo.get_templates(test_user.id, include_public=False)
     assert len(templates) == 1
+
+
+@pytest.mark.asyncio
+async def test_conversation_update_clears_a_nullable_column(db_session, test_user):
+    """An explicit ``null`` clears a nullable column instead of being ignored.
+
+    Regression: ``ConversationRepository.update`` skipped every ``None`` value,
+    so a PATCH carrying ``{"project_id": null}`` returned 200 while still
+    reporting the *old* ``project_id``. The backend never cleared the column, so
+    the Projects view's "remove from project" action was a silent no-op end to
+    end. A null sent for a non-nullable column must still be ignored rather than
+    written (which would raise an IntegrityError).
+    """
+    project = Project(user_id=test_user.id, name="Regression Project")
+    db_session.add(project)
+    await db_session.commit()
+    await db_session.refresh(project)
+
+    repo = ConversationRepository(db_session)
+    conv = await repo.create(user_id=test_user.id, title="Grouped Chat")
+
+    assigned = await repo.update(conv, {"project_id": project.id})
+    assert assigned.project_id == project.id
+
+    cleared = await repo.update(assigned, {"project_id": None})
+    assert cleared.project_id is None
+
+    relabeled = await repo.update(cleared, {"title": None})
+    assert relabeled.title == "Grouped Chat"
 
 
 @pytest.mark.asyncio

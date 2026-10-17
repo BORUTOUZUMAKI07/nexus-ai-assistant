@@ -61,10 +61,18 @@ DEFAULT_FLUSH_INTERVAL_SECONDS = 0.25
 # Only matters when the broker dropped frames or the reader is between runs.
 DEFAULT_POLL_SECONDS = 0.5
 
-# A batch that fails twice is dropped rather than retried forever, so a broken
-# database cannot grow the buffer without limit. The cost is a hole in the
+# A batch that fails every attempt is dropped rather than retried forever, so a
+# broken database cannot grow the buffer without limit. The cost is a hole in the
 # replay, which the terminal `done` frame's full `content` reconciles.
-_FLUSH_ATTEMPTS = 2
+#
+# The attempts are spaced, not immediate. A transient connection drop (the local
+# Postgres port forward, a container restart, a momentary network blip) used to
+# burn both attempts inside a millisecond and drop the batch, because retrying
+# with no delay is one attempt written twice. A short linear backoff gives the
+# reconnect a chance while staying far below the flush interval, so the drop
+# path still only triggers for a database that is genuinely unavailable.
+_FLUSH_ATTEMPTS = 3
+_FLUSH_BACKOFF_SECONDS = 0.2
 
 
 class _EndOfRun:
@@ -247,6 +255,11 @@ class RunWriter:
                     attempt=attempt + 1,
                     error_type=type(exc).__name__,
                 )
+                # Space the retries. A failure here is almost always a dropped
+                # connection, and reconnecting instantly fails the same way; the
+                # backoff is what turns "two attempts" into a real retry.
+                if attempt + 1 < _FLUSH_ATTEMPTS:
+                    await asyncio.sleep(_FLUSH_BACKOFF_SECONDS * (attempt + 1))
                 continue
             self._persisted += len(rows)
             return

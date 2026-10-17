@@ -11,7 +11,7 @@ import structlog
 from backend.app.core.config import settings
 from backend.app.domain.prompt.models import Skill
 from backend.app.domain.user.models import UserMemory
-from backend.app.infrastructure.cache.cag_service import cag_service
+from backend.app.infrastructure.cache.static_context_cache import static_context_cache
 
 logger = structlog.get_logger(__name__)
 
@@ -47,10 +47,20 @@ class PromptCompiler:
         user_memories: list[UserMemory] | None = None,
         retrieved_context: str | None = None,
     ) -> str:
+        from backend.app.services.static_corpus import static_corpus_service
+
         sections: list[str] = []
 
         # 1. Static Base Prompt Anchor (Cache-friendly prefix)
         sections.append(f"# Core Directive\n{self.base_prompt}")
+
+        # 1a. Static corpus (opt-in, CAG-lite) -- appended as a stable prefix
+        # segment so that, if enabled, it remains cache-friendly and injects a
+        # fixed shared knowledge base. On free tiers this only helps via
+        # automatic provider prefix caching, not explicit context caching.
+        corpus = static_corpus_service.build_prefix()
+        if corpus:
+            sections.append(corpus)
 
         # 2. Custom Instructions (if any)
         if custom_instructions and custom_instructions.strip():
@@ -58,10 +68,12 @@ class PromptCompiler:
 
         # 3. Active Skills Instructions
         if active_skills:
+            # Deterministic ordering for byte-stable prefixes (cache hits)
+            skills = sorted(active_skills, key=lambda s: (s.name or ""))
             skill_text = "\n\n".join(
                 [
                     f"## Skill: {s.name}\n{getattr(s, 'content', getattr(s, 'instructions', ''))}"
-                    for s in active_skills
+                    for s in skills
                     if s.is_enabled
                 ]
             )
@@ -90,7 +102,7 @@ class PromptCompiler:
         retrieved_context: str | None = None,
     ) -> str:
         """
-        CAG-backed variant of compile_system_prompt. Only static inputs
+        Cache-backed variant of compile_system_prompt. Only static inputs
         (no per-user memories, no dynamic retrieved context) are worth caching:
         the compiled prompt is keyed on a stable hash and served from Redis on
         later compilations, avoiding redundant string building across runs.
@@ -99,27 +111,34 @@ class PromptCompiler:
         is_static = not user_memories and not retrieved_context
         cache_key = ""
         if is_static:
+            from backend.app.services.static_corpus import static_corpus_service
+
             fingerprint = {
                 "base": self.base_prompt,
                 "custom_instructions": custom_instructions,
+                "static_corpus_fp": static_corpus_service._fingerprint(
+                    __import__("pathlib").Path(settings.STATIC_CORPUS_PATH or ".")
+                )[0]
+                if (settings.STATIC_CORPUS_ENABLED and settings.STATIC_CORPUS_PATH)
+                else "",
                 "active_skills": [
                     {"name": s.name, "content": getattr(s, "content", getattr(s, "instructions", ""))}
-                    for s in (active_skills or [])
+                    for s in (sorted(active_skills or [], key=lambda s: (s.name or "")))
                     if s.is_enabled
                 ],
             }
-            cache_key = "cag:prompt:" + hashlib.sha256(
+            cache_key = "prompt:" + hashlib.sha256(
                 json.dumps(fingerprint, default=str, sort_keys=True).encode("utf-8")
             ).hexdigest()
 
         if cache_key:
             try:
-                cached = await cag_service.get_static_context(cache_key)
+                cached = await static_context_cache.get_static_context(cache_key)
                 if cached:
-                    logger.debug("cag_prompt_cache_hit")
+                    logger.debug("prompt_cache_hit")
                     return cached
             except Exception as exc:
-                logger.warning("cag_prompt_cache_read_failed", error=str(exc))
+                logger.warning("prompt_cache_read_failed", error=str(exc))
 
         compiled = self.compile_system_prompt(
             custom_instructions=custom_instructions,
@@ -130,10 +149,10 @@ class PromptCompiler:
 
         if cache_key:
             try:
-                await cag_service.set_static_context(cache_key, compiled)
-                logger.debug("cag_prompt_cache_set")
+                await static_context_cache.set_static_context(cache_key, compiled)
+                logger.debug("prompt_cache_set")
             except Exception as exc:
-                logger.warning("cag_prompt_cache_write_failed", error=str(exc))
+                logger.warning("prompt_cache_write_failed", error=str(exc))
 
         return compiled
 

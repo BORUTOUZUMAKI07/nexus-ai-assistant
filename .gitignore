@@ -48,6 +48,9 @@ coverage/
 test-results/
 playwright-report/
 
+# Local, untracked artifacts (e.g. prod pg_dump taken before a migration)
+.backups/
+
 # IDE / OS
 .DS_Store
 Thumbs.db

@@ -316,7 +316,7 @@ async def test_stream_route_passes_compiled_prompt_and_skills(monkeypatch):
     captured: dict = {}
 
     class FakeGraph:
-        def astream_events(self, input, config=None, version=None):
+        def astream_events(self, input, config=None, version=None, stream_mode=None):
             captured.update(input)
             return _aiter([{"event": "on_chain_end", "data": {"output": {"messages": []}}}])
 
@@ -407,7 +407,7 @@ async def test_stream_route_survives_prompt_compile_failure(monkeypatch):
     captured: dict = {}
 
     class FakeGraph:
-        def astream_events(self, input, config=None, version=None):
+        def astream_events(self, input, config=None, version=None, stream_mode=None):
             captured.update(input)
             return _aiter([{"event": "on_chain_end", "data": {"output": {"messages": []}}}])
 
@@ -508,7 +508,7 @@ async def test_stream_route_runs_the_executor_through_its_own_session_factory(mo
     from tests.fakes import FakeRunSession, FakeRunStore
 
     class FakeGraph:
-        def astream_events(self, input, config=None, version=None):
+        def astream_events(self, input, config=None, version=None, stream_mode=None):
             return _aiter([{"event": "on_chain_end", "data": {"output": {"messages": []}}}])
 
         async def aget_state(self, config):
@@ -565,6 +565,52 @@ async def test_stream_route_runs_the_executor_through_its_own_session_factory(mo
         f"run never reached a terminal status: {run_store.runs[0].status!r}"
     )
     assert [e.seq for e in run_store.events] == sorted(e.seq for e in run_store.events)
+
+
+# ── the stream route is actually rate limited ────────────────────────────────
+
+
+async def test_stream_route_enforces_the_rate_limit(monkeypatch):
+    """A denied limiter must yield 429, not a streamed answer.
+
+    Regression (AGENTS.md §9.31 shape): the route called ``rate_limit(...)`` --
+    a FastAPI *dependency factory* -- as though it were the enforcer. That raised
+    ``TypeError: rate_limit() got an unexpected keyword argument 'request'``,
+    which the surrounding fail-open ``except`` swallowed, so the chat stream was
+    never throttled and the failure was invisible from outside. The limit is now
+    a real dependency, so a denied ``check_rate_limit`` aborts the request before
+    the run is created. Reverting the dependency and restoring the inline call
+    makes this test fail (the denial is ignored and a 200 streams).
+    """
+    from backend.app.api.deps import get_current_user
+    from backend.app.domain.user.models import User
+    from backend.app.infrastructure.resilience import rate_limit as rl_mod
+    from backend.app.main import app
+    from httpx import ASGITransport, AsyncClient
+
+    class _Deny:
+        async def check_rate_limit(
+            self, identifier, limit=100, window_seconds=60, cost=1
+        ):
+            return False, 0
+
+    user = User(id=uuid4(), email="a@b.c", hashed_password="x")
+    app.dependency_overrides[get_current_user] = lambda: user
+    # ``_check_and_enforce`` reads the module-global ``redis_service`` at call
+    # time, so re-pointing it here is what the real dependency consults.
+    monkeypatch.setattr(rl_mod, "redis_service", _Deny())
+
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/api/v1/conversations/{uuid4()}/stream",
+                json={"messages": [{"role": "user", "content": "hi"}], "mode": "normal"},
+            )
+        assert resp.status_code == 429, resp.text
+        assert resp.headers.get("Retry-After") == "60"
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

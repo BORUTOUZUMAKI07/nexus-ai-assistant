@@ -7,9 +7,12 @@ import json
 from uuid import uuid4
 
 import pytest
-from backend.app.domain.conversation.models import Conversation, Message
+from backend.app.domain.conversation.models import Conversation, Message, Project
+from backend.app.domain.conversation.repository import ConversationRepository
+from backend.app.domain.experiment.models import BanditReward
 from backend.app.domain.file.models import File
 from backend.app.domain.org.models import Organization, OrganizationMember
+from backend.app.domain.share.models import ConversationShare
 from backend.app.domain.usage.models import UsageLog
 from backend.app.domain.user.models import APIKey, User, UserMemory, UserSettings
 from backend.app.services import account_service as account_module
@@ -131,9 +134,11 @@ def test_export_as_json_bytes_roundtrips():
 class FakeConvRepo:
     def __init__(self):
         self.deleted_ids = []
+        self.commit_flags = []
 
-    async def delete(self, conv):
+    async def delete(self, conv, *, commit=True):
         self.deleted_ids.append(conv.id)
+        self.commit_flags.append(commit)
 
 
 class FakeVectorStore:
@@ -170,6 +175,10 @@ def test_delete_account_cascades(monkeypatch):
     _await(AccountService(fake, vector_store=vector_store, storage=storage).delete_account(user.id))
 
     assert sorted(map(str, fake_conv_repo.deleted_ids)) == sorted(map(str, [conv.id, conv2.id]))
+    # The conversation cascade is committed once, by the service, not per
+    # conversation -- otherwise an FK failure part-way through leaves the account
+    # half-erased (the destructive half of the GDPR delete bug).
+    assert fake_conv_repo.commit_flags == [False, False]
     assert user in fake.deleted  # the users row itself is erased
     # Deletes were issued for the dependent tables (usage, files, webhooks, orgs…).
     assert fake.delete_statements
@@ -252,3 +261,68 @@ def test_delete_account_keeps_co_members_of_shared_orgs(monkeypatch):
     surviving_orgs = {o.id for o in fake.rows.get(Organization, [])}
     assert owned.id not in surviving_orgs
     assert shared.id in surviving_orgs
+
+
+def test_conversation_delete_removes_its_shares():
+    """The conversation cascade must clear ``conversation_shares`` itself.
+
+    A focused repository test (not routed through ``delete_account``'s own
+    ``created_by`` share delete, which masks this) so removing the cascade's
+    share delete is a red build.
+    """
+    fake = FakeSession()
+    user = User(email="shared@example.com", username="shared.owner")
+    conv = Conversation(user_id=user.id, title="Shared conversation")
+    fake.seed(User, [user])
+    fake.seed(Conversation, [conv])
+    fake.seed(
+        ConversationShare,
+        [ConversationShare(conversation_id=conv.id, created_by=user.id, token="tok-repo")],
+    )
+
+    _await(ConversationRepository(fake).delete(conv, commit=False))
+
+    assert fake.rows.get(ConversationShare, []) == []
+    assert fake.rows.get(Conversation, []) == []
+
+
+def test_delete_account_erases_shares_projects_and_rewards_in_one_transaction():
+    """Regression for the live 500: a user with a single conversation share
+    failed erasure on ``conversation_shares_conversation_id_fkey``.
+
+    The share row is only removed by the conversation cascade in
+    ``ConversationRepository.delete``; the account service's own share delete
+    (by ``created_by``) ran *after* conversations and so could not unblock the
+    FK. Because the cascade also committed per conversation, the failure left
+    the account half-erased -- most conversations and every message gone, the
+    users row still present. This exercises the real repository (no monkeypatch)
+    so both halves of the fix are load-bearing.
+    """
+    fake = FakeSession()
+    user, conv = _seed_user_data(fake)
+    fake.seed(
+        ConversationShare,
+        [ConversationShare(conversation_id=conv.id, created_by=user.id, token="tok-e2e")],
+    )
+    fake.seed(Project, [Project(user_id=user.id, name="Probe project")])
+    fake.seed(
+        BanditReward,
+        [BanditReward(experiment_key="chat_system_prompt", variant="control", user_id=user.id)],
+    )
+
+    _await(
+        AccountService(fake, vector_store=FakeVectorStore(), storage=FakeStorage()).delete_account(
+            user.id
+        )
+    )
+
+    # Every referencing table is empty and the user is gone.
+    assert fake.rows.get(ConversationShare, []) == []
+    assert fake.rows.get(Project, []) == []
+    assert fake.rows.get(BanditReward, []) == []
+    assert fake.rows.get(Conversation, []) == []
+    assert fake.rows.get(Message, []) == []
+    assert user in fake.deleted
+    # Exactly one commit -- the whole erasure is one transaction.
+    assert fake.commits == 1
+

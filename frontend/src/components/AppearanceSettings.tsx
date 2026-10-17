@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Check } from "lucide-react";
-import { ACCENTS, THEME_MODES, useTheme, type ThemeMode } from "@/lib/theme";
+import { THEME_MODES, useTheme, type ThemeMode } from "@/lib/theme";
 
 const LABELS: Record<ThemeMode, { title: string; hint: string }> = {
   light: { title: "Light", hint: "Paper surfaces, ink text" },
@@ -55,7 +55,7 @@ function Preview({ mode }: { mode: ThemeMode }) {
 }
 
 export const AppearanceSettings: React.FC = () => {
-  const { mode, accent, setMode, setAccent } = useTheme();
+  const { mode, setMode } = useTheme();
 
   return (
     <div className="glass-panel p-6 space-y-5">
@@ -85,32 +85,6 @@ export const AppearanceSettings: React.FC = () => {
                 </div>
                 <p className="px-0.5 text-[10px] text-[var(--text-muted)]">{LABELS[m].hint}</p>
               </div>
-            </label>
-          ))}
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend className="mb-2 text-[11px] font-medium text-[var(--text-secondary)]">Accent</legend>
-        <div className="flex flex-wrap gap-2">
-          {ACCENTS.map((a) => (
-            <label key={a.id} className="cursor-pointer">
-              <input
-                type="radio"
-                name="accent"
-                value={a.id}
-                checked={accent === a.id}
-                onChange={() => setAccent(a.id)}
-                className="peer sr-only"
-              />
-              <span className="flex items-center gap-2 rounded-full border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] peer-checked:border-[var(--border-active)] peer-checked:bg-[var(--accent-soft)] peer-checked:text-[var(--text-primary)] peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--accent-ink)]">
-                <span
-                  className="h-3 w-3 rounded-full border border-black/10"
-                  style={{ background: a.swatch }}
-                  aria-hidden="true"
-                />
-                {a.label}
-              </span>
             </label>
           ))}
         </div>

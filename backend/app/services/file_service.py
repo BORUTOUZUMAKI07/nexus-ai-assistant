@@ -123,7 +123,7 @@ class FileService:
     ) -> File:
         """Steps 3-4 of the lifecycle: chunk, embed, index, and refresh the DB row."""
         repo = FileRepository(session)
-        db_file = await repo.get_by_id(db_file_id)
+        db_file = await repo.get_by_id(db_file_id, user_id=user_id)
         if not db_file:
             raise ResourceNotFoundError(resource_type="File", identifier=str(db_file_id))
 

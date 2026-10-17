@@ -17,33 +17,43 @@ default" design was deliberately replaced and must **not** come back.
 - **Void** — dark theme, preserved as a preference.
   `--bg-main: #08090a`, surfaces `#0f1011/#161718`, text white.
 
-Both share the same scale: hairline borders, one **Electric Acid Lime** accent
-(default) with **cyan / violet / emerald** accent swaps, soft rounded corners
+Both share the same scale: hairline borders, a single **Electric Acid Lime**
+accent (there are **no accent swaps**), soft rounded corners
 (`--radius: 0.625rem`), Inter sans + Geist Mono.
 
 There is **no third theme**. There is no "black glass only" variant. The app is
 never dark-by-default for anonymous visitors.
 
+The **brand mark** is the Nexus node-glyph — a bold "N" whose diagonal is a
+chain of nodes — on an Electric Acid Lime tile. See
+`frontend/public/nexus-logo.svg`, `frontend/src/app/icon.svg` (favicon), and the
+`NexusMark` React component (`frontend/src/components/NexusMark.tsx`) used for
+the assistant avatar and the landing navbar. The old purple→cyan tile and the
+lucide `Bot` avatar were removed 2026-10-14 (product-owner request).
+
 ## 2. How themes are applied (wiring)
 
-- `<html data-theme="light|dark">` and `data-accent="cyan|violet|emerald"`.
-  **Lime is the unset default — no `data-accent` attribute is written for it.**
-  CSS scopes in `globals.css` key off these attributes:
-  `:root` = Paper defaults; `[data-theme="dark"]` = Void overrides;
-  `[data-accent="cyan|violet|emerald"]` layer accent swaps on top of either.
+- `<html data-theme="light|dark">`. **There is one accent — Electric Acid Lime —
+  and it is not a preference, so no `data-accent` attribute is ever written.**
+  CSS scopes in `globals.css` key off the theme attribute only:
+  `:root` = Paper defaults; `[data-theme="dark"]` = Void overrides.
+  (The old `[data-accent="cyan|violet|emerald"]` swap blocks were removed
+  2026-10-14; `THEME_INIT_SCRIPT` also strips a stale `data-accent` a returning
+  visitor may still carry.)
 - `THEME_INIT_SCRIPT` (`src/lib/theme.ts`) is inlined in
   `src/app/layout.tsx` `<head>` BEFORE first paint → no light/dark flash.
 - Client state via `useTheme()` (`src/lib/theme.ts`,
-  `useSyncExternalStore`): returns `{ mode, accent, resolved, setMode, setAccent }`.
-  Persisted **locally** in `localStorage` keys `nexus-theme` / `nexus-accent`.
+  `useSyncExternalStore`): returns `{ mode, resolved, setMode }`.
+  Persisted **locally** in the `localStorage` key `nexus-theme`.
 - `mode: "system"` follows `prefers-color-scheme` **live** (media-query listener).
 - **Deliberately NOT read from backend `UserSettings.theme`** — the backend
   column defaults to `"dark"` for every account, so it can't distinguish
   "never chose" from "chose dark". Local persistence keeps Paper default intact
   with zero backend changes. Do not "fix" this.
 - Theme switching lives in **Settings → Appearance**
-  (`src/components/AppearanceSettings.tsx`): Light/Dark/System cards + 4 accent
-  swatches (Acid Lime / Signal Teal / Iris Violet / Emerald).
+  (`src/components/AppearanceSettings.tsx`): Light/Dark/System cards only — the
+  accent swatch picker and the command-palette accent entries were removed with
+  the swaps.
 
 ## 3. Design tokens (the only colors allowed)
 
@@ -57,7 +67,7 @@ values. Key tokens (verified in `globals.css`):
 | Text | `--text-primary` (ink), `--text-secondary`, `--text-muted`, `--text-faint` |
 | Accent | `--accent` (fill), `--accent-hover`, `--accent-soft` (tinted fill), `--accent-glow`, `--accent-ink` (text/icons/links on surfaces), `--accent-foreground` (text ON the accent fill) |
 | Status | `--status-success`, `--status-warning`, `--status-danger` |
-| Specialty | `--grad-brand`, `--grad-hero-floor`, `--inline-code-bg`, `--grid-line`, `--shadow-float-color`, `--btn-shadow` / `--btn-shadow-hover`, `--code-block-bg` |
+| Specialty | `--grad-brand`, `--grad-hero-floor`, `--inline-code-bg`, `--grid-line`, `--shadow-float-color`, `--btn-shadow` / `--btn-shadow-hover`, `--code-block-bg`, `--code-dot-close` / `--code-dot-minimize` / `--code-dot-maximize` (macOS window dots; constant in both themes) |
 | Shadcn bridge | `--background/--foreground/--card/--popover/--primary/--muted/--border/--input/--ring`, radii & fonts via the `@theme inline` block (Tailwind v4) |
 
 In JSX the idiom is arbitrary-value classes over the vars:
@@ -81,9 +91,10 @@ In JSX the idiom is arbitrary-value classes over the vars:
    `dark-island` is correct. Do not "fix" it.
 4. **Accent-aware means token-aware.** Links/active states use
    `--accent-ink`/`--accent-soft`, never a hardcoded lime hex.
-5. **Respect the unset-default.** Lime = no `data-accent` attribute. Don't
-   force a `data-accent="lime"` attribute; either is harmless but the canonical
-   form is attribute-absent.
+5. **One accent, never a `data-accent` attribute.** Electric Acid Lime is the
+   only accent; `globals.css` has no accent-swap scopes and `theme.ts` writes no
+   `data-accent`. Re-introducing accent options means re-adding the swaps and the
+   type — don't do it piecemeal.
 6. **Theme is client-local only.** Don't start defaulting from backend
    settings unless a real product decision is made (see §2).
 7. **Dialog overlay** (`bg-black/40` in `ui/dialog.tsx`), white text on
@@ -97,13 +108,12 @@ Audited 2026-09-29 at commit `2a42a8c`:
 - CI gates all green: `npx next typegen` → `tsc --noEmit` → `eslint` →
   211 Vitest tests → `next build`.
 - Playwright screenshot sweep (landing, signin, `/app` shell + Settings/
-  Usage/Knowledge views, mobile 375px) across Paper + Void + lime/cyan/violet
-  accents: **zero console errors, zero page errors, zero invisible-text
-  elements, zero horizontal overflow**.
+  Usage/Knowledge views, mobile 375px) across Paper + Void: **zero console
+  errors, zero page errors, zero invisible-text elements, zero horizontal
+  overflow**.
 - Live behavior confirmed: flipping **Light → Dark via the real Settings →
-  Appearance control** toggles `data-theme` on `<html>` instantly; a fresh
-  dark+violet session boots pre-themed with no flash; `⌘K` command palette
-  opens/closes.
+  Appearance control** toggles `data-theme` on `<html>` instantly; a fresh dark
+  session boots pre-themed with no flash; `⌘K` command palette opens/closes.
 - Computed colors match the spec exactly: Paper body `rgb(250,250,249)`, ink
   `rgb(22,23,26)`; Void body `rgb(8,9,10)`, headings white.
 

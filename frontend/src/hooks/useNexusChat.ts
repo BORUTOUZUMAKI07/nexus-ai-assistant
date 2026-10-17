@@ -12,6 +12,7 @@ import {
   fetchWithSessionRecovery,
   fetchConversation,
   sendHITLFeedback,
+  type ConversationMode,
 } from "@/lib/api";
 import { consumeChatStream, readMessageId, readRunId } from "@/lib/chatStream";
 import { hasAnswer, messagesFromHistory } from "@/lib/conversationHistory";
@@ -116,7 +117,7 @@ export interface NexusMessage {
 export interface UseNexusChatOptions {
   conversationId?: string;
   userId?: string;
-  mode?: "normal" | "agent" | "code" | "research";
+  mode?: ConversationMode;
   model?: string;
   /** Called once when the backend assigns a real UUID to a newly-created conversation. */
   onConversationCreated?: (newConversationId: string) => void;
@@ -135,7 +136,7 @@ export interface UseNexusChatOptions {
 }
 
 export interface SendMessageOptions {
-  mode?: "normal" | "agent" | "code" | "research";
+  mode?: ConversationMode;
   conversationId?: string;
   /** base64 data URL for an image the user has attached */
   imageDataUrl?: string;
@@ -503,6 +504,11 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
             messages: backendMessages,
             conversationId,
             mode,
+            // The picker's selection. It reaches the hook through
+            // `useNexusChat({ model })`; without this line the whole picker was
+            // cosmetic, because the backend chose the model and the request
+            // never carried one.
+            ...(model ? { model } : {}),
             ...(planPreamble ? { planPreamble } : {}),
           }),
         });
@@ -524,6 +530,16 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           onArtifactSaved: (artifact) =>
             onArtifactSavedRef.current?.(artifact),
           onTurnVerdict: setTurnVerdict,
+          onModelResolved: (resolvedModel) => {
+            // Report the model that actually answered, not the picker's label:
+            // a provider fallback must be visible in the transcript rather than
+            // hidden behind the group the user chose.
+            updateMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId ? { ...m, model: resolvedModel } : m
+              )
+            );
+          },
           onConversationCreated: (id) => {
             // A conversation the client did not name: the run id read off the
             // header had no key to be filed under, so file it under the
@@ -780,6 +796,12 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           onArtifactSaved: (artifact) =>
             onArtifactSavedRef.current?.(artifact),
           onTurnVerdict: setTurnVerdict,
+          onModelResolved: (resolvedModel) =>
+            updateMessages((prev) =>
+              prev.map((m) =>
+                m.id === rejoinedId ? { ...m, model: resolvedModel } : m
+              )
+            ),
           // A rejoin does not surface `hitl_request` as pending state: the run
           // was interrupted for approval before the page went away, and the card
           // it raises belongs to a turn this view has no user message for. It
@@ -942,18 +964,124 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         setPendingHITL(null);
         // The approval was holding the queue (drainQueue refuses to run while a
         // request is outstanding). Update the ref directly because the mirroring
-        // effect has not run yet, then let the queue advance.
+        // effect has not run yet.
         pendingHITLRef.current = null;
+        // The backend resumed the graph inline and persisted the answer, but it
+        // does not stream the resumed turn back to this client. Without a reload
+        // the card cleared and the user saw nothing until a manual refresh --
+        // the approval "succeeded" and produced no visible result. Reload through
+        // the same single-writer path the transcript already uses, and only when
+        // this conversation is the one on screen (otherwise the answer will load
+        // when the user switches back).
+        if (optionsRef.current.conversationId === request.thread_id) {
+          await hydrateThenRejoin(request.thread_id);
+        }
+        // Drain after the reload so a queued follow-up appends to the recovered
+        // answer instead of racing it.
         drainQueue();
       } catch (err) {
-        setError(
+        const error =
           err instanceof Error
             ? err
-            : new Error("Could not submit the approval. Please try again."),
-        );
+            : new Error("Could not submit the approval. Please try again.");
+        setError(error);
+        // Re-throw so the approval card can tell a failed submit from a
+        // successful one. Swallowing the error here made `ChatArea`'s failure
+        // guard unreachable -- it awaited this call and, seeing no throw, marked
+        // the request resolved and collapsed the card, so a *failed* approval
+        // silently retired the very UI the hook deliberately keeps by not
+        // clearing `pendingHITL`. The card retires only on a resolution, which
+        // is exactly when the decision actually landed.
+        throw error;
       }
     },
-    [pendingHITL, drainQueue]
+    [pendingHITL, drainQueue, hydrateThenRejoin]
+  );
+
+  /**
+   * Generate an image from a text prompt (free, key-less, via Pollinations).
+   *
+   * A separate path from `sendMessage` on purpose: this is not a graph turn, it
+   * spends no tokens, and there is no SSE stream to consume — routing it through
+   * the chat stream would open a run whose answer never arrives. The image is
+   * carried on the assistant message's `imageDataUrl`, so a base64 body is never
+   * duplicated into the markdown `content`.
+   *
+   * The turn is client-only: it is not persisted server-side (there is no
+   * message row for a generated image), so a reload drops it. That is a
+   * deliberate limit of the free path, not an oversight — persisting it would
+   * need a new backend write the chat transcript was never built to accept.
+   */
+  const generateImage = useCallback(
+    async (prompt: string) => {
+      const trimmed = prompt.trim();
+      if (!trimmed) return;
+
+      const userMsgId = `msg-${Date.now()}`;
+      const assistantMsgId = `msg-${Date.now() + 1}`;
+      const userMsg: NexusMessage = {
+        id: userMsgId,
+        role: "user",
+        content: `🎨 ${trimmed}`,
+        createdAt: new Date().toISOString(),
+      };
+      const assistantMsg: NexusMessage = {
+        id: assistantMsgId,
+        role: "assistant",
+        content: "",
+        model: "pollinations/flux",
+      };
+      updateMessages((prev) => [...prev, userMsg, assistantMsg]);
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const res = await fetchWithSessionRecovery("/api/images/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: trimmed }),
+        });
+        if (!res.ok) {
+          let detail = `Image generation failed (${res.status})`;
+          try {
+            detail = ((await res.json()) as { detail?: string }).detail ?? detail;
+          } catch {
+            /* non-JSON error body: keep the status-based detail */
+          }
+          throw new Error(detail);
+        }
+        const data = (await res.json()) as {
+          image_data_url: string;
+          model: string;
+        };
+        updateMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId
+              ? {
+                  ...m,
+                  content: "Here's the image you asked for.",
+                  imageDataUrl: data.image_data_url,
+                  model: data.model,
+                }
+              : m
+          )
+        );
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Image generation failed";
+        setError(new Error(message));
+        updateMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId
+              ? { ...m, content: `I couldn't generate that image. ${message}` }
+              : m
+          )
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [updateMessages]
   );
 
   return {
@@ -963,6 +1091,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     handleInputChange,
     handleSubmit,
     sendMessage,
+    generateImage,
     isLoading,
     error,
     setMessages: updateMessages,

@@ -48,4 +48,29 @@ describe("SettingsView", () => {
       expect(screen.getByText("Likes concise summaries")).toBeInTheDocument()
     )
   })
+
+  it("deletes a BYOK key row", async () => {
+    render(<SettingsView />)
+    await screen.findByText("Bring-Your-Own-Key providers")
+    expect(screen.getByText(/gsk_/)).toBeInTheDocument()
+
+    // The row's delete control is titled, so this does not depend on the icon.
+    fireEvent.click(screen.getByTitle("Delete API key"))
+
+    await waitFor(() =>
+      expect(screen.queryByText(/gsk_/)).not.toBeInTheDocument()
+    )
+  })
+
+  it("offers the real answer models (the same source as the sidebar picker)", async () => {
+    render(<SettingsView />)
+    await screen.findByText("Agent configuration")
+
+    // A hardcoded list here would offer models the backend cannot route, which is
+    // exactly the stale trio this replaced. The options come from lib/models.
+    expect(screen.getByRole("option", { name: /Nexus Reasoning/ })).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: /Nexus Fast/ })).toBeInTheDocument()
+    expect(screen.queryByRole("option", { name: /DeepSeek/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("option", { name: /Llama 3\.1 8B/ })).not.toBeInTheDocument()
+  })
 })

@@ -155,8 +155,9 @@ class AuthService:
         family_id = family_id or secrets.token_hex(16)
         access_token = create_access_token(
             subject=user.id,
+            role=user.role,
             expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-            additional_claims={"role": user.role, "email": user.email},
+            additional_claims={"email": user.email},
         )
         refresh_token = create_refresh_token(
             subject=user.id, family_id=family_id
@@ -170,7 +171,7 @@ class AuthService:
             refresh_expires_in=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         )
 
-    async def sso_login(self, identity: OAuthIdentity) -> TokenResponse | TwoFactorChallengeResponse:
+    async def oauth_login(self, identity: OAuthIdentity) -> TokenResponse | TwoFactorChallengeResponse:
         """Sign a user in via a verified OIDC identity.
 
         Identity resolution order is deliberate: the IdP's stable subject id is
@@ -194,7 +195,7 @@ class AuthService:
         if user is None:
             # First time this IdP identity is seen: fall back to the email to
             # find a pre-existing (password) account to adopt. ONLY adopt an
-            # account that has no SSO identity yet -- an account already linked
+            # account that has no OAuth identity yet -- an account already linked
             # to a different provider subject must NOT be reachable through the
             # email. Previously it skipped the link but still logged the caller
             # in as that account, so a recycled/reassigned address (or any second
@@ -225,7 +226,7 @@ class AuthService:
                 # JWT `type` claim, not a secret.
                 token_type="preauth",  # nosec B106
             )
-            logger.info("two_factor_challenge_issued", user_id=str(user.id), via="sso")
+            logger.info("two_factor_challenge_issued", user_id=str(user.id), via="oauth")
             return TwoFactorChallengeResponse(
                 status="2fa_required",
                 preauth_token=preauth,
@@ -235,11 +236,11 @@ class AuthService:
         return await self._issue_token_pair(user)
 
     async def _provision_oauth_user(self, identity: OAuthIdentity, email: str) -> User:
-        """Auto-provision a passwordless SSO account (the IdP vouches for it)."""
+        """Auto-provision a passwordless OAuth account (the IdP vouches for it)."""
         user = User(
             email=email,
             username=await self._alloc_username(email),
-            hashed_password=None,  # SSO accounts have no password
+            hashed_password=None,  # OAuth accounts have no password
             full_name=identity.name,
             avatar_url=identity.picture,
             # The caller has already established email_verified, so the
@@ -252,11 +253,11 @@ class AuthService:
         await self._session.commit()
         await self._session.refresh(user)
         # Mirror the default user-settings row that password registration
-        # creates, so SSO accounts behave identically downstream.
+        # creates, so OAuth accounts behave identically downstream.
         self._session.add(UserSettings(user_id=user.id))
         await self._session.commit()
         logger.info(
-            "user_provisioned_via_sso",
+            "user_provisioned_via_oauth",
             user_id=str(user.id),
             provider=identity.provider,
         )
@@ -271,7 +272,7 @@ class AuthService:
             candidate = f"{local}-{secrets.token_hex(3)}"
             if not await self._repo.get_by_username(candidate):
                 return candidate
-        raise AuthenticationError("Could not allocate a username for the SSO account.")
+        raise AuthenticationError("Could not allocate a username for the OAuth account.")
 
     async def verify_email(self, token: str) -> User:
         """Mark a user's email verified via a signed verification token."""
@@ -439,8 +440,9 @@ class AuthService:
 
         access_token = create_access_token(
             subject=user.id,
+            role=user.role,
             expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-            additional_claims={"role": user.role, "email": user.email},
+            additional_claims={"email": user.email},
         )
         new_refresh = create_refresh_token(
             subject=user.id, family_id=family_id or None

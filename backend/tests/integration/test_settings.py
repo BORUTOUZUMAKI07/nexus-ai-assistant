@@ -143,6 +143,84 @@ async def test_memory_listing_pagination_and_bounds(client, user_auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_api_key_delete_round_trip_and_can_readd(client, user_auth_headers):
+    saved = await client.post(
+        "/api/v1/settings/keys",
+        json={"provider": "openai", "key_value": "sk-delete-me-123456"},
+        headers=user_auth_headers,
+    )
+    assert saved.status_code == 201
+    key_id = saved.json()["id"]
+
+    deleted = await client.delete(
+        f"/api/v1/settings/keys/{key_id}", headers=user_auth_headers
+    )
+    assert deleted.status_code == 204
+
+    listing = await client.get("/api/v1/settings/keys", headers=user_auth_headers)
+    assert listing.json() == []
+
+    # A hard delete, not the soft `is_active = False` the memory path uses:
+    # `uq_api_key_user_provider` is unconditional, so a surviving inactive row
+    # would make re-adding the same provider INSERT into a duplicate and 500.
+    readded = await client.post(
+        "/api/v1/settings/keys",
+        json={"provider": "openai", "key_value": "sk-readd-abcdef"},
+        headers=user_auth_headers,
+    )
+    assert readded.status_code == 201
+    assert readded.json()["key_preview"] == "...cdef"
+
+
+@pytest.mark.asyncio
+async def test_delete_unknown_api_key_404(client, user_auth_headers):
+    resp = await client.delete(
+        f"/api/v1/settings/keys/{uuid.uuid4()}", headers=user_auth_headers
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cannot_delete_another_users_api_key(client, user_auth_headers, db_session):
+    from backend.app.domain.user.models import APIKey, User
+    from sqlmodel import select
+
+    other = User(
+        email=f"other-{uuid.uuid4().hex[:8]}@example.com",
+        username=f"other-{uuid.uuid4().hex[:8]}",
+        hashed_password="not-a-real-hash",
+        role="user",
+    )
+    db_session.add(other)
+    await db_session.commit()
+    await db_session.refresh(other)
+
+    foreign = APIKey(
+        user_id=other.id,
+        provider="groq",
+        encrypted_key="enc",
+        key_preview="...zzzz",
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+    await db_session.refresh(foreign)
+    foreign_id = foreign.id
+
+    resp = await client.delete(
+        f"/api/v1/settings/keys/{foreign_id}", headers=user_auth_headers
+    )
+    assert resp.status_code == 404
+
+    # The 404 must be a refusal, not a silently-successful deletion. Read past
+    # this session's identity map so the assertion reflects the database.
+    db_session.expire_all()
+    survivor = (
+        await db_session.exec(select(APIKey).where(APIKey.id == foreign_id))
+    ).first()
+    assert survivor is not None
+
+
+@pytest.mark.asyncio
 async def test_api_key_listing_pagination_and_bounds(client, user_auth_headers):
     for provider, secret in (("openai", "sk-first-secret"), ("groq", "gsk-second-secret")):
         created = await client.post(

@@ -62,6 +62,14 @@ export interface ChatStreamSink {
   /** An approval is required before the run can continue. */
   onHitlRequest?: (data: HITLRequestAnnotation["data"]) => void;
   /**
+   * The model that actually answered the turn (provider model string).
+   *
+   * Reported post-run from the backend's checkpoint, so it reflects a provider
+   * fallback rather than the group the picker requested. Fires at most once per
+   * run and may not fire at all when the backend could not resolve a model.
+   */
+  onModelResolved?: (model: string) => void;
+  /**
    * The critic's verdict, and the evidence-quality score.
    *
    * Fires as each arrives rather than once at the end: they are independent
@@ -180,6 +188,11 @@ export async function consumeChatStream(
               ? d.evidence_gate_passed
               : null;
           publishVerdict();
+          continue;
+        }
+        if (verdict.type === "model_info") {
+          const d = verdict.data ?? {};
+          if (typeof d.model === "string") sink.onModelResolved?.(d.model);
           continue;
         }
 

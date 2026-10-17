@@ -89,14 +89,24 @@ def redact_text(text: str, replacement: str | None = None) -> str:
     """
     Scrub all recognized PII/secret patterns from ``text``.
 
-    Order matters: private keys are removed first (their bodies contain colon
-    and dash patterns that the SSN/phone matchers could otherwise touch), then
-    the narrower format matchers.
+    Order matters: DSN credentials are stripped first (so the ``@`` separator
+    inside a DSN is gone before the email regex runs), then private keys (their
+    bodies contain colon and dash patterns that the SSN/phone matchers could
+    otherwise touch), then the narrower format matchers.
+
+    ``_DSN_CREDENTIALS_RE`` was previously only applied by ``redact_dsn()``; a
+    DSN that appeared anywhere in a log string passed through ``redact_text`` /
+    ``redact_value`` / ``redact_event`` with the password intact. P2 #28.
     """
     repl = replacement or settings.PII_REDACTION_REPLACEMENT
     if not text:
         return text
-    scrubbed = _PRIVATE_KEY_RE.sub(repl, text)
+    # Strip DSN passwords before the email regex so the user:pass@host shape
+    # is gone before the @ triggers an email match on "pass@host".
+    scrubbed = _DSN_CREDENTIALS_RE.sub(
+        lambda m: f"{m.group(1)}{m.group(2)}:{repl}@", text
+    )
+    scrubbed = _PRIVATE_KEY_RE.sub(repl, scrubbed)
     scrubbed = _EMAIL_RE.sub(repl, scrubbed)
     scrubbed = _SSN_RE.sub(repl, scrubbed)
     scrubbed = _cc_sub(scrubbed, repl)

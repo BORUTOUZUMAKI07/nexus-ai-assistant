@@ -1,16 +1,20 @@
 import { render, renderHook, RenderHookOptions, RenderOptions } from "@testing-library/react"
-import { ReactElement, ReactNode } from "react"
+import { QueryClientProvider } from "@tanstack/react-query"
+import { ReactElement, ReactNode, useState } from "react"
+import { createTestQueryClient } from "@/lib/query-client"
 
 /**
  * Test render entry point shared by every Vitest test.
  *
- * Nexus currently renders without app-level providers (no router / data
- * fetching client), so `Wrapper` is a passthrough. When a provider is added
- * (e.g. a query client or theme provider), wrap `children` here once instead
- * of editing every test file.
+ * The app shell provides its own query client (see `AppPage`), but the four
+ * lazy views and the hooks are rendered directly by tests, so this wrapper
+ * installs one too. Each render gets a *fresh* client: without that, a query
+ * cached by one test would be served to the next and a handler that only the
+ * first test expected to run would never be hit.
  */
 function AppWrapper({ children }: { children: ReactNode }) {
-  return <>{children}</>
+  const [queryClient] = useState(() => createTestQueryClient())
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }
 
 type CustomRenderOptions = Omit<RenderOptions, "wrapper">

@@ -23,6 +23,7 @@ backend/app/infrastructure/events/celery_publisher.py
 backend/app/infrastructure/events/registry.py
 backend/app/infrastructure/events/__init__.py
 backend/app/infrastructure/resilience/rate_limit.py
+backend/app/services/observability/otel.py
 backend/app/services/observability/metrics.py
 backend/app/api/v1/metrics.py
 backend/app/services/usage_service.py
@@ -38,3 +39,4 @@ backend/app/domain/run/repository.py
 backend/app/domain/run/service.py
 backend/app/services/run_log.py
 backend/app/services/run_executor.py
+backend/app/services/llm_text_cleanup.py

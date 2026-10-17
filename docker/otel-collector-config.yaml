@@ -1,68 +1,75 @@
 # Nexus AI Assistant — Layer-2 OpenTelemetry Collector (collection & transport).
 #
 # Data flow (3-layer observability):
-#   Layer 1 (in-process)   app only: /metrics Prometheus endpoint (+ optional
-#                          bearer auth), OTLP logs export (NEW_RELIC_ENABLED),
-#                          LangSmith traces, Sentry errors.
-#   Layer 2 (this agent)   receives OTLP logs on :4318, scrapes the app's
-#                          /metrics (the live metric path), tail-samples,
-#                          batches, and forwards to Layer 3.
+#   Layer 1 (in-process)   app only: /metrics Prometheus endpoint (a local
+#                          debug view + optional bearer auth), OTLP logs,
+#                          metrics AND traces export (NEW_RELIC_ENABLED),
+#                          LangSmith LLM traces, Sentry errors.
+#   Layer 2 (this agent)   receives OTLP logs/traces/metrics on :4318, tail-
+#                          samples traces, batches, queues durably to disk, and
+#                          forwards to Layer 3.
 #   Layer 3 (sink)         New Relic (otlphttp exporter below). The agent owns
-#                          NEW_RELIC_LICENSE_KEY — the app never holds it.
+#                          the NEW_RELIC_LICENSE_KEY and forwards on — the app
+#                          never holds vendor credentials.
 #
-# Local:      docker compose up otel-collector  (app on host:8000 is scraped
-#             via host.docker.internal).
-# Production: the Render web service in render.yaml (rootDir docker). Render
-#             forwards public HTTPS :443 to $PORT, so set PORT=4318 there.
+# Why OTLP for metrics and not a Prometheus scrape: a scrape reads whichever
+# process answers, so a multi-worker/multi-instance deploy silently undercounts
+# (each process keeps its own in-memory counters). Pushing from every process
+# lets the collector aggregate, and it removes the app's public /metrics
+# endpoint as a delivery path. The app's /metrics remains as a local debug view.
 #
-# Required env (compose supplies defaults; Render prompts for sync:false keys):
-#   NEW_RELIC_LICENSE_KEY   New Relic ingest key (agent-only secret).
-#   ENVIRONMENT             production / development (resource attribute).
-#   METRICS_TOKEN           Bearer token the app requires for /metrics; empty
-#                           when the app's METRICS_TOKEN is unset (local dev).
-#   METRICS_SCRAPE_TARGET   host:port the agent scrapes, e.g. the Render app
-#                           URL https://your-app.onrender.com (compose default:
-#                           host.docker.internal:8000). Unset breaks startup —
-#                           Prometheus refuses an empty target on purpose.
+# Security: the OTLP receiver REQUIRES HTTP basic auth (see basicauth/server).
+# That matters because on a free-tier Render service :4318 is public — anyone
+# could POST junk and burn the New Relic free tier. The app sends the matching
+# Authorization: Basic header (OTLP_AUTH_USER / OTLP_AUTH_PASSWORD). CHANGE THE
+# DEFAULT CREDENTIALS IN PRODUCTION (see render.yaml / docker-compose.yml).
+#
+# Env vars:
+#   NEW_RELIC_LICENSE_KEY  required  New Relic ingest key (agent-side only).
+#   ENVIRONMENT            required  deployment.environment resource attribute.
+#   SERVICE_VERSION        optional  service.version resource attribute.
+#   OTLP_AUTH_USER         required  basic-auth user (matches the app).
+#   OTLP_AUTH_PASSWORD     required  basic-auth password (matches the app).
+#
+# Data flow note: `file_storage` gives the exporter a durable sending queue so
+# a New Relic outage buffers to disk instead of dropping telemetry. The queue
+# directory (/var/lib/otelcol/storage) is provided by the runtime — a named
+# volume in docker-compose, created in the Dockerfile for Render. On Render's
+# free tier there is no persistent disk, so the buffer survives a sink outage
+# and a process restart but not a container *recreate*.
 receivers:
   otlp:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
+        auth:
+          authenticator: basicauth/server
       http:
         endpoint: 0.0.0.0:4318
-        # SECURITY: on a free-tier Render service this endpoint is PUBLIC (a
-        # random person could POST junk and burn your New Relic free tier).
-        # To lock it down, replace the two lines under `http:` with:
-        #   http:
-        #     endpoint: 0.0.0.0:4318
-        #     auth:
-        #       authenticator: basicauth/server
-        # and uncomment the basicauth extension below, then set the app's
-        # OTLP log exporter headers to send the matching Authorization header.
-  # The app's /metrics is the canonical metric surface → scraped here (the
-  # layer-3 path for metrics). No OTLP metrics are pushed by the app today.
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: nexus-backend
-          scrape_interval: 30s
-          metrics_path: /metrics
-          authorization:
-            type: Bearer
-            # Empty when the app's METRICS_TOKEN is unset (local dev).
-            credentials: ${env:METRICS_TOKEN}
-          static_configs:
-            - targets: ["${env:METRICS_SCRAPE_TARGET}"]
+        auth:
+          authenticator: basicauth/server
+  # Debug-only alternative: scrape the app's local /metrics (Prometheus text).
+  # Not in any pipeline — the otlp receiver above is the live metrics path now.
+  # Kept so a single-node debug session can cross-check the OTLP series against
+  # the endpoint. Uncomment the receiver, the pipeline below, and set
+  # METRICS_SCRAPE_TARGET / METRICS_TOKEN on the collector to use it.
+  # prometheus:
+  #   config:
+  #     scrape_configs:
+  #       - job_name: nexus-debug
+  #         scrape_interval: 30s
+  #         metrics_path: /metrics
+  #         authorization: {credentials: ${env:METRICS_TOKEN}}
+  #         static_configs:
+  #           - targets: ["${env:METRICS_SCRAPE_TARGET}"]
 
 processors:
   memory_limiter:
-    check_interval: 5s
-    limit_percentage: 80
-    spike_limit_percentage: 25
-  # Tail-sampling: keep every error span, ~10% of the rest. The app sends its
-  # full trace stream (LangSmith today; OTLP later) so the agent decides what
-  # reaches New Relic's free tier.
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 15
+  # Tail-sampling: keep every error and slow span, ~10% of the rest. The app
+  # sends its full trace stream and the agent decides what reaches New Relic.
   tail_sampling:
     decision_wait: 10s
     num_traces: 10000
@@ -70,7 +77,13 @@ processors:
     policies:
       - name: keep-all-errors
         type: status_code
-        status_code: {status_codes: [ERROR, UNSET]}
+        status_code: {status_codes: [ERROR]}
+      # UNSET is a normal span's default status. Listing it kept *every* trace
+      # here, so the 10%-of-the-rest policy below never dropped anything.
+      - name: keep-slow
+        type: latency
+        latency:
+          threshold_ms: 2000
       - name: sample-rest
         type: probabilistic
         probabilistic: {sampling_percentage: 10}
@@ -79,8 +92,7 @@ processors:
     timeout: 5s
   # `action` is REQUIRED on every entry in collector-contrib v0.121: leaving it
   # out yields an empty action, and the processor refuses to build --
-  #     failed to build pipelines: failed to create "resource" processor, in
-  #     pipeline "logs": error creating AttrProc due to unsupported action ""
+  #     failed to create "resource" processor ... unsupported action ""
   # which kills the collector at startup (exit 1) before /healthz ever answers.
   # `upsert` is the intended semantics: set the attribute, or overwrite it if a
   # sender already set one.
@@ -92,25 +104,36 @@ processors:
       - key: service.name
         value: nexus-ai-assistant
         action: upsert
+      - key: service.version
+        value: ${env:SERVICE_VERSION}
+        action: upsert
 
 exporters:
   otlphttp/newrelic:
     endpoint: https://otlp.nr-data.net:4318
     headers:
       api-key: ${env:NEW_RELIC_LICENSE_KEY}
-    # Free-tier-friendly: drop the payload instead of retrying forever when
-    # the ingest account is over quota (NR 429s).
+    compression: gzip
+    # Durable queue: if New Relic is unreachable, batches spill to file_storage
+    # in the extension below and are replayed on recovery instead of dropped.
+    sending_queue:
+      enabled: true
+      num_consumers: 10
+      queue_size: 5000
+      storage: file_storage
     retry_on_failure:
       enabled: true
       initial_interval: 5s
       max_interval: 30s
-      max_elapsed_time: 60s
+      # Bounded so a New Relic 429 (free-tier quota) drops the batch after 5
+      # minutes rather than retrying forever and wedging the queue.
+      max_elapsed_time: 300s
   debug:
     verbosity: basic
     sampling_initial: 5
     sampling_thereafter: 20
   # Grafana fan-out (ready stub — uncomment to mirror events into a second
-  # vendor alongside New Relic; needs GRAFANA_OTLP / MIMIR creds):
+  # vendor alongside New Relic; needs GRAFANA_OTLP_ENDPOINT / GRAFANA_OTLP_TOKEN):
   # otlphttp/grafana:
   #   endpoint: ${env:GRAFANA_OTLP_ENDPOINT}
   #   headers:
@@ -119,32 +142,32 @@ exporters:
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
-  # basicauth/server:
-  #   # htpasswd-style inline entry: user "nexus", password "nexus" (CHANGE ME)
-  #   inline: nexus:nexus
+  # Durable queue backing store (see exporting path above). The directory is
+  # provided by the runtime (a named volume in docker-compose, created in the
+  # Dockerfile for Render); create_directory covers a host that pre-provisions a
+  # writable parent instead.
+  file_storage:
+    directory: /var/lib/otelcol/storage
+    create_directory: true
+  # Basic auth on the OTLP receiver. `inline` is a `user:password` pair; the
+  # default nexus/nexus is a placeholder that MUST be changed in production.
+  basicauth/server:
+    htpasswd:
+      inline: "${env:OTLP_AUTH_USER}:${env:OTLP_AUTH_PASSWORD}"
 
 service:
-  extensions: [health_check]
+  extensions: [health_check, file_storage, basicauth/server]
   pipelines:
-    # Logs are the app's live OTLP signal today.
     logs:
       receivers: [otlp]
       processors: [memory_limiter, batch, resource]
       exporters: [otlphttp/newrelic, debug]
-    # Metrics: scraped from /metrics (the live path).
+    # Metrics arrive over OTLP from every app process (see file header).
     metrics:
-      receivers: [prometheus]
+      receivers: [otlp]
       processors: [memory_limiter, batch, resource]
       exporters: [otlphttp/newrelic, debug]
-    # Traces: LangSmith captures AI traces today; this pipeline is the ready
-    # OTLP slot for when the app exports spans directly.
     traces:
       receivers: [otlp]
       processors: [memory_limiter, tail_sampling, batch, resource]
       exporters: [otlphttp/newrelic, debug]
-    # Uncomment ONLY if the app starts pushing OTLP metrics directly — putting
-    # otlp into `metrics` now would double-count every series with the scrape.
-    # metrics/otlp:
-    #   receivers: [otlp]
-    #   processors: [memory_limiter, batch, resource]
-    #   exporters: [otlphttp/newrelic, debug]

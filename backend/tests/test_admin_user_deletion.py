@@ -44,19 +44,6 @@ def _await(coro):
 # ── fakes ─────────────────────────────────────────────────────────────────────
 
 
-class FakeScalarResult:
-    """What `session.exec(select(func.count())...)` hands back."""
-
-    def __init__(self, value: int) -> None:
-        self._value = value
-
-    async def one(self) -> int:
-        return self._value
-
-    def all(self) -> list[int]:  # pragma: no cover - never called
-        return [self._value]
-
-
 class FakeSession:
     """Minimal session: get(User), the admin count, add(), commit().
 

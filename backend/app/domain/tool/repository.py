@@ -16,13 +16,6 @@ class ToolRepository(BaseRepository[Tool]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, Tool)
 
-    async def get_all(self, enabled_only: bool = True) -> list[Tool]:
-        statement = select(Tool)
-        if enabled_only:
-            statement = statement.where(Tool.is_enabled == True)
-        result = await self.session.exec(statement)
-        return list(result.all())
-
     async def get_by_name(self, name: str) -> Tool | None:
         statement = select(Tool).where(Tool.name == name)
         result = await self.session.exec(statement)

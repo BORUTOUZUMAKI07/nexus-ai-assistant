@@ -2,6 +2,7 @@
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -20,7 +21,10 @@ class Organization(SQLModel, table=True):
 
 class OrganizationMember(SQLModel, table=True):
     __tablename__ = "organization_members"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = (
+        UniqueConstraint("organization_id", "user_id", name="uq_org_member_org_user"),
+        {"extend_existing": True},
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     organization_id: uuid.UUID = Field(foreign_key="organizations.id", index=True, nullable=False)

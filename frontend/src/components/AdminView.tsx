@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ShieldCheck,
   Users,
@@ -22,53 +23,34 @@ import {
   BarChart3,
   Wand2,
   ScrollText,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  X,
 } from "lucide-react";
 import {
-  fetchHookPolicies,
   createHookPolicy,
   updateHookPolicy,
   deleteHookPolicy,
   HookPolicyItem,
   HookPolicyInput,
-  fetchSliceReport,
-  fetchFairnessReport,
-  fetchBanditStatus,
-  SliceReport,
-  FairnessReport,
-  BanditStatus,
-  fetchOptimizationRuns,
   triggerOptimizationRun,
   OptimizationRunItem,
-  fetchAuditReport,
-  fetchRedTeamRuns,
-  AuditReport,
-  RedTeamRunItem,
 } from "@/lib/api";
-
-interface AdminUser {
-  id: string;
-  email: string;
-  username: string;
-  full_name: string | null;
-  role: string;
-  is_active: boolean;
-  created_at: string | null;
-}
-
-interface AuditLogItem {
-  id: string;
-  action: string;
-  resource_type: string;
-  status: string;
-  ip_address: string | null;
-  created_at: string | null;
-}
-
-interface SystemHealth {
-  status: string;
-  database: string;
-  redis_cache: string;
-}
+import {
+  useAdminUsers,
+  useSystemHealth,
+  useAuditLogs,
+  useHookPolicies,
+  useSliceReport,
+  useFairnessReport,
+  useBanditStatus,
+  useOptimizationRuns,
+  useAuditReport,
+  useRedTeamRuns,
+  adminKeys,
+  type AdminUser,
+} from "@/lib/queries";
 
 type Tab = "users" | "health" | "audit" | "hooks" | "monitoring" | "optimization" | "compliance";
 
@@ -89,17 +71,42 @@ Summarize the key risks of this migration. | answer
 `;
 
 export const AdminView: React.FC = () => {
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>("users");
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
-  const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
-  const [hooks, setHooks] = useState<HookPolicyItem[]>([]);
+
+  // One query per surface, each enabled only while its tab is showing. Switching
+  // tabs fetches just that tab's data, and a slow report cannot hold the users
+  // list behind it.
+  const usersQuery = useAdminUsers(activeTab === "users");
+  const healthQuery = useSystemHealth(activeTab === "health");
+  const auditLogsQuery = useAuditLogs(activeTab === "audit");
+  const hooksQuery = useHookPolicies(activeTab === "hooks");
+  const sliceQuery = useSliceReport(activeTab === "monitoring");
+  const fairnessQuery = useFairnessReport(activeTab === "monitoring");
+  const banditQuery = useBanditStatus(activeTab === "monitoring");
+  const optRunsQuery = useOptimizationRuns(activeTab === "optimization");
+  const auditReportQuery = useAuditReport(activeTab === "compliance");
+  const redTeamQuery = useRedTeamRuns(activeTab === "compliance");
+
+  const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data]);
+  const systemHealth = healthQuery.data ?? null;
+  const auditLogs = useMemo(
+    () => auditLogsQuery.data ?? [],
+    [auditLogsQuery.data]
+  );
+  const hooks = useMemo(() => hooksQuery.data ?? [], [hooksQuery.data]);
+  const sliceReport = sliceQuery.data ?? null;
+  const fairnessReport = fairnessQuery.data ?? null;
+  const banditStatus = banditQuery.data ?? null;
+  const optRuns = useMemo(() => optRunsQuery.data ?? [], [optRunsQuery.data]);
+  const auditReport = auditReportQuery.data ?? null;
+  const redTeamRuns = useMemo(
+    () => redTeamQuery.data ?? [],
+    [redTeamQuery.data]
+  );
+
   const [hookForm, setHookForm] = useState<HookPolicyInput>(EMPTY_HOOK_FORM);
   const [hookBusy, setHookBusy] = useState(false);
-  const [sliceReport, setSliceReport] = useState<SliceReport | null>(null);
-  const [fairnessReport, setFairnessReport] = useState<FairnessReport | null>(null);
-  const [banditStatus, setBanditStatus] = useState<BanditStatus | null>(null);
-  const [optRuns, setOptRuns] = useState<OptimizationRunItem[]>([]);
   const [optForm, setOptForm] = useState({
     prompt_key: "chat_system_prompt",
     baseline_prompt: "",
@@ -107,59 +114,116 @@ export const AdminView: React.FC = () => {
     candidate_count: "",
   });
   const [optBusy, setOptBusy] = useState(false);
-  const [auditReport, setAuditReport] = useState<AuditReport | null>(null);
-  const [redTeamRuns, setRedTeamRuns] = useState<RedTeamRunItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Only *mutation* errors are local now; load errors come from the queries.
+  const [mutationError, setMutationError] = useState<string | null>(null);
 
-  const fetchAdminData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      if (activeTab === "users") {
-        const res = await fetch("/api/admin/users");
-        if (!res.ok) throw new Error(`Users endpoint failed: ${res.status}`);
-        setUsers(await res.json());
-      } else if (activeTab === "health") {
-        const res = await fetch("/api/admin/system-status");
-        if (!res.ok) throw new Error(`System status failed: ${res.status}`);
-        setSystemHealth(await res.json());
-      } else if (activeTab === "audit") {
-        const res = await fetch("/api/admin/audit-logs");
-        if (!res.ok) throw new Error(`Audit logs failed: ${res.status}`);
-        setAuditLogs(await res.json());
-      } else if (activeTab === "hooks") {
-        setHooks(await fetchHookPolicies());
-      } else if (activeTab === "monitoring") {
-        const [slices, fairness, bandits] = await Promise.all([
-          fetchSliceReport(),
-          fetchFairnessReport(),
-          fetchBanditStatus(),
-        ]);
-        setSliceReport(slices);
-        setFairnessReport(fairness);
-        setBanditStatus(bandits);
-      } else if (activeTab === "optimization") {
-        setOptRuns(await fetchOptimizationRuns());
-      } else if (activeTab === "compliance") {
-        const [report, runs] = await Promise.all([
-          fetchAuditReport(),
-          fetchRedTeamRuns(),
-        ]);
-        setAuditReport(report);
-        setRedTeamRuns(runs);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load data");
-    } finally {
-      setLoading(false);
+  // The queries the active tab depends on. `loading` is "any still on its first
+  // load"; the banner prefers a mutation error (an action the user just took)
+  // over the active tab's load error.
+  const activeQueries: Array<{
+    isPending: boolean;
+    isFetching: boolean;
+    error: Error | null;
+    refetch: () => Promise<unknown>;
+  }> =
+    activeTab === "users"
+      ? [usersQuery]
+      : activeTab === "health"
+        ? [healthQuery]
+        : activeTab === "audit"
+          ? [auditLogsQuery]
+          : activeTab === "hooks"
+            ? [hooksQuery]
+            : activeTab === "monitoring"
+              ? [sliceQuery, fairnessQuery, banditQuery]
+              : activeTab === "optimization"
+                ? [optRunsQuery]
+                : [auditReportQuery, redTeamQuery];
+
+  const loading = activeQueries.some((q) => q.isPending);
+  const busy = activeQueries.some((q) => q.isFetching);
+  const firstQueryError = activeQueries.find((q) => q.error)?.error ?? null;
+  const queryErrorMessage = firstQueryError
+    ? firstQueryError.message
+    : null;
+  const error = mutationError ?? queryErrorMessage;
+
+  // Refresh/Retry: re-run the active tab's query (or queries) and clear any
+  // mutation error so a fixed action is not masked by a stale one.
+  const refetchActive = () => {
+    setMutationError(null);
+    void Promise.all(activeQueries.map((q) => q.refetch()));
+  };
+
+  // Users filtering/sorting/pagination
+  const [userQuery, setUserQuery] = useState("");
+  const [userRoleFilter, setUserRoleFilter] = useState("all");
+  const [userStatusFilter, setUserStatusFilter] = useState("all");
+  const [userSort, setUserSort] = useState<"name" | "email" | "role">("name");
+  const [userPage, setUserPage] = useState(1);
+  const USERS_PER_PAGE = 8;
+
+  // Audit logs filtering/sorting/pagination
+  const [auditQuery, setAuditQuery] = useState("");
+  const [auditStatusFilter, setAuditStatusFilter] = useState("all");
+  const [auditPage, setAuditPage] = useState(1);
+  const AUDIT_PER_PAGE = 10;
+
+  const filteredUsers = React.useMemo(() => {
+    let result = users;
+    if (userQuery.trim()) {
+      const q = userQuery.trim().toLowerCase();
+      result = result.filter(
+        (u) =>
+          u.email.toLowerCase().includes(q) ||
+          u.username.toLowerCase().includes(q) ||
+          (u.full_name && u.full_name.toLowerCase().includes(q))
+      );
     }
-  }, [activeTab]);
+    if (userRoleFilter !== "all") {
+      result = result.filter((u) => u.role === userRoleFilter);
+    }
+    if (userStatusFilter !== "all") {
+      const active = userStatusFilter === "active";
+      result = result.filter((u) => u.is_active === active);
+    }
+    return [...result].sort((a, b) => {
+      if (userSort === "email") return a.email.localeCompare(b.email);
+      if (userSort === "role") return a.role.localeCompare(b.role);
+      const nameA = a.full_name || a.username;
+      const nameB = b.full_name || b.username;
+      return nameA.localeCompare(nameB);
+    });
+  }, [users, userQuery, userRoleFilter, userStatusFilter, userSort]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchAdminData();
-  }, [fetchAdminData]);
+  const totalUserPages = Math.max(1, Math.ceil(filteredUsers.length / USERS_PER_PAGE));
+  const paginatedUsers = filteredUsers.slice(
+    (userPage - 1) * USERS_PER_PAGE,
+    userPage * USERS_PER_PAGE
+  );
+
+  const filteredAuditLogs = React.useMemo(() => {
+    let result = auditLogs;
+    if (auditQuery.trim()) {
+      const q = auditQuery.trim().toLowerCase();
+      result = result.filter(
+        (l) =>
+          l.action.toLowerCase().includes(q) ||
+          l.resource_type.toLowerCase().includes(q) ||
+          (l.ip_address && l.ip_address.toLowerCase().includes(q))
+      );
+    }
+    if (auditStatusFilter !== "all") {
+      result = result.filter((l) => l.status.toLowerCase() === auditStatusFilter.toLowerCase());
+    }
+    return result;
+  }, [auditLogs, auditQuery, auditStatusFilter]);
+
+  const totalAuditPages = Math.max(1, Math.ceil(filteredAuditLogs.length / AUDIT_PER_PAGE));
+  const paginatedAuditLogs = filteredAuditLogs.slice(
+    (auditPage - 1) * AUDIT_PER_PAGE,
+    auditPage * AUDIT_PER_PAGE
+  );
 
   const toggleUser = async (userId: string) => {
     try {
@@ -167,24 +231,34 @@ export const AdminView: React.FC = () => {
         method: "POST",
       });
       if (!res.ok) throw new Error(`Toggle failed: ${res.status}`);
-      setUsers((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, is_active: !u.is_active } : u))
+      // Flip in place from the response we already awaited: no delete exists for
+      // users, so a refetch could not lose a row, but patching avoids a second
+      // round-trip and a visible re-sort.
+      queryClient.setQueryData<AdminUser[]>(adminKeys.users, (prev) =>
+        (prev ?? []).map((u) =>
+          u.id === userId ? { ...u, is_active: !u.is_active } : u
+        )
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Toggle failed");
+      setMutationError(err instanceof Error ? err.message : "Toggle failed");
     }
   };
 
   const submitHook = async () => {
     if (!hookForm.name.trim() || !hookForm.tool_name.trim() || hookBusy) return;
     setHookBusy(true);
-    setError(null);
+    setMutationError(null);
     try {
       const created = await createHookPolicy(hookForm);
-      setHooks((prev) => [...prev, created]);
+      // Append (not prepend): the list is meant to read in creation order, and
+      // the new policy belongs at the end where the form sits.
+      queryClient.setQueryData<HookPolicyItem[]>(adminKeys.hooks, (prev) => [
+        ...(prev ?? []),
+        created,
+      ]);
       setHookForm(EMPTY_HOOK_FORM);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Hook create failed");
+      setMutationError(err instanceof Error ? err.message : "Hook create failed");
     } finally {
       setHookBusy(false);
     }
@@ -193,18 +267,22 @@ export const AdminView: React.FC = () => {
   const toggleHook = async (hook: HookPolicyItem) => {
     try {
       const updated = await updateHookPolicy(hook.id, { enabled: !hook.enabled });
-      setHooks((prev) => prev.map((h) => (h.id === hook.id ? updated : h)));
+      queryClient.setQueryData<HookPolicyItem[]>(adminKeys.hooks, (prev) =>
+        (prev ?? []).map((h) => (h.id === hook.id ? updated : h))
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Hook toggle failed");
+      setMutationError(err instanceof Error ? err.message : "Hook toggle failed");
     }
   };
 
   const removeHook = async (hook: HookPolicyItem) => {
     try {
       await deleteHookPolicy(hook.id);
-      setHooks((prev) => prev.filter((h) => h.id !== hook.id));
+      queryClient.setQueryData<HookPolicyItem[]>(adminKeys.hooks, (prev) =>
+        (prev ?? []).filter((h) => h.id !== hook.id)
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Hook delete failed");
+      setMutationError(err instanceof Error ? err.message : "Hook delete failed");
     }
   };
 
@@ -221,7 +299,7 @@ export const AdminView: React.FC = () => {
   const runOptimization = async () => {
     if (!optForm.baseline_prompt.trim() || optBusy) return;
     setOptBusy(true);
-    setError(null);
+    setMutationError(null);
     try {
       const created = await triggerOptimizationRun({
         prompt_key: optForm.prompt_key.trim() || "chat_system_prompt",
@@ -231,18 +309,32 @@ export const AdminView: React.FC = () => {
           ? Number(optForm.candidate_count)
           : undefined,
       });
-      setOptRuns((prev) => [created, ...prev]);
+      // Prepend: the evidence trail reads newest-first, so the run just started
+      // belongs at the top.
+      queryClient.setQueryData<OptimizationRunItem[]>(
+        adminKeys.optimizationRuns,
+        (prev) => [created, ...(prev ?? [])]
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Optimization run failed");
+      setMutationError(
+        err instanceof Error ? err.message : "Optimization run failed"
+      );
     } finally {
       setOptBusy(false);
     }
   };
 
+  // Switching tabs clears a mutation error, matching the old per-fetch reset: a
+  // failed action on one tab should not leave a banner over an unrelated one.
+  const selectTab = (tab: Tab) => {
+    setMutationError(null);
+    setActiveTab(tab);
+  };
+
   const tabButton = (tab: Tab, label: string, Icon: React.ComponentType<{ className?: string }>) => (
     <button
       key={tab}
-      onClick={() => setActiveTab(tab)}
+      onClick={() => selectTab(tab)}
       className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
         activeTab === tab
           ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
@@ -273,10 +365,10 @@ export const AdminView: React.FC = () => {
         </div>
 
         <button
-          onClick={fetchAdminData}
+          onClick={refetchActive}
           className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
           Refresh
         </button>
       </div>
@@ -299,7 +391,7 @@ export const AdminView: React.FC = () => {
             <span className="text-[var(--text-secondary)] truncate">{error}</span>
           </div>
           <button
-            onClick={fetchAdminData}
+            onClick={refetchActive}
             className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 py-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors whitespace-nowrap"
           >
             <RefreshCw className="h-3 w-3" />
@@ -317,56 +409,130 @@ export const AdminView: React.FC = () => {
 
       {/* Tab 1: Users */}
       {!loading && activeTab === "users" && (
-        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
-          {users.length === 0 && !error ? (
-            <div className="p-8 text-center text-xs text-[var(--text-muted)]">
-              No users found.
+        <div className="space-y-3">
+          {/* Filter / search bar */}
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="relative flex-1 min-w-[160px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--text-muted)] pointer-events-none" />
+              <input
+                value={userQuery}
+                onChange={(e) => { setUserQuery(e.target.value); setUserPage(1); }}
+                placeholder="Search users…"
+                className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+              />
+              {userQuery && (
+                <button onClick={() => setUserQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                  <X className="h-3 w-3" />
+                </button>
+              )}
             </div>
-          ) : (
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[var(--bg-main)] text-[var(--text-muted)] border-b border-[var(--border-subtle)]">
-                <tr>
-                  <th className="p-3.5 font-medium">User</th>
-                  <th className="p-3.5 font-medium">Email</th>
-                  <th className="p-3.5 font-medium">Role</th>
-                  <th className="p-3.5 font-medium">Status</th>
-                  <th className="p-3.5 font-medium text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--border-subtle)] text-[var(--text-secondary)]">
-                {users.map((u) => (
-                  <tr key={u.id} className="hover:bg-[var(--bg-main)] transition-colors">
-                    <td className="p-3.5 font-medium text-[var(--text-primary)]">
-                      {u.full_name || u.username}
-                    </td>
-                    <td className="p-3.5 text-[var(--text-muted)]">{u.email}</td>
-                    <td className="p-3.5">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[10px] font-medium text-[var(--text-secondary)]">
-                        {u.role}
-                      </span>
-                    </td>
-                    <td className="p-3.5">
-                      <span className={`inline-flex items-center gap-1 text-[11px] ${u.is_active ? "text-[var(--status-success)]" : "text-[var(--status-danger)]"}`}>
-                        {u.is_active ? (
-                          <CheckCircle2 className="h-3 w-3" />
-                        ) : (
-                          <XCircle className="h-3 w-3" />
-                        )}
-                        {u.is_active ? "Active" : "Disabled"}
-                      </span>
-                    </td>
-                    <td className="p-3.5 text-right">
-                      <button
-                        onClick={() => toggleUser(u.id)}
-                        className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--border-strong)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-                      >
-                        {u.is_active ? "Disable" : "Enable"}
-                      </button>
-                    </td>
+            <select
+              value={userRoleFilter}
+              onChange={(e) => { setUserRoleFilter(e.target.value); setUserPage(1); }}
+              className="px-2.5 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-xs text-[var(--text-secondary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+            >
+              <option value="all">All roles</option>
+              <option value="admin">Admin</option>
+              <option value="user">User</option>
+              <option value="viewer">Viewer</option>
+            </select>
+            <select
+              value={userStatusFilter}
+              onChange={(e) => { setUserStatusFilter(e.target.value); setUserPage(1); }}
+              className="px-2.5 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-xs text-[var(--text-secondary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+            >
+              <option value="all">All statuses</option>
+              <option value="active">Active only</option>
+              <option value="disabled">Disabled only</option>
+            </select>
+            <select
+              value={userSort}
+              onChange={(e) => setUserSort(e.target.value as "name" | "email" | "role")}
+              className="px-2.5 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-xs text-[var(--text-secondary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+            >
+              <option value="name">Sort: Name</option>
+              <option value="email">Sort: Email</option>
+              <option value="role">Sort: Role</option>
+            </select>
+            <span className="text-xs text-[var(--text-muted)] ml-auto whitespace-nowrap">
+              {filteredUsers.length} user{filteredUsers.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
+            {filteredUsers.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[var(--text-muted)]">
+                {users.length === 0 ? "No users found." : "No users match your filters."}
+              </div>
+            ) : (
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[var(--bg-main)] text-[var(--text-muted)] border-b border-[var(--border-subtle)]">
+                  <tr>
+                    <th className="p-3.5 font-medium">User</th>
+                    <th className="p-3.5 font-medium">Email</th>
+                    <th className="p-3.5 font-medium">Role</th>
+                    <th className="p-3.5 font-medium">Status</th>
+                    <th className="p-3.5 font-medium text-right">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-[var(--border-subtle)] text-[var(--text-secondary)]">
+                  {paginatedUsers.map((u) => (
+                    <tr key={u.id} className="hover:bg-[var(--bg-main)] transition-colors">
+                      <td className="p-3.5 font-medium text-[var(--text-primary)]">
+                        {u.full_name || u.username}
+                      </td>
+                      <td className="p-3.5 text-[var(--text-muted)]">{u.email}</td>
+                      <td className="p-3.5">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[10px] font-medium text-[var(--text-secondary)]">
+                          {u.role}
+                        </span>
+                      </td>
+                      <td className="p-3.5">
+                        <span className={`inline-flex items-center gap-1 text-[11px] ${u.is_active ? "text-[var(--status-success)]" : "text-[var(--status-danger)]"}`}>
+                          {u.is_active ? (
+                            <CheckCircle2 className="h-3 w-3" />
+                          ) : (
+                            <XCircle className="h-3 w-3" />
+                          )}
+                          {u.is_active ? "Active" : "Disabled"}
+                        </span>
+                      </td>
+                      <td className="p-3.5 text-right">
+                        <button
+                          onClick={() => toggleUser(u.id)}
+                          className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] hover:border-[var(--border-strong)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                        >
+                          {u.is_active ? "Disable" : "Enable"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Pagination */}
+          {totalUserPages > 1 && (
+            <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
+              <span>Page {userPage} of {totalUserPages}</span>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setUserPage((p) => Math.max(1, p - 1))}
+                  disabled={userPage === 1}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border-subtle)] hover:border-[var(--border-strong)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  <ChevronLeft className="h-3 w-3" /> Prev
+                </button>
+                <button
+                  onClick={() => setUserPage((p) => Math.min(totalUserPages, p + 1))}
+                  disabled={userPage === totalUserPages}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border-subtle)] hover:border-[var(--border-strong)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  Next <ChevronRight className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -405,7 +571,17 @@ export const AdminView: React.FC = () => {
                   <h3 className="text-sm font-medium text-[var(--text-primary)]">{label}</h3>
                 </div>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)]">
-                  <span className="h-2 w-2 rounded-full bg-[var(--status-success)]" />
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      value === "healthy" || value === "ok" || value === "connected"
+                        ? "bg-[var(--status-success)]"
+                        : value === "degraded"
+                        ? "bg-[var(--status-warning)]"
+                        : value
+                        ? "bg-[var(--status-error)]"
+                        : "bg-[var(--text-muted)]"
+                    }`}
+                  />
                   {value ?? "unknown"}
                 </span>
               </div>
@@ -454,44 +630,106 @@ export const AdminView: React.FC = () => {
 
       {/* Tab 3: Audit Logs */}
       {!loading && activeTab === "audit" && (
-        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
-          {auditLogs.length === 0 && !error ? (
-            <div className="p-8 text-center text-xs text-[var(--text-muted)]">
-              No audit events recorded.
+        <div className="space-y-3">
+          {/* Filter / search bar */}
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="relative flex-1 min-w-[160px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--text-muted)] pointer-events-none" />
+              <input
+                value={auditQuery}
+                onChange={(e) => { setAuditQuery(e.target.value); setAuditPage(1); }}
+                placeholder="Search action, resource, IP…"
+                className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+              />
+              {auditQuery && (
+                <button onClick={() => setAuditQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                  <X className="h-3 w-3" />
+                </button>
+              )}
             </div>
-          ) : (
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[var(--bg-main)] text-[var(--text-muted)] border-b border-[var(--border-subtle)]">
-                <tr>
-                  <th className="p-3.5 font-medium">Action</th>
-                  <th className="p-3.5 font-medium">Resource</th>
-                  <th className="p-3.5 font-medium">IP address</th>
-                  <th className="p-3.5 font-medium">Status</th>
-                  <th className="p-3.5 font-medium text-right">Timestamp</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--border-subtle)] text-[var(--text-secondary)] font-mono text-[11px]">
-                {auditLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-[var(--bg-main)] transition-colors">
-                    <td className="p-3.5 font-medium text-[var(--text-primary)]">{log.action}</td>
-                    <td className="p-3.5 text-[var(--text-muted)]">{log.resource_type}</td>
-                    <td className="p-3.5 text-[var(--text-muted)]">
-                      {log.ip_address || "internal"}
-                    </td>
-                    <td className="p-3.5">
-                      <span className="px-2 py-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)]">
-                        {log.status}
-                      </span>
-                    </td>
-                    <td className="p-3.5 text-right text-[var(--text-muted)]">
-                      {log.created_at
-                        ? new Date(log.created_at).toLocaleTimeString()
-                        : "-"}
-                    </td>
+            <select
+              value={auditStatusFilter}
+              onChange={(e) => { setAuditStatusFilter(e.target.value); setAuditPage(1); }}
+              className="px-2.5 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-xs text-[var(--text-secondary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+            >
+              <option value="all">All statuses</option>
+              <option value="success">Success</option>
+              <option value="failure">Failure</option>
+              <option value="blocked">Blocked</option>
+            </select>
+            <span className="text-xs text-[var(--text-muted)] ml-auto whitespace-nowrap">
+              {filteredAuditLogs.length} event{filteredAuditLogs.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
+            {filteredAuditLogs.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[var(--text-muted)]">
+                {auditLogs.length === 0 ? "No audit events recorded." : "No events match your filters."}
+              </div>
+            ) : (
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[var(--bg-main)] text-[var(--text-muted)] border-b border-[var(--border-subtle)]">
+                  <tr>
+                    <th className="p-3.5 font-medium">Action</th>
+                    <th className="p-3.5 font-medium">Resource</th>
+                    <th className="p-3.5 font-medium">IP address</th>
+                    <th className="p-3.5 font-medium">Status</th>
+                    <th className="p-3.5 font-medium text-right">Timestamp</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-[var(--border-subtle)] text-[var(--text-secondary)] font-mono text-[11px]">
+                  {paginatedAuditLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-[var(--bg-main)] transition-colors">
+                      <td className="p-3.5 font-medium text-[var(--text-primary)]">{log.action}</td>
+                      <td className="p-3.5 text-[var(--text-muted)]">{log.resource_type}</td>
+                      <td className="p-3.5 text-[var(--text-muted)]">
+                        {log.ip_address || "internal"}
+                      </td>
+                      <td className="p-3.5">
+                        <span className={`px-2 py-0.5 rounded-md border text-[10px] font-medium ${
+                          log.status.toLowerCase() === "success"
+                            ? "border-[var(--status-success)]/30 bg-[var(--status-success)]/10 text-[var(--status-success)]"
+                            : log.status.toLowerCase() === "failure"
+                            ? "border-[var(--status-danger)]/30 bg-[var(--status-danger)]/10 text-[var(--status-danger)]"
+                            : "border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)]"
+                        }`}>
+                          {log.status}
+                        </span>
+                      </td>
+                      <td className="p-3.5 text-right text-[var(--text-muted)]">
+                        {log.created_at
+                          ? new Date(log.created_at).toLocaleString()
+                          : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Pagination */}
+          {totalAuditPages > 1 && (
+            <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
+              <span>Page {auditPage} of {totalAuditPages}</span>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setAuditPage((p) => Math.max(1, p - 1))}
+                  disabled={auditPage === 1}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border-subtle)] hover:border-[var(--border-strong)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  <ChevronLeft className="h-3 w-3" /> Prev
+                </button>
+                <button
+                  onClick={() => setAuditPage((p) => Math.min(totalAuditPages, p + 1))}
+                  disabled={auditPage === totalAuditPages}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border-subtle)] hover:border-[var(--border-strong)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  Next <ChevronRight className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
           )}
         </div>
       )}

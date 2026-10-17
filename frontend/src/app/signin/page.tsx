@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, Lock, Mail, User, ArrowRight, Sparkles } from "lucide-react";
-import { registerUser, loginUser, ssoLogin, listSsoProviders, type OAuthProviderName } from "@/lib/api";
+import { Loader2, Lock, Mail, User, ArrowRight } from "lucide-react";
+import { registerUser, loginUser, startOAuthLogin, listOAuthProviders, type OAuthProviderName } from "@/lib/api";
 import { checkAuth } from "@/lib/auth";
 
 /**
@@ -15,22 +15,70 @@ import { checkAuth } from "@/lib/auth";
  * literally named "constructor" cannot smuggle itself through the check and
  * read a function off the prototype.
  */
-const SSO_LABELS: Record<OAuthProviderName, string> = {
+const PROVIDER_LABELS: Record<OAuthProviderName, string> = {
   google: "Google",
   github: "GitHub",
 };
 
 /**
- * Provider mark per provider, keyed in step with `SSO_LABELS` so the two tables
+ * Provider mark per provider, keyed in step with `PROVIDER_LABELS` so the two tables
  * can never disagree about which providers this page can draw.
  *
  * Safe to build at module scope even though the glyph components are declared
  * further down: both are hoisted `function` declarations.
  */
-const SSO_GLYPHS: Record<OAuthProviderName, React.ReactNode> = {
+const PROVIDER_GLYPHS: Record<OAuthProviderName, React.ReactNode> = {
   google: <GoogleGlyph />,
   github: <GitHubGlyph />,
 };
+
+/**
+ * The failure codes the OAuth callback redirects back with (`/signin?error=…`).
+ *
+ * The backend and the BFF callback proxy both send the user here on a failed
+ * exchange; without this map (and the effect that reads it) the redirect lands
+ * on an unexplained blank sign-in page. Unknown codes fall through to the
+ * decoded value, which is the backend's own message.
+ */
+const OAUTH_ERROR_MESSAGES: Record<string, string> = {
+  oauth_missing_params:
+    "The sign-in response was missing required parameters. Please try again.",
+  oauth_no_token: "We could not complete sign-in. Please try again.",
+};
+
+/**
+ * Read `window.location.search` in a way that is safe to render.
+ *
+ * The server has no URL, so its snapshot is the empty string; React swaps in the
+ * real value on the client without a hydration mismatch. This is the same
+ * `useSyncExternalStore` primitive `CurrentYear` uses for the year, and it is
+ * preferred here over a mount effect that calls `setState`, which
+ * `react-hooks/set-state-in-effect` (correctly) rejects.
+ */
+const SUBSCRIBE = () => () => {};
+const getServerSnapshot = () => "";
+const getSnapshot = () => window.location.search;
+
+/**
+ * The message the OAuth callback redirected back with, or null.
+ *
+ * Pure, so it can be evaluated during render: `?oauth=2fa` means a TOTP-enabled
+ * account must finish on the password form, and `?error=…` is a failed exchange
+ * — either a known code or the backend's own (already percent-decoded) message,
+ * which is surfaced verbatim so a new backend code still reaches the user.
+ */
+function resolveOAuthError(search: string): string | null {
+  const params = new URLSearchParams(search);
+  if (params.get("oauth") === "2fa") {
+    return "Two-factor authentication is required. Sign in with your password to enter your code.";
+  }
+  const code = params.get("error");
+  if (!code) return null;
+  if (code.startsWith("oauth_callback_failed_")) {
+    return "We could not complete sign-in with the provider. Please try again.";
+  }
+  return OAUTH_ERROR_MESSAGES[code] ?? code;
+}
 
 export default function SignInPage() {
   const router = useRouter();
@@ -40,13 +88,23 @@ export default function SignInPage() {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [ssoProvider, setSsoProvider] = useState<OAuthProviderName | null>(null);
-  // null means "not known yet", which is treated the same as "none": the SSO
+  // `undefined` = no locally produced message yet, so fall back to whatever the
+  // redirect URL carried. `null` = explicitly cleared by a retry. A string = a
+  // message produced on this page (submit failure, OAuth start failure).
+  const [error, setError] = useState<string | null | undefined>(undefined);
+  const [oauthProvider, setOAuthProvider] = useState<OAuthProviderName | null>(null);
+  // null means "not known yet", which is treated the same as "none": the OAuth
   // section stays hidden until the server has said what it supports. Rendering
   // the buttons optimistically and hiding them a moment later would be the
   // wrong direction to flicker.
-  const [ssoProviders, setSsoProviders] = useState<OAuthProviderName[] | null>(null);
+  const [oauthProviders, setOAuthProviders] = useState<OAuthProviderName[] | null>(null);
+
+  // Read the redirect's query string without an effect (see `resolveOAuthError`).
+  const searchString = useSyncExternalStore(SUBSCRIBE, getSnapshot, getServerSnapshot);
+  const urlError = resolveOAuthError(searchString);
+  // A message from the redirect URL is the initial one; a locally produced error
+  // supersedes it for good.
+  const errorMessage = error === undefined ? urlError : error;
 
   useEffect(() => {
     // The access cookie is httpOnly, so session presence is verified against
@@ -82,14 +140,18 @@ export default function SignInPage() {
     }
   };
 
-  // The list of SSO providers is server-side configuration, not a build-time
-  // constant, so it is fetched rather than assumed. `listSsoProviders` resolves
-  // to [] on any failure, which lands here as "this deployment offers no SSO"
-  // and hides the section instead of offering a button that would 404.
+  // The list of OAuth providers is server-side configuration, not a build-time
+  // constant, so it is fetched rather than assumed. `listOAuthProviders` resolves
+  // to [] on any failure, which lands here as "this deployment offers no OAuth"
+  // and hides the section instead of offering a button that would 404. It also
+  // retries a transient failure, because opening this page during the backend's
+  // cold start used to hide OAuth with no reason and no second attempt. The
+  // controller cancels the request *and* any pending backoff sleep on unmount, so
+  // a page that is gone stops probing.
   useEffect(() => {
-    let live = true;
-    void listSsoProviders().then((providers) => {
-      if (!live) return;
+    const controller = new AbortController();
+    void listOAuthProviders({ signal: controller.signal }).then((providers) => {
+      if (controller.signal.aborted) return;
       const usable = providers
         .filter((p) => p.configured)
         // A name this UI has no glyph or label for is dropped rather than
@@ -97,19 +159,17 @@ export default function SignInPage() {
         // the frontend learns to draw it.
         .map((p) => p.name)
         .filter((name): name is OAuthProviderName =>
-          Object.prototype.hasOwnProperty.call(SSO_LABELS, name));
-      setSsoProviders(usable);
+          Object.prototype.hasOwnProperty.call(PROVIDER_LABELS, name));
+      setOAuthProviders(usable);
     });
-    return () => {
-      live = false;
-    };
+    return () => controller.abort();
   }, []);
 
-  const handleSso = async (provider: OAuthProviderName) => {
+  const handleOAuth = async (provider: OAuthProviderName) => {
     setError(null);
-    setSsoProvider(provider);
+    setOAuthProvider(provider);
     try {
-      const { authorization_url } = await ssoLogin(provider);
+      const { authorization_url } = await startOAuthLogin(provider);
       // Send the whole tab to the IdP; the provider redirects back to
       // /api/auth/oauth/{provider}/callback where the httpOnly session is written.
       window.location.assign(authorization_url);
@@ -117,7 +177,7 @@ export default function SignInPage() {
       setError(
         err instanceof Error ? err.message : "Single sign-on is unavailable.",
       );
-      setSsoProvider(null);
+      setOAuthProvider(null);
     }
   };
 
@@ -138,9 +198,9 @@ export default function SignInPage() {
           </p>
         </div>
 
-        {error && (
+        {errorMessage && (
           <div className="mb-4 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-main)] p-3 text-xs text-[var(--status-danger)]">
-            {error}
+            {errorMessage}
           </div>
         )}
 
@@ -227,7 +287,7 @@ export default function SignInPage() {
           </button>
         </form>
 
-        {ssoProviders !== null && ssoProviders.length > 0 && (
+        {oauthProviders !== null && oauthProviders.length > 0 && (
           <>
             <div className="mt-4 flex items-center gap-3 text-xs text-[var(--text-faint)]">
               <span className="h-px flex-1 bg-[var(--border-subtle)]" />
@@ -236,22 +296,22 @@ export default function SignInPage() {
             </div>
 
             <div className="mt-4 grid gap-2">
-              {ssoProviders.map((provider) => (
+              {oauthProviders.map((provider) => (
                 <button
                   key={provider}
                   type="button"
-                  onClick={() => handleSso(provider)}
-                  disabled={ssoProvider !== null}
+                  onClick={() => handleOAuth(provider)}
+                  disabled={oauthProvider !== null}
                   className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:border-[var(--accent)] hover:text-[var(--accent-ink)] disabled:opacity-50"
                 >
-                  {ssoProvider === provider ? (
+                  {oauthProvider === provider ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
-                    SSO_GLYPHS[provider]
+                    PROVIDER_GLYPHS[provider]
                   )}
-                  {ssoProvider === provider
+                  {oauthProvider === provider
                     ? "Redirecting…"
-                    : `Continue with ${SSO_LABELS[provider]}`}
+                    : `Continue with ${PROVIDER_LABELS[provider]}`}
                 </button>
               ))}
             </div>

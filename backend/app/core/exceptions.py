@@ -2,6 +2,15 @@
 Nexus Exception Architecture (RFC-7807 Problem Details Compliant).
 Provides a hierarchical, domain-driven exception system with distinct HTTP status codes,
 machine-readable error codes, and strict separation of concerns following SOLID principles.
+
+Only the exceptions that are actually raised/caught anywhere in the app live
+here. A large block of speculative classes (resource sub-types, task-contract and
+rate-limit errors, sandbox/provider timeouts, and a set of "backward
+compatibility" aliases) was removed after an AST import-graph audit found no
+importer for any of them -- text-matching had kept two of them alive by mistake,
+because ``retry_policy.py`` names litellm's like-named ``AuthenticationError`` /
+``ContextWindowExceededError``. Re-add a class when a caller needs it; do not
+re-create the vocabulary for its own sake.
 """
 from typing import Any
 
@@ -41,7 +50,7 @@ class NexusException(Exception):
 
 
 # =====================================================================
-# 1. Authentication & Security Exceptions (401 / 403 / 409)
+# 1. Authentication & Security Exceptions (401 / 409)
 # =====================================================================
 
 class AuthenticationError(NexusException):
@@ -53,18 +62,6 @@ class AuthenticationError(NexusException):
 class InvalidTokenError(AuthenticationError):
     error_code = "INVALID_TOKEN"
     message = "The authentication token is invalid, expired, or malformed."
-
-
-class PermissionDeniedError(NexusException):
-    status_code = status.HTTP_403_FORBIDDEN
-    error_code = "PERMISSION_DENIED"
-    message = "You do not have required permissions to perform this action."
-
-
-class UserNotFoundError(NexusException):
-    status_code = status.HTTP_404_NOT_FOUND
-    error_code = "USER_NOT_FOUND"
-    message = "The requested user account was not found."
 
 
 class UserAlreadyExistsError(NexusException):
@@ -87,24 +84,6 @@ class ResourceNotFoundError(NexusException):
         super().__init__(message=msg, details={"resource": resource_type, "id": identifier})
 
 
-class ConversationNotFoundError(ResourceNotFoundError):
-    error_code = "CONVERSATION_NOT_FOUND"
-    def __init__(self, conversation_id: str = ""):
-        super().__init__("Conversation", conversation_id)
-
-
-class MessageNotFoundError(ResourceNotFoundError):
-    error_code = "MESSAGE_NOT_FOUND"
-    def __init__(self, message_id: str = ""):
-        super().__init__("Message", message_id)
-
-
-class FileNotFoundError(ResourceNotFoundError):
-    error_code = "FILE_NOT_FOUND"
-    def __init__(self, file_id: str = ""):
-        super().__init__("File", file_id)
-
-
 # =====================================================================
 # 3. Validation & Guardrail Exceptions (422)
 # =====================================================================
@@ -116,26 +95,9 @@ class ValidationError(NexusException):
     message = "The request payload failed validation."
 
 
-class TaskContractViolationError(ValidationError):
-    error_code = "TASK_CONTRACT_VIOLATED"
-    message = "Generated output violated the defined task contract schema."
-
-
-class EvidenceGateFailedError(ValidationError):
-    error_code = "EVIDENCE_GATE_FAILED"
-    message = "Output failed evidence verification thresholds (unsupported claims or hallucinations)."
-
-
 # =====================================================================
-# 4. Storage & File Payload Exceptions (413 / 415)
+# 4. Storage & File Payload Exceptions (415)
 # =====================================================================
-
-class FileTooLargeError(NexusException):
-    # Using HTTP 413 without Starlette deprecation warning
-    status_code = 413
-    error_code = "FILE_TOO_LARGE"
-    message = "File size exceeds the 50MB maximum threshold."
-
 
 class UnsupportedFileTypeError(NexusException):
     status_code = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
@@ -144,23 +106,7 @@ class UnsupportedFileTypeError(NexusException):
 
 
 # =====================================================================
-# 5. Rate Limiting & Capacity Exceptions (429 / 400)
-# =====================================================================
-
-class RateLimitExceededError(NexusException):
-    status_code = status.HTTP_429_TOO_MANY_REQUESTS
-    error_code = "RATE_LIMIT_EXCEEDED"
-    message = "Rate limit exceeded. Please wait before issuing additional requests."
-
-
-class ContextWindowExceededError(NexusException):
-    status_code = status.HTTP_400_BAD_REQUEST
-    error_code = "CONTEXT_WINDOW_EXCEEDED"
-    message = "The conversation context exceeds the model maximum token limit."
-
-
-# =====================================================================
-# 6. Tool, Agent & Sandbox Execution Exceptions (502 / 504)
+# 5. Tool, Agent & Approval Exceptions (502 / 403 / 410 / 409)
 # =====================================================================
 
 class ToolExecutionError(NexusException):
@@ -185,27 +131,3 @@ class ApprovalConsumedError(NexusException):
     status_code = status.HTTP_409_CONFLICT
     error_code = "APPROVAL_ALREADY_CONSUMED"
     message = "This approval request has already been resolved and cannot be reused."
-
-
-class SandboxTimeoutError(NexusException):
-    status_code = status.HTTP_504_GATEWAY_TIMEOUT
-    error_code = "SANDBOX_TIMEOUT"
-    message = "Code execution timed out inside the isolated sandbox."
-
-
-class LLMProviderError(NexusException):
-    status_code = status.HTTP_502_BAD_GATEWAY
-    error_code = "LLM_PROVIDER_ERROR"
-    message = "Upstream language model provider returned an error."
-
-
-# =====================================================================
-# 7. Backward Compatibility Aliases (clean domain service interoperability)
-# =====================================================================
-
-AppException = NexusException
-AuthenticationException = AuthenticationError
-AuthorizationException = PermissionDeniedError
-UserAlreadyExistsException = UserAlreadyExistsError
-ResourceNotFoundException = ResourceNotFoundError
-ValidationException = ValidationError

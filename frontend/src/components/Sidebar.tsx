@@ -5,6 +5,7 @@ import {
   MessageSquare,
   Plus,
   FileText,
+  FolderKanban,
   Sliders,
   BarChart2,
   Trash2,
@@ -40,8 +41,10 @@ interface SidebarProps {
    * omit it and the pencil button is not rendered.
    */
   onRenameConversation?: (id: string, title: string) => Promise<void> | void;
-  activeTab: "chat" | "files" | "settings" | "usage" | "admin";
-  setActiveTab: (tab: "chat" | "files" | "settings" | "usage" | "admin") => void;
+  /** Toggle a conversation's pinned state; parent owns the server call. */
+  onPinConversation?: (id: string, pinned: boolean) => Promise<void> | void;
+  activeTab: "chat" | "files" | "projects" | "settings" | "usage" | "admin";
+  setActiveTab: (tab: "chat" | "files" | "projects" | "settings" | "usage" | "admin") => void;
   currentModel: string;
   onChangeModel: (model: string) => void;
   onSignOut?: () => void;
@@ -65,6 +68,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteConversation,
   onForkConversation,
   onRenameConversation,
+  onPinConversation,
   activeTab,
   setActiveTab,
   currentModel,
@@ -75,8 +79,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }: SidebarProps) => {
   const models = MODELS;
 
-  const pinnedList = conversations.filter((c) => c.is_pinned);
-  const recentList = conversations.filter((c) => !c.is_pinned);
+  const [chatFilter, setChatFilter] = React.useState("");
+  const [chatSort, setChatSort] = React.useState<"newest" | "oldest" | "az">("newest");
+  const [visibleCount, setVisibleCount] = React.useState(15);
+
+  const filterAndSort = (items: ConversationItem[]) => {
+    let list = items;
+    if (chatFilter.trim()) {
+      const q = chatFilter.trim().toLowerCase();
+      list = list.filter((c) => c.title.toLowerCase().includes(q));
+    }
+    return [...list].sort((a, b) => {
+      if (chatSort === "oldest") {
+        return new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime();
+      }
+      if (chatSort === "az") {
+        return a.title.localeCompare(b.title);
+      }
+      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    });
+  };
+
+  const pinnedList = filterAndSort(conversations.filter((c) => c.is_pinned));
+  const rawRecent = filterAndSort(conversations.filter((c) => !c.is_pinned));
+  const recentList = rawRecent.slice(0, visibleCount);
+  const hasMore = rawRecent.length > visibleCount;
 
   // Inline rename state. `editingId` tracks which row is in edit mode and
   // `editingTitle` holds the in-progress text, so a rename never round-trips
@@ -110,6 +137,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const navItems: NavItem[] = [
     { tab: "files", label: "Knowledge", Icon: FileText },
+    { tab: "projects", label: "Projects", Icon: FolderKanban },
     { tab: "usage", label: "Usage", Icon: BarChart2 },
     { tab: "settings", label: "Settings", Icon: Sliders },
     // Admin is only visible to admins; non-admins who somehow land here are
@@ -192,6 +220,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent)] p-0.5 transition-opacity"
           >
             <Pencil className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {onPinConversation && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void onPinConversation(c.id, !c.is_pinned);
+            }}
+            title={c.is_pinned ? "Unpin conversation" : "Pin conversation"}
+            aria-label={c.is_pinned ? `Unpin ${c.title}` : `Pin ${c.title}`}
+            className={
+              c.is_pinned
+                ? "text-[var(--accent-ink)] p-0.5"
+                : "opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity"
+            }
+          >
+            <Pin className="w-3.5 h-3.5" />
           </button>
         )}
         {onForkConversation && (
@@ -293,6 +338,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
       </div>
 
+      {/* Conversation Filter & Sort */}
+      {conversations.length > 2 && (
+        <div className="px-3 pb-2 flex items-center gap-1.5">
+          <div className="relative flex-1">
+            <Search className="w-3 h-3 absolute left-2 top-2 text-[var(--text-faint)]" />
+            <input
+              type="text"
+              value={chatFilter}
+              onChange={(e) => setChatFilter(e.target.value)}
+              placeholder="Filter chats…"
+              className="w-full bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-lg pl-6 pr-6 py-1 text-[11px] text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]"
+            />
+            {chatFilter && (
+              <button
+                onClick={() => setChatFilter("")}
+                className="absolute right-2 top-1.5 text-[var(--text-faint)] hover:text-[var(--text-primary)]"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+          <select
+            value={chatSort}
+            onChange={(e) => setChatSort(e.target.value as "newest" | "oldest" | "az")}
+            className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-lg px-1.5 py-1 text-[10px] text-[var(--text-secondary)] focus:outline-none"
+            title="Sort conversations"
+          >
+            <option value="newest">Recent</option>
+            <option value="oldest">Oldest</option>
+            <option value="az">A-Z</option>
+          </select>
+        </div>
+      )}
+
       {/* Conversation History */}
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-4">
         {pinnedList.length > 0 && (
@@ -309,6 +388,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             Recent conversations
           </div>
           <div className="space-y-1">{recentList.map(renderConversation)}</div>
+          {hasMore && (
+            <button
+              onClick={() => setVisibleCount((prev) => prev + 15)}
+              className="w-full mt-2 py-1.5 text-[11px] font-medium text-[var(--accent-ink)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] rounded-md border border-dashed border-[var(--border-subtle)] transition-colors"
+            >
+              Show more ({rawRecent.length - visibleCount} remaining)
+            </button>
+          )}
           {recentList.length === 0 && (
             <p className="text-[11px] text-[var(--text-faint)] px-2 py-3 text-center">
               No recent conversations

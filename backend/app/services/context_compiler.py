@@ -8,8 +8,15 @@ from typing import Any
 import structlog
 from backend.app.domain.conversation.models import Message
 from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.services.prompt_compiler import load_prompt
 
 logger = structlog.get_logger(__name__)
+
+# The summariser system prompt lives in prompt_templates/summary_prompt.txt --
+# the single source of truth for sub-agent / compaction summaries. Loading it
+# here (instead of a hardcoded string) keeps every summarisation path on the
+# same instructions and makes the template file load-bearing.
+_SUMMARY_SYSTEM_PROMPT = load_prompt("summary_prompt")
 
 # Default token context limits per model
 MODEL_CONTEXT_LIMITS = {
@@ -67,7 +74,7 @@ class ContextCompiler:
 
         summary = await ai_client.completion(
             messages=[
-                {"role": "system", "content": "You are a concise conversation summarizer."},
+                {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             model=model,
@@ -201,7 +208,7 @@ class ContextCompiler:
         try:
             summary = await self.ai_client.completion(
                 messages=[
-                    {"role": "system", "content": "You are a concise conversation summarizer."},
+                    {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
                 model=model,

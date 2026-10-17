@@ -209,8 +209,8 @@ async def test_verify_2fa_rejects_access_token():
     auth, secret = _auth_with_2fa()
     access = create_access_token(
         subject=auth._repo.user.id,
+        role=auth._repo.user.role,
         expires_delta=timedelta(minutes=5),
-        additional_claims={"role": auth._repo.user.role},
     )
     with pytest.raises(AuthenticationError):
         await auth.verify_2fa(access, pyotp.TOTP(secret).now())

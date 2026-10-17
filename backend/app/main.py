@@ -4,6 +4,7 @@ Configures Lifespan, CORS, Middleware, FastMCP SSE Mount, and API v1 Routes.
 """
 import asyncio
 import sys
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -31,6 +32,8 @@ from backend.app.infrastructure.resilience.rate_limit import (
 )
 from backend.app.infrastructure.vector.qdrant_client import vector_db
 from backend.app.mcp.server import mcp
+from backend.app.services.observability.metrics import metrics_collector
+from backend.app.services.observability.otel import get_tracer, shutdown_otel
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -156,16 +159,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Graceful Shutdown (outside lifespan_graph context — pool already closed)
     logger.info("nexus_ai_shutting_down")
-    # Layer-1: flush + detach the OTLP log pipeline so the collector receives
-    # the final log lines (fail-open — teardown must never break shutdown).
+    # Layer-1: flush + detach the OTLP pipelines so the collector receives the
+    # final log lines and the last batch of spans/metrics (fail-open — teardown
+    # must never break shutdown).
     try:
         from backend.app.services.observability.logs import shutdown_otlp_log_handler
 
         shutdown_otlp_log_handler()
     except Exception as exc:  # noqa: BLE001 - fail-open seam
         logger.warning("otlp_log_shutdown_failed", error_type=type(exc).__name__)
+    try:
+        shutdown_otel()
+    except Exception as exc:  # noqa: BLE001 - fail-open seam
+        logger.warning("otlp_signal_shutdown_failed", error_type=type(exc).__name__)
     await close_db()
-    await redis_client.close()
+    if hasattr(redis_client, "aclose"):
+        await redis_client.aclose()
+    else:
+        await redis_client.close()
 
 
 app = FastAPI(
@@ -185,6 +196,59 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# 1b. OTLP HTTP server spans + request metrics. Spans are a no-op unless the
+#     OTLP pipeline is wired (NEW_RELIC_ENABLED + a collector endpoint); when it
+#     is, every request is a span, and any span opened inside a request (the node
+#     spans in services/observability/tracing.py) nests under it. Request
+#     latency/throughput/error samples always feed the in-process
+#     MetricsCollector — the `/metrics` debug surface — and that collector
+#     forwards them to OTel instruments once the meter provider is wired. This is
+#     the infra/ops counterpart to LangSmith's LLM/agent trace view.
+def _record_http_request_metrics(status_code: int, duration_ms: float) -> None:
+    metrics_collector.record_latency("http_request", duration_ms)
+    metrics_collector.increment("http_requests_total")
+    if status_code >= 500:
+        metrics_collector.record_error(f"http_{status_code}")
+
+
+@app.middleware("http")
+async def otlp_http_span_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    tracer = get_tracer("backend.app.http")
+    if tracer is None:
+        response = await call_next(request)
+        _record_http_request_metrics(
+            response.status_code, (time.perf_counter() - start) * 1000.0
+        )
+        return response
+
+    from opentelemetry.trace import Status, StatusCode
+
+    with tracer.start_as_current_span(f"{request.method} {request.url.path}") as span:
+        span.set_attribute("http.request.method", request.method)
+        span.set_attribute("url.path", request.url.path)
+        if request.url.query:
+            span.set_attribute("url.query", request.url.query)
+        host = request.headers.get("host")
+        if host:
+            span.set_attribute("server.address", host)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
+            span.set_attribute("http.response.status_code", 500)
+            _record_http_request_metrics(500, (time.perf_counter() - start) * 1000.0)
+            raise
+        span.set_attribute("http.response.status_code", response.status_code)
+        if response.status_code >= 500:
+            span.set_status(Status(StatusCode.ERROR, str(response.status_code)))
+        _record_http_request_metrics(
+            response.status_code, (time.perf_counter() - start) * 1000.0
+        )
+        return response
 
 
 # 2. Global Exception Handlers (RFC-7807 Problem Details)

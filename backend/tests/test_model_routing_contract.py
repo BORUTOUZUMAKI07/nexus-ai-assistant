@@ -173,3 +173,36 @@ def test_config_defaults_all_resolve_to_a_deployed_group():
         assert lc.resolve_model_group(value) in GROUPS, (
             f"{setting_name}={value!r} does not resolve to a deployed group"
         )
+
+
+# ── the free fallback layer ──────────────────────────────────────────────────
+
+
+def test_the_answer_groups_fall_back_to_gemini_free():
+    """Every free text layer can fail at once; one group has to survive that.
+
+    Groq is denied at the egress under some VPNs, OpenRouter's
+    ``free-models-per-day`` cap is account-wide and can be exhausted, and the
+    larger free Gemini slug (``vision_analysis``) 503s under demand. Without
+    ``gemini_free`` in these chains a text-only request has no reachable group --
+    the request fails even though a free provider is answering. The chain is code,
+    so this reads ``router.fallbacks`` rather than trusting the comment above it.
+    """
+    by_group = {
+        next(iter(entry)): next(iter(entry.values())) for entry in lc.router.fallbacks
+    }
+    for group in ("fast_chat", "complex_reasoning", "large_context", "vision_analysis"):
+        assert "gemini_free" in by_group[group], (
+            f"{group} no longer falls back to gemini_free; the free fallback layer "
+            f"has no reachable provider when Groq and OpenRouter both fail"
+        )
+
+
+def test_gemini_free_runs_the_available_free_slug():
+    """`gemini_free` is only useful if it runs the slug that actually answers.
+
+    It exists because ``gemini-3.5-flash`` returns 503 under load while
+    ``gemini-3.5-flash-lite`` keeps serving, so pinning the group to the wrong
+    slug silently makes the whole fallback layer dead again.
+    """
+    assert _model_of("gemini_free") == "gemini/gemini-3.5-flash-lite"

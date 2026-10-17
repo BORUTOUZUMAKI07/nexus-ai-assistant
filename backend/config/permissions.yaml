@@ -63,6 +63,31 @@ tools:
       - execution_time_exceeds_20s
     required_roles: ["user", "admin", "moderator"]
 
+  # The gateway is dispatched the names below, not `code_interpreter`, so the
+  # ladder has to know them or `check_permission` falls through to "not in the
+  # automatic list" -> *always* requires approval (which made the conditional
+  # rung unreachable and the approval card impossible to trigger). Same policy
+  # as `code_interpreter`: automatic unless the code trips a condition.
+  execute_python:
+    description: "Execute Python code in the sandbox (gateway name for code_interpreter)"
+    mode: "automatic"
+    timeout_seconds: 30
+    requires_approval_if:
+      - contains_system_commands
+      - contains_socket_calls
+      - execution_time_exceeds_20s
+    required_roles: ["user", "admin", "moderator"]
+
+  execute_python_code:
+    description: "Execute Python code in the sandbox (MCP name for code_interpreter)"
+    mode: "automatic"
+    timeout_seconds: 30
+    requires_approval_if:
+      - contains_system_commands
+      - contains_socket_calls
+      - execution_time_exceeds_20s
+    required_roles: ["user", "admin", "moderator"]
+
   database_query:
     description: "Execute read-only SQL queries against user data"
     mode: "automatic"

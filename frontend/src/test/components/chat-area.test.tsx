@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { render, screen, fireEvent } from "@/test/test-utils"
+import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { ChatArea } from "@/components/ChatArea"
 
 describe("ChatArea", () => {
@@ -81,6 +81,36 @@ describe("ChatArea", () => {
     expect(screen.getByText("Nexus is working…")).toBeInTheDocument()
   })
 
+  it("labels an in-flight but still-empty assistant bubble as Thinking", () => {
+    render(
+      <ChatArea
+        messages={[{ id: "a2", role: "assistant" as const, content: "" }]}
+        isLoading={true}
+      />
+    )
+    expect(screen.getByText("Thinking…")).toBeInTheDocument()
+    expect(screen.queryByText("Writing…")).not.toBeInTheDocument()
+  })
+
+  it("labels a streaming assistant bubble with content as Writing", () => {
+    render(
+      <ChatArea
+        messages={[{ id: "a3", role: "assistant" as const, content: "Once upon a" }]}
+        isLoading={true}
+      />
+    )
+    // The label switches on the same piece of state the answer itself uses, so
+    // the two cannot disagree about whether tokens have started landing.
+    expect(screen.getByText("Writing…")).toBeInTheDocument()
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument()
+  })
+
+  it("does not label a finished assistant message as still writing", () => {
+    render(<ChatArea messages={[assistant]} isLoading={false} />)
+    expect(screen.queryByText("Writing…")).not.toBeInTheDocument()
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument()
+  })
+
   it("renders the pending plan review card with approve/reject/dismiss", () => {
     const plan = {
       id: "plan-1",
@@ -134,6 +164,89 @@ describe("ChatArea", () => {
     expect(onRejectPlan).toHaveBeenCalledWith(plan)
     fireEvent.click(screen.getByText("Dismiss"))
     expect(onDismissPlan).toHaveBeenCalledTimes(1)
+  })
+
+  it("renders the HITL approval card for a parked high-impact action", () => {
+    // The card is the whole point of HITL from the user's side: the backend can
+    // park the run and persist the request, but if this block is missing the
+    // user sees a finished-looking turn with the action silently skipped.
+    render(
+      <ChatArea
+        messages={[]}
+        isLoading={false}
+        pendingHITL={{
+          thread_id: "conv-1",
+          request: "The agent wants to run a shell command with os.system.",
+          tool_name: "execute_python",
+          arguments: { code: "import os; os.system('ls')" },
+        }}
+        onResolveHITL={vi.fn()}
+      />
+    )
+    expect(screen.getByText("Human Approval Required (Harness Layer 3)")).toBeInTheDocument()
+    expect(
+      screen.getByText("The agent wants to run a shell command with os.system.")
+    ).toBeInTheDocument()
+    expect(screen.getByText("execute_python")).toBeInTheDocument()
+    expect(screen.getByText("High-Impact Action")).toBeInTheDocument()
+    expect(screen.getByText("Approve & Continue")).toBeInTheDocument()
+    expect(screen.getByText("Reject")).toBeInTheDocument()
+    expect(screen.getByText("Modify…")).toBeInTheDocument()
+  })
+
+  it("fires onResolveHITL and retires the card once the decision lands", async () => {
+    const onResolveHITL = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ChatArea
+        messages={[]}
+        isLoading={false}
+        pendingHITL={{
+          thread_id: "conv-1",
+          request: "Approve running the command?",
+          tool_name: "execute_python",
+        }}
+        onResolveHITL={onResolveHITL}
+      />
+    )
+    fireEvent.click(screen.getByText("Approve & Continue"))
+    expect(onResolveHITL).toHaveBeenCalledWith("approve", undefined)
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Human Approval Required (Harness Layer 3)")
+      ).not.toBeInTheDocument()
+    )
+  })
+
+  it("keeps the approval card when the resolve fails, so the decision is not lost", async () => {
+    // A failed submit must NOT retire the card. The hook re-throws precisely so
+    // this component can tell failure from success; if the card collapsed here
+    // the user would be left with an error and no Approve/Reject UI -- the same
+    // "looks finished but produced nothing" hole the card exists to close.
+    // Load-bearing: with the hook swallowing the error (no throw), `setResolved`
+    // runs and the card is gone, so this assertion fails.
+    const onResolveHITL = vi
+      .fn()
+      .mockRejectedValue(new Error("HITL feedback failed: 500"))
+    render(
+      <ChatArea
+        messages={[]}
+        isLoading={false}
+        pendingHITL={{
+          thread_id: "conv-1",
+          request: "Approve running the command?",
+          tool_name: "execute_python",
+        }}
+        onResolveHITL={onResolveHITL}
+      />
+    )
+    fireEvent.click(screen.getByText("Approve & Continue"))
+    await waitFor(() =>
+      expect(onResolveHITL).toHaveBeenCalledWith("approve", undefined)
+    )
+    expect(
+      screen.getByText("Human Approval Required (Harness Layer 3)")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Approve & Continue")).toBeInTheDocument()
   })
 
   it("shows a Save button on detected code artifacts and wires onSaveArtifact", () => {

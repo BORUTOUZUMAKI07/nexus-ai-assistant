@@ -41,8 +41,9 @@ from backend.app.core.logging import bind_request_context, clear_request_context
 from backend.app.core.spend import clear_spend_meter
 from backend.app.domain.run.service import RunService
 from backend.app.domain.usage.schemas import UsageLogCreate
-from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.infrastructure.ai.litellm_client import ai_client, resolve_provider
 from backend.app.infrastructure.database.session import async_session_factory
+from backend.app.services.byok import bind_byok_keys, load_user_byok_keys, reset_byok_keys
 from backend.app.services.conversation_service import ConversationService
 from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.observability.cost_tracking import cost_tracking_service
@@ -56,6 +57,24 @@ logger = structlog.get_logger(__name__)
 # Tool output is echoed to the client and stored in the log; an unbounded result
 # would bloat every replay of the run.
 TOOL_OUTPUT_LIMIT = 2000
+
+# Frame types a node may emit mid-run through `get_stream_writer()`. The
+# synthesizer writes `text_delta` pieces of its finished answer; the rest are
+# forwarded if a node ever writes them. One set, referenced by both the
+# custom-stream branch and the (dead, but kept) `on_custom_event` branch, so the
+# two cannot disagree about what is deliverable.
+_MID_RUN_FRAME_TYPES = frozenset(
+    {
+        "text_delta",
+        "thinking",
+        "status",
+        "thought",
+        "citation",
+        "hitl_request",
+        "elicitation_request",
+        "error",
+    }
+)
 
 # Strong references to in-flight run tasks. asyncio only holds a weak reference,
 # so a task nobody keeps can be garbage collected mid-run — which, for a task
@@ -128,13 +147,27 @@ async def execute_run(
     # request that started the run, and the clears below cannot be skipped by a
     # client disconnecting — nothing in the request owns this state any more.
     bind_request_context(conversation_id=str(conversation_id), user_id=str(user_id), mode=mode)
+    # BYOK: resolve the user's stored provider keys once for the whole run and
+    # bind them for its duration. Bound here rather than in the request for the
+    # same reason the spend meter is: the run outlives the response, and a key
+    # bound in the request would be gone by the time the graph actually runs.
+    # Fail-open -- a lookup failure must never cost the user their answer.
+    _byok_token = None
     try:
+        try:
+            async with session_factory() as _byok_session:
+                _byok_token = bind_byok_keys(
+                    await load_user_byok_keys(_byok_session, user_id)
+                )
+        except Exception as exc:
+            logger.warning(
+                "byok_bind_failed", run_id=str(run_id), error_type=type(exc).__name__
+            )
         async with trace_span(
             "agentic_stream",
             {"thread_id": config["configurable"]["thread_id"], "mode": mode, "user_id": str(user_id)},
         ):
             try:
-                await writer.emit({"type": "status", "phase": "starting"})
                 async for frame, is_text in iter_graph_frames(
                     graph, config=config, graph_input=graph_input
                 ):
@@ -250,6 +283,10 @@ async def execute_run(
         # A spend meter left bound keeps charging the next run served by this
         # task and, once exhausted, silently disables the ceiling for it too.
         clear_spend_meter()
+        # A BYOK key left bound would be used for the next run served by this
+        # task -- a credential leak, not just a stale value.
+        if _byok_token is not None:
+            reset_byok_keys(_byok_token)
 
 
 async def _terminate(
@@ -299,6 +336,25 @@ async def _terminate(
         await on_finish()
 
 
+def _is_assistant_output(message: Any) -> bool:
+    """Whether a message in a node's state delta is the model's own output.
+
+    A node's ``on_chain_end``/``on_chain_stream`` carries its *state update*, and
+    ``bootstrap``'s update includes the user's own message. Streaming that as the
+    reply is how a run that pauses before the synthesizer -- a HITL interrupt --
+    persisted the prompt back to the user as though it were the answer (observed
+    live: an approval run left an assistant message repeating the request).
+
+    This is a denylist of the roles that are *input*, not output. A LangChain
+    message that declares none of them -- and a bare test double with no ``.type``
+    at all, which is what the fallback was written against -- counts as the
+    model's output. An allowlist would have to name every assistant-shaped type
+    (``AIMessageChunk`` is one) and would silently stop streaming the answer the
+    day a new one appears.
+    """
+    return getattr(message, "type", None) not in ("human", "user", "system", "tool", "function")
+
+
 async def iter_graph_frames(
     graph: Any, *, config: dict[str, Any], graph_input: dict[str, Any]
 ) -> AsyncIterator[tuple[dict[str, Any], bool]]:
@@ -332,28 +388,37 @@ async def iter_graph_frames(
     package, at langgraph/pregel/_retry.py:312, as an idle-timer touch handler on
     an internal scope class. A handler written against the tutorials is dead code
     that reads correct. The branch below that matches on it is retained only for
-    the payloads a compatible graph may still deliver, and it is unreachable from
-    this call as written — see the note below on why the call asks for nothing.
+    a compatible graph that still delivers the older name; the live path is the
+    root `on_chain_stream` handled just after it.
 
-    The hazard that remains if custom streaming is ever switched on: the payload
-    arrives as an `on_chain_stream`, which is the branch immediately below. It
-    looks for ``chunk["messages"]``, finds none, and no-ops -- right by accident,
-    not by design. So a mid-run event added without the root-name check produces
-    no error and reaches no user.
+    That branch looks for ``chunk["messages"]`` first, so a custom payload -- a
+    dict with a ``type`` and no ``messages`` -- would no-op there by accident.
+    The custom-payload check therefore runs *before* the ``messages`` fallback,
+    because with ``stream_mode="custom"`` the root run's ``on_chain_stream``
+    carries the payload while every node's own ``on_chain_stream`` still carries
+    its state delta. Both are plain dicts at that branch; only the shape tells
+    them apart.
 
     Our own critique/quality/artifact frames are unaffected: they are read
     post-run via ``aget_state`` and built by ``finished_run_payloads``, never
     streamed mid-run.
 
-    To add a mid-run event: pass ``stream_mode="custom"`` (string, not list),
-    match on ``event.get("name") == "LangGraph"``, and discriminate on the
-    chunk's own shape.
+    To add a mid-run event: write it with ``get_stream_writer()``, keep the
+    call's ``stream_mode="custom"`` (string, not list -- the list form delivers
+    nothing), and add its ``type`` to ``_MID_RUN_FRAME_TYPES``.
     """
     _streamed_tokens = False
     async for event in graph.astream_events(
         input=graph_input,
         config=config,
         version="v2",
+        # Custom streams are opt-in and must be requested in STRING form. This
+        # is what delivers the synthesizer's progressive `text_delta` frames to
+        # the client; without it those writes are silently dropped. The list
+        # form `["custom"]` is the trap -- it subscribes to nothing, and a typo
+        # suppresses the root deltas too (tests/test_stream_custom_event_trap.py
+        # measures both, one variable at a time).
+        stream_mode="custom",
     ):
         kind = event.get("event")
 
@@ -364,13 +429,31 @@ async def iter_graph_frames(
                 yield {"type": "text_delta", "content": chunk.content}, True
 
         elif kind in ("on_chain_stream", "on_chain_end"):
+            data = event.get("data", {})
+            chunk = data.get("chunk") or data.get("output")
+
+            # A writer payload arrives as an `on_chain_stream` on the ROOT run
+            # when custom streaming is on. It is discriminated by its own shape
+            # (a node's state delta and a frame are both plain dicts here). A
+            # `text_delta` flips `_streamed_tokens`, so the `messages` fallback
+            # below cannot re-emit the answer it already streamed.
+            if (
+                kind == "on_chain_stream"
+                and event.get("name") == "LangGraph"
+                and isinstance(chunk, dict)
+                and chunk.get("type") in _MID_RUN_FRAME_TYPES
+            ):
+                is_text = chunk.get("type") == "text_delta"
+                if is_text:
+                    _streamed_tokens = True
+                yield chunk, is_text
+                continue
+
             # Fallback for nodes that do not stream token-by-token (the ToT node
             # is the known one). The flag flip below is not optional: without it
             # every later node's on_chain_end re-appends the same final message,
             # which is a bug this function shipped with once already.
             if not _streamed_tokens:
-                data = event.get("data", {})
-                chunk = data.get("chunk") or data.get("output")
                 if isinstance(chunk, dict):
                     msgs = chunk.get("messages")
                     if msgs:
@@ -379,6 +462,7 @@ async def iter_graph_frames(
                             hasattr(last, "content")
                             and isinstance(last.content, str)
                             and last.content
+                            and _is_assistant_output(last)
                         ):
                             _streamed_tokens = True
                             yield {"type": "text_delta", "content": last.content}, True
@@ -387,41 +471,35 @@ async def iter_graph_frames(
             tool_input = event.get("data", {}).get("input", {})
             run_ref = event.get("run_id")
             tool_name = event.get("name")
+            # One frame per invocation. This previously *also* emitted an AG-UI
+            # `TOOL_CALL_START` alias carrying the same call; no client reads it
+            # (the BFF understands `tool_call`/`tool_result`, and nothing here
+            # speaks AG-UI), so it was silently dropped at the translator — the
+            # exact "event nobody translates" failure AGENTS.md §2 names. The
+            # BFF cannot translate it without pushing a second `tool_call`
+            # annotation for the same invocation (the client has no dedup), so
+            # the honest fix is to not emit it.
             yield {
                 "type": "tool_call",
                 "tool_name": tool_name,
                 "tool_input": tool_input,
                 "tool_call_id": run_ref,
             }, False
-            yield {
-                "type": "status",
-                "phase": "tool_call_start",
-                "tool": tool_name,
-                "tool_call_id": run_ref,
-            }, False
 
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output")
             run_ref = event.get("run_id")
-            tool_name = event.get("name")
             trimmed = str(output)[:TOOL_OUTPUT_LIMIT] if output else None
             yield {
                 "type": "tool_result",
                 "tool_call_id": run_ref,
                 "result": trimmed,
             }, False
-            yield {
-                "type": "status",
-                "phase": "tool_call_end",
-                "tool": tool_name,
-                "tool_call_id": run_ref,
-            }, False
 
         elif kind == "on_custom_event":
             name = event.get("name", "")
-            data = event.get("data", {})
-            if name in ("citation", "thinking", "hitl_request", "elicitation_request", "error", "text_delta", "status", "thought"):
-                yield {"type": name, **data}, name == "text_delta"
+            if name in _MID_RUN_FRAME_TYPES:
+                yield {"type": name, **event.get("data", {})}, name == "text_delta"
 
 
 async def _post_run_frames(graph: Any, config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -453,6 +531,13 @@ async def _post_run_frames(graph: Any, config: dict[str, Any]) -> list[dict[str,
         # -- and so the run log holds them, which is what makes a *rejoin* able
         # to restore a citation panel rather than a bare answer.
         frames.extend(citation_payloads(snapshot.values))
+
+        # Which model produced the answer. Reported from the checkpoint rather
+        # than the model group the request asked for, so a provider fallback is
+        # visible in the transcript instead of hidden behind the picker's label.
+        answer_model = snapshot.values.get("answer_model")
+        if answer_model:
+            frames.append({"type": "model_info", "model": str(answer_model)})
 
     if snapshot is not None and getattr(snapshot, "next", None):
         # LangGraph stores interrupts on snapshot.tasks[].interrupts (the
@@ -503,6 +588,34 @@ async def _run_citations(graph: Any, config: dict[str, Any]) -> list[dict[str, A
     return citation_payloads(values) if values else []
 
 
+def _message_text(message: Any) -> str:
+    """Flatten a message's ``content`` to text.
+
+    ``content`` is a plain string for text turns and a list of parts for a
+    multimodal turn (vision). ``" ".join(...)`` over the raw list raised
+    ``TypeError: sequence item 0: expected str instance, list found``, which
+    ``_persist_reply``'s broad ``except`` swallowed -- so *every* vision run
+    persisted no assistant message, no usage row and no cost row, and the
+    reloaded transcript silently dropped the answer. Text parts (and bare
+    strings) are joined; non-text parts such as ``image_url`` contribute
+    nothing to the token estimate.
+    """
+    raw = message.get("content", "") if isinstance(message, dict) else message
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):
+        parts: list[str] = []
+        for part in raw:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+        return " ".join(parts)
+    return "" if raw is None else str(raw)
+
+
 async def _persist_reply(
     *,
     conversation_id: UUID,
@@ -529,10 +642,7 @@ async def _persist_reply(
         async with session_factory() as session:
             conv_svc = ConversationService(session)
             usage_svc = UsageService(session)
-            prompt_text = " ".join(
-                m.get("content", "") if isinstance(m, dict) else str(m)
-                for m in user_messages
-            )
+            prompt_text = " ".join(_message_text(m) for m in user_messages)
             prompt_tok = ai_client.count_tokens(prompt_text, settings.DEFAULT_MODEL)
             comp_tok = ai_client.count_tokens(emitted_text, settings.DEFAULT_MODEL)
             cost_usd = cost_tracking_service.calculate_cost(
@@ -540,8 +650,7 @@ async def _persist_reply(
             )
             last_user = ""
             if user_messages:
-                last = user_messages[-1]
-                last_user = last.get("content", "") if isinstance(last, dict) else str(last)
+                last_user = _message_text(user_messages[-1])
             quality = quality_service.evaluate_response_quality(
                 last_user, emitted_text, prompt_tok + comp_tok, latency_ms
             )
@@ -560,15 +669,20 @@ async def _persist_reply(
                 citations=citations or [],
                 tool_calls=tool_calls or [],
             )
-            await usage_svc._repo.log_usage(
+            await usage_svc.log_usage(
                 UsageLogCreate(
                     user_id=user_id,
                     org_id=org_id,
                     conversation_id=conversation_id,
                     message_id=assistant_msg.id,
                     model=settings.DEFAULT_MODEL,
+                    provider=resolve_provider(settings.DEFAULT_MODEL),
                     prompt_tokens=prompt_tok,
                     completion_tokens=comp_tok,
+                    # The non-stream path passes `duration_ms` here; omitting it
+                    # left every streamed run at 0, which is why
+                    # `average_latency_ms` read 0 for them. `latency_ms` is in
+                    # scope on the call above (`evaluate_response_quality`).
                     latency_ms=latency_ms,
                     cost_usd=cost_usd,
                     metadata_json={"quality": quality},
@@ -579,7 +693,7 @@ async def _persist_reply(
                 user_id=user_id,
                 org_id=org_id,
                 model=settings.DEFAULT_MODEL,
-                provider="groq",
+                provider=resolve_provider(settings.DEFAULT_MODEL),
                 prompt_tokens=prompt_tok,
                 completion_tokens=comp_tok,
             )

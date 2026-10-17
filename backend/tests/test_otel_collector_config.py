@@ -23,11 +23,19 @@ where the rejection happens, and the GARBAGE row is what proves the file
 really was read. A guard built on `validate` would have passed against the
 precise defect it was written for.
 
-Two tests, deliberately different in strength:
+Four tests, deliberately different in strength:
 
 * `test_every_resource_attribute_declares_an_action` — static, needs no
   Docker, and names the missing field. It still guards a machine with no
   daemon at all.
+* `test_collector_hardening_is_wired` — static: pins the features that are
+  invisible when reverted (basicauth on the public receiver, the file-backed
+  durable sending queue, `service.version`, gzip on the exporter, and metrics
+  over OTLP rather than a Prometheus scrape).
+* `test_tail_sampling_keeps_errors_and_a_sample_of_the_rest` — static: the
+  quota guard. `UNSET` is a healthy span's default status, so listing it keeps
+  nearly every trace and `sample-rest` then drops nothing, shipping the whole
+  trace stream to the free-tier sink silently.
 * `test_the_collector_really_builds_the_tracked_config` — starts the pinned
   image on the tracked file and waits for readiness. This asks the collector
   itself instead of asserting the shape a repo test claims it wants
@@ -175,6 +183,127 @@ def test_every_resource_attribute_declares_an_action() -> None:
         )
 
 
+def test_collector_hardening_is_wired() -> None:
+    """The features that are invisible when reverted are pinned structurally.
+
+    A dropped durable queue still forwards telemetry while the sink is up; a
+    removed auth block still starts the collector. Neither produces a red test
+    at runtime, so the shape has to be asserted here (AGENTS.md §2). Static, so
+    it names the missing piece with no Docker involved.
+    """
+    config = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    extensions = config.get("extensions") or {}
+    service_extensions = config.get("service", {}).get("extensions") or []
+
+    # 1. The public OTLP receiver is behind basic auth.
+    assert "basicauth/server" in extensions, (
+        "extensions.basicauth/server is missing; the OTLP receiver is a public "
+        "endpoint on Render and would accept unauthenticated writes"
+    )
+    http_protocol = (
+        ((config.get("receivers") or {}).get("otlp") or {})
+        .get("protocols", {})
+        .get("http", {})
+    )
+    assert (http_protocol.get("auth") or {}).get("authenticator") == "basicauth/server", (
+        "receivers.otlp.protocols.http.auth.authenticator must name "
+        "basicauth/server, or the extension above enforces nothing"
+    )
+    assert "basicauth/server" in service_extensions, (
+        "basicauth/server must be listed in service.extensions to be loaded"
+    )
+
+    # 2. The New Relic exporter has a durable, file-backed sending queue.
+    newrelic = (config.get("exporters") or {}).get("otlphttp/newrelic") or {}
+    queue = newrelic.get("sending_queue") or {}
+    assert queue.get("enabled") is True, (
+        "exporters.otlphttp/newrelic.sending_queue.enabled must be true so a "
+        "New Relic outage buffers instead of dropping telemetry"
+    )
+    assert queue.get("storage") == "file_storage", (
+        "the sending queue must be backed by file_storage to survive a restart"
+    )
+    assert "file_storage" in extensions and "file_storage" in service_extensions, (
+        "file_storage must be declared in extensions and loaded in service.extensions"
+    )
+
+    # 3. service.version stamps every signal, so a release is identifiable.
+    attributes = ((config.get("processors") or {}).get("resource") or {}).get("attributes") or []
+    keys = {entry.get("key") for entry in attributes}
+    assert "service.version" in keys, (
+        "processors.resource.attributes must set service.version"
+    )
+
+    # 4. Compress the payload. Free-tier egress is metered, and an uncompressed
+    # OTLP body is several times larger for identical spans; dropping this is
+    # invisible while the sink still accepts the uncompressed stream.
+    assert newrelic.get("compression") == "gzip", (
+        "exporters.otlphttp/newrelic.compression must be gzip — otherwise the "
+        "same telemetry costs several times the free-tier bandwidth"
+    )
+
+    # 5. Metrics arrive over OTLP, not a Prometheus scrape. This pins the
+    # deliberate migration: reverting to the prometheus receiver silently
+    # restores the per-worker undercount and the public scrape target.
+    metrics = config.get("service", {}).get("pipelines", {}).get("metrics") or {}
+    assert "otlp" in (metrics.get("receivers") or []), (
+        "the metrics pipeline must use the otlp receiver"
+    )
+    assert "prometheus" not in (metrics.get("receivers") or []), (
+        "the metrics pipeline must not use the prometheus receiver"
+    )
+
+
+def test_tail_sampling_keeps_errors_and_a_sample_of_the_rest() -> None:
+    """The quota guard: the error policy must NOT match every healthy span.
+
+    ``status_code`` accepts ``OK``/``ERROR``/``UNSET``, and ``UNSET`` is the
+    default status of a span that simply succeeded. Listing it makes the policy
+    match nearly every trace, so the collector keeps them all and
+    ``sample-rest`` never drops anything — the ENTIRE trace stream ships to the
+    (free-tier) sink, silently. Naming only ``ERROR`` is what makes "errors +
+    ~10% of the rest" true, and the latency policy keeps the slow traces a
+    healthy status would otherwise hide. Static, so it runs with no daemon.
+    """
+    config = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    policies = {
+        policy["name"]: policy
+        for policy in config["processors"]["tail_sampling"]["policies"]
+    }
+
+    errors = policies["keep-all-errors"]
+    assert errors["type"] == "status_code"
+    assert errors["status_code"]["status_codes"] == ["ERROR"], (
+        "the status_code policy must list only ERROR: UNSET is the default "
+        "status of a healthy span, so [ERROR, UNSET] matches almost every "
+        "trace and silently disables the probabilistic sampling of the rest"
+    )
+
+    slow = policies["keep-slow"]
+    assert slow["type"] == "latency"
+    assert slow["latency"]["threshold_ms"] == 2000, (
+        "the latency policy must keep traces slower than 2s — a healthy status "
+        "would otherwise let a slow-but-successful trace be dropped"
+    )
+
+    rest = policies["sample-rest"]
+    assert rest["type"] == "probabilistic"
+    assert rest["probabilistic"]["sampling_percentage"] == 10, (
+        "sample-rest is the fraction that actually reaches the free-tier sink"
+    )
+
+    # Tail sampling buffers whole traces, so it belongs on the traces pipeline
+    # only: logs and metrics have no trace to sample, and attaching it there is
+    # a configuration error.
+    pipelines = config["service"]["pipelines"]
+    assert "tail_sampling" in pipelines["traces"]["processors"]
+    for name in ("logs", "metrics"):
+        assert "tail_sampling" not in pipelines[name]["processors"], (
+            f"{name} has no trace to sample; attaching tail_sampling there is a "
+            "configuration error"
+        )
+
+
 def test_the_collector_really_builds_the_tracked_config() -> None:
     """The integration half: the collector itself accepts the tracked config.
 
@@ -193,16 +322,24 @@ def test_the_collector_really_builds_the_tracked_config() -> None:
             name,
             "-v",
             f"{COLLECTOR_CONFIG}:/etc/otelcol-contrib/config.yaml",
+            # file_storage's directory must exist and be writable by the
+            # collector's non-root uid (10001). The distroless image has no
+            # writable /tmp, so mount a world-writable tmpfs at the tracked
+            # path — the same ownership a fresh docker named volume inherits
+            # from docker/otel-collector.Dockerfile in a real deployment.
+            "--tmpfs",
+            "/var/lib/otelcol/storage:rw,mode=1777",
             # The config reads these via ${env:...}. An unset *name* is an
             # error for the collector, so they are supplied exactly as
-            # docker-compose.yml supplies them — including the empty token,
-            # which its own comment documents as correct for local dev.
+            # docker-compose.yml supplies them.
             "-e",
             "ENVIRONMENT=development",
             "-e",
-            "METRICS_TOKEN=",
+            "SERVICE_VERSION=dev",
             "-e",
-            "METRICS_SCRAPE_TARGET=host.docker.internal:8000",
+            "OTLP_AUTH_USER=nexus",
+            "-e",
+            "OTLP_AUTH_PASSWORD=nexus",
             "-e",
             "NEW_RELIC_LICENSE_KEY=not-set",
             IMAGE,

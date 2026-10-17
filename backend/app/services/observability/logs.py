@@ -14,8 +14,9 @@ Deliberately safe (same fail-open discipline as the rest of the stack):
 * Export problems never affect logging — a broken collector drops telemetry,
   not log lines.
 
-``/metrics`` remains the in-process source of truth (the collector scrapes it);
-traces remain LangSmith's job. This module only carries logs.
+``/metrics`` remains a local debug view; the collector no longer scrapes it.
+Metrics and traces travel over OTLP too (see ``otel.py``). This module carries
+logs; LangSmith remains the LLM/agent trace view.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from typing import Any
 
 import structlog
 from backend.app.core.config import settings
+from backend.app.services.observability.otel import otlp_auth_headers
 
 logger = structlog.get_logger(__name__)
 
@@ -61,7 +63,9 @@ def setup_otlp_log_handler(log_level: int = logging.INFO) -> logging.Handler | N
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.resources import Resource
 
-        exporter = OTLPLogExporter(endpoint=endpoint, timeout=10)
+        exporter = OTLPLogExporter(
+            endpoint=endpoint, timeout=10, headers=otlp_auth_headers()
+        )
         processor = BatchLogRecordProcessor(
             exporter,
             schedule_delay_millis=settings.NEW_RELIC_EXPORT_INTERVAL_SECONDS * 1000,
@@ -70,7 +74,8 @@ def setup_otlp_log_handler(log_level: int = logging.INFO) -> logging.Handler | N
             resource=Resource.create(
                 {
                     "service.name": settings.PROJECT_NAME,
-                    "environment": settings.ENVIRONMENT,
+                    "service.version": settings.SERVICE_VERSION,
+                    "deployment.environment": settings.ENVIRONMENT,
                 }
             )
         )

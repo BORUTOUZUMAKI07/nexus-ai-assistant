@@ -33,7 +33,7 @@ class TokenRefresh(BaseModel):
     refresh_token: str = Field(min_length=1, max_length=4096)
 
 
-# ── OAuth / SSO (Google + GitHub) ─────────────────────────────────────────
+# ── OAuth / OAuth (Google + GitHub) ─────────────────────────────────────────
 
 class OAuthCallbackRequest(BaseModel):
     """The authorization-code leg of the per-provider OAuth callback."""
@@ -43,7 +43,7 @@ class OAuthCallbackRequest(BaseModel):
 
 
 class OAuthLoginResponse(BaseModel):
-    """The browser must follow ``authorization_url`` to sign in with SSO."""
+    """The browser must follow ``authorization_url`` to sign in with OAuth."""
 
     authorization_url: str
     state: str
@@ -51,7 +51,7 @@ class OAuthLoginResponse(BaseModel):
 
 
 class OAuthProviderInfo(BaseModel):
-    """One SSO provider, and whether this deployment can actually use it.
+    """One OAuth provider, and whether this deployment can actually use it.
 
     ``configured`` is about *this server*, not about the provider: a provider
     with no client id/secret registered cannot complete a login here, so
@@ -63,7 +63,7 @@ class OAuthProviderInfo(BaseModel):
 
 
 class OAuthProvidersResponse(BaseModel):
-    """Every registered SSO provider and its usability.
+    """Every registered OAuth provider and its usability.
 
     The sign-in page needs this to decide which buttons to render. Guessing is
     the failure mode worth avoiding: a hardcoded list means a deployment with

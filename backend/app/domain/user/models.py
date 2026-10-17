@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Float, Index, Text, text
+from sqlalchemy import Float, Index, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlmodel import Column, Field, SQLModel
 
@@ -36,7 +36,7 @@ class User(SQLModel, table=True):
     is_active: bool = Field(default=True)
     is_verified: bool = Field(default=False)
     role: str = Field(default="user", description="user | admin | moderator")
-    # SSO linkage. ``oauth_sub`` is the provider's stable per-account identifier
+    # OAuth linkage. ``oauth_sub`` is the provider's stable per-account identifier
     # (OIDC ``sub``) and is the ONLY trustworthy join key: an email claim can be
     # reassigned or recycled by the provider, a subject id cannot. The pair
     # (provider, sub) is unique so one IdP account maps to exactly one user.
@@ -101,7 +101,10 @@ class UserMemory(SQLModel, table=True):
 
 class APIKey(SQLModel, table=True):
     __tablename__ = "api_keys"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = (
+        UniqueConstraint("user_id", "provider", name="uq_api_key_user_provider"),
+        {"extend_existing": True},
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True, nullable=False)

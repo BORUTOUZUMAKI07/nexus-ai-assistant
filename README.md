@@ -18,7 +18,7 @@ failures.
               ┌─────▼─────┐   ┌──────────────┐   ┌───────────────┐   ▼              │
               │ Postgres  │   │ Qdrant       │   │ Redis         │  Agents          │
               │ pgvector  │   │ hybrid vector│   │ cache/queue   │  (plan → route → │
-              │ 35 tables │   │ (dense+sparse)│  │ + rate limit  │   research/code →│
+              │ 38 tables │   │ (dense+sparse)│  │ + rate limit  │   research/code →│
               └───────────┘   └──────────────┘   └───────────────┘   synthesize)    │
                                                                       └──────────────┘
 ```
@@ -28,7 +28,7 @@ failures.
 | Path | What it is |
 |---|---|
 | `backend/` | FastAPI app — domain/services/API layers, LangGraph orchestrator, RAG, Celery workers, Alembic migrations. `uv sync`-managed. |
-| `frontend/` | Next.js 16.3.4 App Router app — chat UI, plan review, artifact canvas, admin + settings views. BFF route handlers proxy the API. |
+| `frontend/` | Next.js 16.4.2 App Router app — chat UI, plan review, artifact canvas, admin + settings views. BFF route handlers proxy the API. |
 | `docs/` | Architecture, API reference, deployment guide, SLOs, alerting rules, runbooks, user guide, keyboard shortcuts. |
 | `.github/workflows/` | CI (`ci.yml`), nightly security + full test suites (`nightly.yml`), release (`release.yml`). |
 | `Makefile` | Infra / migrate / run / test targets (see below). |

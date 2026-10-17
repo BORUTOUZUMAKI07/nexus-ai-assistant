@@ -234,6 +234,50 @@ describe("/api/chat SSE translation", () => {
     }
   })
 
+  it("translates a backend hitl_request into a hitl_request annotation", async () => {
+    // HITL's second integration point. The backend parks the run and writes the
+    // frame to the run log; this route is what turns it into the annotation the
+    // hook reads. With no branch here the run looks finished, the flagged action
+    // is silently skipped, and no test on either side of the proxy notices --
+    // the exact AGENTS.md §2 failure this file exists to prevent.
+    const restore = stubBackend(
+      'data: {"type":"hitl_request","thread_id":"conv-1","tool_name":"execute_python","arguments":{"code":"import os"},"reason":"runs a shell command"}\n\n'
+    )
+    try {
+      const POST = await chatRoute()
+      const res = await POST(request(), {})
+      const ann = await annotation(res)
+      expect(ann.type).toBe("hitl_request")
+      const data = ann.data as Record<string, unknown>
+      expect(data.thread_id).toBe("conv-1")
+      expect(data.tool_name).toBe("execute_python")
+      expect(data.arguments).toEqual({ code: "import os" })
+      expect(data.request).toBe("runs a shell command")
+    } finally {
+      restore()
+    }
+  })
+
+  it("builds a readable request from the parked node when the backend sends no reason", async () => {
+    // The fallback is what makes the card legible for an interrupt whose payload
+    // predates `reason`. It keys off `state.next`, which is why the executor must
+    // include it on the frame.
+    const restore = stubBackend(
+      'data: {"type":"hitl_request","thread_id":"conv-1","state":{"next":["approval"]}}\n\n'
+    )
+    try {
+      const POST = await chatRoute()
+      const res = await POST(request(), {})
+      const ann = await annotation(res)
+      const data = ann.data as Record<string, unknown>
+      expect(data.request).toBe(
+        'The agent is waiting for your approval before continuing with "approval".'
+      )
+    } finally {
+      restore()
+    }
+  })
+
   it("emits a lead-in byte before any frame so the headers flush when the response opens", async () => {
     // Next only flushes the response headers on the body's first write
     // (next/dist/server/pipe-readable.js: "we don't actually flush the headers

@@ -177,7 +177,17 @@ function translateFrame(
   }
 
   if (eventType === "error") {
-    return `3:${JSON.stringify(parsed.message)}\n`;
+    const errorMsg = parsed.message ?? parsed.error ?? "An error occurred";
+    return `3:${JSON.stringify(errorMsg)}\n`;
+  }
+
+  if (eventType === "model_info" && typeof parsed.model === "string") {
+    // The model that actually answered, read from the run checkpoint. Carried
+    // to the transcript so a provider fallback shows the real model instead of
+    // the group the picker asked for.
+    return `8:${JSON.stringify([
+      { type: "model_info", data: { model: parsed.model } },
+    ])}\n`;
   }
 
   if (eventType === "done" && parsed.thread_id) {
@@ -298,11 +308,13 @@ export async function POST(req: NextRequest) {
     messages,
     conversationId,
     mode = "normal",
+    model,
     planPreamble,
   } = body as {
     messages?: unknown;
     conversationId?: unknown;
     mode?: unknown;
+    model?: unknown;
     planPreamble?: unknown;
   };
 
@@ -364,8 +376,14 @@ export async function POST(req: NextRequest) {
         messages,
         mode: streamMode,
         stream: true,
+        ...(typeof model === "string" && model ? { model } : {}),
+        // The hook speaks camelCase to this route; the backend's
+        // StreamChatRequest is `extra="forbid"` and calls the field
+        // `plan_preamble`. Forwarding the JS spelling put an unexpected key
+        // on the wire, so approving a plan answered 422 and the approved task
+        // never executed.
         ...(typeof planPreamble === "string" && planPreamble
-          ? { planPreamble }
+          ? { plan_preamble: planPreamble }
           : {}),
       }),
       signal: upstreamSignal,

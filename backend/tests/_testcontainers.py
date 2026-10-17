@@ -15,7 +15,6 @@ from __future__ import annotations
 import os
 import threading
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
@@ -161,11 +160,3 @@ async def init_db_schema(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
         await conn.run_sync(SQLModel.metadata.create_all)
-
-
-async def truncate_all(engine: AsyncEngine) -> None:
-    """Empty every table (used between sessions / for hygiene)."""
-    async with engine.begin() as conn:
-        tables = [t.name for t in SQLModel.metadata.sorted_tables]
-        if tables:
-            await conn.execute(text(f'TRUNCATE TABLE {", ".join(tables)} RESTART IDENTITY CASCADE'))

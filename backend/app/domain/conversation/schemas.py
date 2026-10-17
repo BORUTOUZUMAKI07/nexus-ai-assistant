@@ -1,6 +1,7 @@
 """
 Pydantic Schemas for Conversation Domain (Pydantic V2 Standard).
 """
+import uuid
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -68,6 +69,7 @@ class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     is_pinned: bool | None = None
     is_archived: bool | None = None
+    project_id: uuid.UUID | None = None
     system_prompt: str | None = Field(default=None, max_length=20000)
     model: str | None = Field(default=None, max_length=128)
 
@@ -79,6 +81,7 @@ class ConversationResponse(BaseModel):
     user_id: UUID
     title: str
     model: str
+    project_id: UUID | None = None
     is_pinned: bool
     is_archived: bool
     token_count: int
@@ -94,5 +97,36 @@ class ConversationDetailResponse(ConversationResponse):
 class BranchCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    fork_message_id: UUID
+    # Optional. A turn that was streamed live carries a client-side `msg-<ts>`
+    # id until the transcript is reloaded from the server, so the client often
+    # cannot name a message UUID here; omitting it forks at the latest message,
+    # which is the only fork point the UI offers. See
+    # `ConversationRepository.fork_conversation` for the resolution and the
+    # membership check that keeps a foreign id from reaching the branch FK.
+    fork_message_id: UUID | None = None
     branch_name: str = Field(min_length=1, max_length=120)
+
+
+class ProjectCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class ProjectUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class ProjectResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    name: str
+    description: str | None = None
+    created_at: datetime
+    updated_at: datetime

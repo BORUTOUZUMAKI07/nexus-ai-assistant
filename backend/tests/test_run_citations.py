@@ -343,8 +343,9 @@ def _tool_event(name: str = "web_search", **kw: Any) -> dict[str, Any]:
     """The frame `iter_graph_frames` yields for a tool invocation.
 
     Shaped from the source rather than from memory: `on_tool_start` produces a
-    `tool_call` frame carrying `tool_name`, `tool_input` and `tool_call_id`, and
-    the same invocation also appears under the AG-UI `TOOL_CALL_START` alias.
+    single `tool_call` frame carrying `tool_name`, `tool_input` and
+    `tool_call_id`. (It used to emit an AG-UI `TOOL_CALL_START` alias as well;
+    nothing consumed it, so it was removed.)
     """
     return {
         "event": "on_tool_start",
@@ -384,7 +385,9 @@ class _StreamingGraph:
         self.fail_after = fail_after
         self.state_reads = 0
 
-    async def astream_events(self, input: Any, config: Any = None, version: Any = None):
+    async def astream_events(
+        self, input: Any, config: Any = None, version: Any = None, stream_mode: Any = None
+    ):
         for i, event in enumerate(self.events):
             if self.fail_after is not None and i >= self.fail_after:
                 raise RuntimeError("the model gave up")

@@ -46,7 +46,10 @@ services:
 
   # ── Qdrant (Vector + Hybrid search) ────────────────────────────────────────
   qdrant:
-    image: qdrant/qdrant:v1.9.1
+    # Pinned to the qdrant-client version in backend/pyproject.toml (1.19.0).
+    # The client uses the `/points/query` API, which 404s on pre-1.10 servers,
+    # so this must track the client's minor version.
+    image: qdrant/qdrant:v1.19.0
     container_name: nexus_qdrant
     ports:
       - "6333:6333"   # REST API
@@ -56,34 +59,49 @@ services:
     environment:
       QDRANT__TELEMETRY_DISABLED: "true"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:6333/health || exit 1"]
+      # The qdrant image ships neither curl nor wget, so the old `curl -f`
+      # probe could never pass and the container reported "unhealthy" while
+      # serving normally. bash is present, and its /dev/tcp redirection is a
+      # dependency-free liveness check (tests that the REST port accepts).
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
 
   # ── Layer-2: OpenTelemetry Collector (observability transport agent) ──────
-  # Receives the app's OTLP logs on :4318, tail-samples, batches, and forwards
-  # to New Relic (Layer-3 sink) using NEW_RELIC_LICENSE_KEY. It also scrapes
-  # the app's /metrics — the app runs on the HOST in dev, so the agent reaches
-  # it via host.docker.internal (extra_hosts host-gateway). See
+  # Receives the app's OTLP logs, metrics and traces on :4318, tail-samples,
+  # batches, and forwards them to New Relic (Layer-3 sink) using
+  # NEW_RELIC_LICENSE_KEY. The receiver requires HTTP basic auth
+  # (OTLP_AUTH_USER/PASSWORD), which the app also sends. See
   # docker/otel-collector-config.yaml for the full flow. Set before starting
-  # (PowerShell):  $env:NEW_RELIC_LICENSE_KEY = "xxxx"
+  # (PowerShell):
+  #   $env:NEW_RELIC_LICENSE_KEY = "xxxx"
+  #   $env:OTLP_AUTH_USER = "nexus"; $env:OTLP_AUTH_PASSWORD = "a-real-secret"
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.121.0
+    build:
+      context: ./docker
+      dockerfile: otel-collector.Dockerfile
+    image: nexus-otel-collector:local
     container_name: nexus_otel_collector
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
       - ./docker/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      # Durable queue for file_storage. It MUST be the image built from
+      # docker/otel-collector.Dockerfile (not the upstream pull): that image
+      # pre-creates /var/lib/otelcol/storage owned by the collector uid (10001),
+      # and a fresh named volume inherits that ownership. Against the upstream
+      # image the volume is root-owned and the collector exits at startup with
+      # `open .../exporter_otlphttp_newrelic_logs: permission denied`.
+      - otel_storage:/var/lib/otelcol/storage
     environment:
       - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY:-not-set}
-      - ENVIRONMENT=development
-      - METRICS_TOKEN=${METRICS_TOKEN:-}
-      - METRICS_SCRAPE_TARGET=${METRICS_SCRAPE_TARGET:-host.docker.internal:8000}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - SERVICE_VERSION=${SERVICE_VERSION:-dev}
+      - OTLP_AUTH_USER=${OTLP_AUTH_USER:-nexus}
+      - OTLP_AUTH_PASSWORD=${OTLP_AUTH_PASSWORD:-nexus}
     ports:
-      - "4317:4317"   # OTLP/gRPC (optional)
-      - "4318:4318"   # OTLP/HTTP — what the app pushes logs to
+      - "4317:4317"   # OTLP/gRPC
+      - "4318:4318"   # OTLP/HTTP — what the app pushes logs/metrics/traces to
       - "8888:8888"   # collector self-metrics
       - "13133:13133" # /healthz
 
@@ -91,3 +109,4 @@ volumes:
   postgres_data:
   redis_data:
   qdrant_data:
+  otel_storage:

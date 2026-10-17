@@ -3,9 +3,11 @@ Authentication API Router.
 Pure HTTP transport layer — delegates all auth use cases to AuthService (SRP + DIP).
 """
 import time
+from urllib.parse import quote
 
 import structlog
 from backend.app.api.deps import get_auth_service, get_current_user, get_db, get_oauth_service
+from backend.app.core.config import settings
 from backend.app.core.exceptions import AuthenticationError, UserAlreadyExistsError
 from backend.app.core.security import decode_token
 from backend.app.domain.user.models import User
@@ -28,9 +30,10 @@ from backend.app.domain.user.schemas import (
 from backend.app.infrastructure.cache.redis_client import get_cache_service, redis_service
 from backend.app.infrastructure.resilience.rate_limit import rate_limit_anon
 from backend.app.services.auth_service import AuthService
-from backend.app.services.oauth_service import OAuthService, SSOProviderRegistry
+from backend.app.services.oauth_service import OAuthProviderRegistry, OAuthService
 from backend.app.services.two_factor_service import TwoFactorService
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordRequestForm
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -237,8 +240,10 @@ async def two_factor_status(
 @router.post("/verify-email", response_model=UserResponse)
 async def verify_email(
     body: VerifyEmailRequest,
+    request: Request,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
+    await _enforce_auth_rate_limit(request, action="verify_email", limit=10)
     try:
         return await auth_svc.verify_email(body.token)
     except AuthenticationError as exc:
@@ -257,9 +262,11 @@ async def resend_verification(
 @router.post("/forgot-password")
 async def forgot_password(
     body: ForgotPasswordRequest,
+    request: Request,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
     """Issues + emails a reset token. Returns the same envelope for known/unknown emails."""
+    await _enforce_auth_rate_limit(request, action="forgot_password", limit=5)
     result = await auth_svc.initiate_password_reset(body.email)
     return result
 
@@ -267,15 +274,17 @@ async def forgot_password(
 @router.post("/reset-password", response_model=UserResponse)
 async def reset_password(
     body: ResetPasswordRequest,
+    request: Request,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
+    await _enforce_auth_rate_limit(request, action="reset_password", limit=5)
     try:
         return await auth_svc.reset_password(body.token, body.new_password)
     except AuthenticationError as exc:
         raise HTTPException(status_code=400, detail=exc.message)
 
 
-# ─── OAuth / SSO (Google + GitHub) ─────────────────────────────────────────
+# ─── OAuth / OAuth (Google + GitHub) ─────────────────────────────────────────
 # Authorization Code + PKCE, one adapter per provider. GET /oauth/{provider}
 # returns the provider authorize URL; POST /oauth/{provider}/callback accepts
 # the code the provider hands back (the frontend proxy performs the exchange
@@ -287,16 +296,16 @@ async def reset_password(
 # the request for `/oauth/providers` is captured by the parameterised route and
 # answered with the "not configured" 404 for a provider named "providers". That
 # is a silently dead endpoint -- the sign-in page would get a 404 and fall back
-# to showing no SSO buttons, which looks identical to SSO being unconfigured.
+# to showing no OAuth buttons, which looks identical to OAuth being unconfigured.
 @router.get("/oauth/providers", response_model=OAuthProvidersResponse)
 async def oauth_providers() -> OAuthProvidersResponse:
-    """Which SSO providers this deployment can actually complete a login with.
+    """Which OAuth providers this deployment can actually complete a login with.
 
     Unauthenticated by necessity: the sign-in page has no session yet, and that
     is the only time it needs this. The response reveals only provider names and
     a boolean, so there is nothing here for an unauthenticated caller to abuse.
     """
-    return OAuthProvidersResponse(providers=SSOProviderRegistry.describe_providers())
+    return OAuthProvidersResponse(providers=OAuthProviderRegistry.describe_providers())
 
 
 @router.get("/oauth/{provider}", response_model=OAuthLoginResponse)
@@ -330,6 +339,66 @@ async def oauth_callback(
     await _enforce_auth_rate_limit(request, action="oauth_callback", limit=20)
     try:
         identity = await oauth_svc.complete_login(body.code, body.state)
-        return await auth_svc.sso_login(identity)
+        return await auth_svc.oauth_login(identity)
     except AuthenticationError as exc:
         raise HTTPException(status_code=400, detail=exc.message)
+
+
+@router.get("/oauth/{provider}/callback")
+async def oauth_callback_browser(
+    request: Request,
+    provider: str,
+    code: str = "",
+    state: str = "",
+    auth_svc: AuthService = Depends(get_auth_service),
+    oauth_svc: OAuthService = Depends(get_oauth_service),
+):
+    """
+    Direct browser callback from IdPs (Google/GitHub redirect URI target).
+    Exchanges code + state, sets httpOnly session cookies, and redirects to /app.
+    """
+    if not oauth_svc.enabled:
+        raise HTTPException(status_code=404, detail="OAuth single sign-on is not configured.")
+    # Where the browser lands after the callback. Never hardcode the dev origin:
+    # a deployed instance would send every OAuth user to localhost:3000.
+    frontend_origin = (settings.APP_PUBLIC_URL or "http://localhost:3000").rstrip("/")
+    if not code or not state:
+        return RedirectResponse(
+            url=f"{frontend_origin}/signin?error=oauth_missing_params", status_code=302
+        )
+
+    await _enforce_auth_rate_limit(request, action="oauth_callback", limit=20)
+    try:
+        identity = await oauth_svc.complete_login(code, state)
+        res = await auth_svc.oauth_login(identity)
+        if isinstance(res, TwoFactorChallengeResponse):
+            return RedirectResponse(url=f"{frontend_origin}/signin?oauth=2fa", status_code=302)
+
+        response = RedirectResponse(url=f"{frontend_origin}/app", status_code=302)
+        is_prod = settings.ENVIRONMENT == "production"
+        response.set_cookie(
+            key="nexus_access_token",
+            value=res.access_token,
+            max_age=res.expires_in or 3600,
+            path="/",
+            httponly=True,
+            secure=is_prod,
+            samesite="lax",
+        )
+        if res.refresh_token:
+            response.set_cookie(
+                key="nexus_refresh_token",
+                value=res.refresh_token,
+                max_age=res.refresh_expires_in or 2592000,
+                path="/",
+                httponly=True,
+                secure=is_prod,
+                samesite="lax",
+            )
+        return response
+    except AuthenticationError as exc:
+        # `quote`, not raw interpolation: the message contains spaces and `.`,
+        # and a raw space in a Location header is not a valid URI.
+        return RedirectResponse(
+            url=f"{frontend_origin}/signin?error={quote(exc.message)}", status_code=302
+        )

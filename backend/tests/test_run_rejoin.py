@@ -50,6 +50,7 @@ from backend.app.services.run_log import (
     RunWriter,
     tail_run,
 )
+from langchain_core.messages import AIMessage, HumanMessage
 
 from tests.fakes import (
     FakeResult,
@@ -304,10 +305,11 @@ async def test_flushing_an_empty_buffer_does_not_touch_the_database(session_fact
     assert store.commits == 0
 
 
-async def test_a_broken_database_is_retried_once_then_dropped_rather_than_forever(broker):
-    """Two failures drop the batch; an unbounded retry buffer would be a memory
-    leak with a delayed fuse that only manifests while the database is unhealthy
-    — exactly when the run is already at risk."""
+async def test_a_broken_database_is_retried_then_dropped_rather_than_forever(broker):
+    """Every attempt failing drops the batch; an unbounded retry buffer would be
+    a memory leak with a delayed fuse that only manifests while the database is
+    unhealthy — exactly when the run is already at risk. The count is pinned so
+    "bounded" stays true rather than becoming "a lot"."""
     attempts = {"n": 0}
 
     def exploding_session_factory():
@@ -320,8 +322,39 @@ async def test_a_broken_database_is_retried_once_then_dropped_rather_than_foreve
     )
     await writer.emit({"type": "text_delta", "content": "a"})
 
-    assert attempts["n"] == 2, "exactly one retry: two attempts in total"
+    assert attempts["n"] == 3, "three bounded attempts, not an unbounded loop"
     assert writer.dropped == 1, "the batch must be dropped, not queued forever"
+
+
+async def test_a_transient_flush_failure_recovers_without_dropping(broker, store):
+    """One bad connection is retried, not thrown away.
+
+    Regression origin: a live run dropped a frame to ``ConnectionDoesNotExistError``
+    followed by ``OSError`` because both attempts fired within a millisecond of
+    each other. Retrying with no delay is one attempt written twice; the backoff
+    is what makes the second one able to succeed.
+    """
+    calls = {"n": 0}
+
+    def real_factory():
+        return FakeRunSession(store)
+
+    def flaky_session_factory():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("connection reset")
+        return real_factory()
+
+    writer = RunWriter(
+        run_id=uuid4(), broker=broker, session_factory=flaky_session_factory,
+        flush_interval=0.0, batch_size=10,
+    )
+    await writer.emit({"type": "text_delta", "content": "recovered"})
+
+    assert calls["n"] == 2, "the retry must actually reconnect"
+    assert writer.persisted == 1
+    assert writer.dropped == 0
+    assert len(store.events) == 1
 
 
 async def test_a_frame_still_reaches_subscribers_when_the_database_is_down(broker):
@@ -603,8 +636,10 @@ class FakeGraph:
         self.events = events
         self.seen: list[dict] = []
 
-    async def astream_events(self, input, config=None, version=None):
-        self.seen.append({"input": input, "config": config, "version": version})
+    async def astream_events(self, input, config=None, version=None, stream_mode=None):
+        self.seen.append(
+            {"input": input, "config": config, "version": version, "stream_mode": stream_mode}
+        )
         for event in self.events:
             yield event
 
@@ -660,17 +695,18 @@ async def test_the_frame_sequence_is_unchanged_by_the_refactor():
         "text_delta",            # "Hello"
         "text_delta",            # " there"
         "tool_call",
-        "TOOL_CALL_START",
         "tool_result",
-        "TOOL_CALL_COMPLETE",
         "citation",
         # "not_forwarded" is absent: only the six named custom events are relayed.
+        # The AG-UI `TOOL_CALL_START`/`TOOL_CALL_COMPLETE` aliases are gone too:
+        # nothing consumed them and the BFF dropped them, so each invocation is
+        # now exactly one `tool_call` frame and one `tool_result` frame.
     ]
     assert frames[0] == {"type": "text_delta", "content": "Hello"}
     assert frames[2]["tool_call_id"] == "r1"
     assert frames[2]["tool_input"] == {"q": "x"}
-    assert frames[4]["result"] == "found"
-    assert frames[6] == {"type": "citation", "source": "s1"}
+    assert frames[3]["result"] == "found"
+    assert frames[4] == {"type": "citation", "source": "s1"}
 
 
 async def test_a_custom_text_delta_event_is_marked_as_text():
@@ -704,6 +740,110 @@ async def test_the_non_streaming_fallback_still_emits_the_final_message():
         )
     ]
     assert pairs == [({"type": "text_delta", "content": "Hello there"}, True)]
+
+
+async def test_a_user_message_in_a_state_delta_is_not_streamed_as_the_answer():
+    """A node's state delta can carry the *user's* message, not the model's.
+
+    ``bootstrap``'s update includes the prompt, and the fallback fires whenever
+    no token stream arrived -- which is exactly the case for a run that pauses at
+    the HITL interrupt before the synthesizer. Without the role guard the prompt
+    was streamed and persisted as the assistant's reply (observed live: an
+    approval run left an assistant message repeating the user's request).
+    """
+    event = {
+        "event": "on_chain_end",
+        "name": "bootstrap",
+        "data": {"output": {"messages": [HumanMessage(content="run os.system")]}},
+    }
+    pairs = [
+        pair
+        async for pair in iter_graph_frames(FakeGraph([event]), config=CONFIG, graph_input={})
+    ]
+    assert pairs == []
+
+
+async def test_a_real_ai_message_in_a_state_delta_is_still_the_answer():
+    """The role guard must not suppress the case the fallback exists for."""
+    event = {
+        "event": "on_chain_end",
+        "name": "synthesizer",
+        "data": {"output": {"messages": [AIMessage(content="the answer")]}},
+    }
+    pairs = [
+        pair
+        async for pair in iter_graph_frames(FakeGraph([event]), config=CONFIG, graph_input={})
+    ]
+    assert pairs == [({"type": "text_delta", "content": "the answer"}, True)]
+
+
+async def test_the_stream_subscribes_to_custom_events_in_string_form():
+    """String, not list. `stream_mode=["custom"]` subscribes to nothing and
+    looks identical to a working subscription from the call site (AGENTS.md
+    9.23), so the form itself has to be asserted."""
+    graph = FakeGraph([])
+    async for _ in iter_graph_frames(graph, config=CONFIG, graph_input={}):
+        pass
+    assert graph.seen[0]["stream_mode"] == "custom"
+
+
+async def test_a_root_custom_text_delta_is_delivered_and_marks_the_reply_streamed():
+    """The synthesizer's progressive pieces arrive as a root `on_chain_stream`
+    whose `data["chunk"]` is the payload the writer was handed."""
+    event = {
+        "event": "on_chain_stream",
+        "name": "LangGraph",
+        "data": {"chunk": {"type": "text_delta", "content": "Hi"}},
+    }
+    pairs = [
+        pair
+        async for pair in iter_graph_frames(FakeGraph([event]), config=CONFIG, graph_input={})
+    ]
+    assert pairs == [({"type": "text_delta", "content": "Hi"}, True)]
+
+
+async def test_a_streamed_custom_delta_suppresses_the_full_message_fallback():
+    """The drip and the `on_chain_end` fallback describe the same answer.
+    Emitting both is the "answer three times" bug; the custom delta must win."""
+    events = [
+        {
+            "event": "on_chain_stream",
+            "name": "LangGraph",
+            "data": {"chunk": {"type": "text_delta", "content": "Hello"}},
+        },
+        {
+            "event": "on_chain_end",
+            "name": "synthesizer",
+            "data": {"output": {"messages": [_msg("Hello")]}},
+        },
+    ]
+    frames = [
+        frame
+        async for frame, _ in iter_graph_frames(FakeGraph(events), config=CONFIG, graph_input={})
+    ]
+    assert frames == [{"type": "text_delta", "content": "Hello"}]
+
+
+async def test_a_non_text_custom_frame_does_not_suppress_the_answer():
+    """`is_text_delta` decides whether the reply is accumulated, so a status
+    frame must be relayed without being mistaken for the answer and without
+    telling the executor the answer already arrived."""
+    events = [
+        {
+            "event": "on_chain_stream",
+            "name": "LangGraph",
+            "data": {"chunk": {"type": "thinking", "content": "composing"}},
+        },
+        GOLDEN_EVENTS[-1],  # on_chain_end synthesizer -> the full message
+    ]
+    pairs = [
+        pair
+        async for pair in iter_graph_frames(FakeGraph(events), config=CONFIG, graph_input={})
+    ]
+    assert pairs == [
+        ({"type": "thinking", "content": "composing"}, False),
+        ({"type": "text_delta", "content": "Hello there"}, True),
+    ]
 
 
 @pytest.fixture
@@ -860,6 +1000,60 @@ async def test_an_empty_answer_persists_no_message(session_factory, executor_env
         finished = await RunService(session).get_for_user(run.id, run.user_id)
     assert finished.status == "completed"
     assert executor_env["messages"] == []
+
+
+async def test_execute_run_binds_the_users_byok_key_for_the_graph(
+    monkeypatch, store, executor_env, broker
+):
+    """A stored BYOK key is in context for the whole run, and gone after.
+
+    The binding lives in the executor, not the request, because the run outlives
+    the response: a key bound in the request would be reset before the graph
+    (which a background task runs) ever made a model call. The second assertion
+    is the other half -- a key left bound is used for the *next* run served by
+    this task, a credential leak rather than merely a stale value.
+    """
+    from backend.app.core.security import encrypt_api_key
+    from backend.app.domain.user.models import APIKey as _APIKey
+    from backend.app.services.byok import byok_keys
+
+    user_id = uuid4()
+    key_row = _APIKey(
+        user_id=user_id,
+        provider="groq",
+        encrypted_key=encrypt_api_key("gsk-user-secret"),
+        key_preview="cret",
+    )
+
+    class _ByokSession(FakeRunSession):
+        """FakeRunSession that also answers the APIKey select the loader issues."""
+
+        async def exec(self, statement, *a, **k):
+            try:
+                entity = statement.column_descriptions[0].get("entity")
+            except Exception:
+                entity = None
+            if entity is _APIKey:
+                return FakeResult([key_row])
+            return await super().exec(statement, *a, **k)
+
+    def session_factory():
+        return _ByokSession(store)
+
+    seen: list[dict] = []
+
+    async def fake_iter(graph, *, config, graph_input):
+        seen.append(byok_keys())
+        if False:  # pragma: no cover - makes this an async generator
+            yield {}
+
+    monkeypatch.setattr(run_executor, "iter_graph_frames", fake_iter)
+
+    run = await _new_run(session_factory, user_id=user_id)
+    await _run_executor(session_factory, broker, run=run, graph=FakeGraph([]))
+
+    assert seen == [{"groq": "gsk-user-secret"}]
+    assert byok_keys() == {}
 
 
 async def test_the_slot_is_released_even_when_the_graph_fails(session_factory, executor_env, broker):
@@ -1048,6 +1242,128 @@ async def test_all_three_post_run_frames_survive_into_the_log(
     order = [e.payload["type"] for e in events]
     assert order.index("artifact") > order.index("quality")
     assert order.index("quality") < order.index("done")
+
+
+# A finished checkpoint that names the provider model that answered, alongside
+# the post-run values above.
+ANSWER_MODEL_VALUES = {**POST_RUN_VALUES, "answer_model": "groq/openai/gpt-oss-120b"}
+
+
+class StateWithAnswerModel(FakeGraph):
+    """A graph whose finished checkpoint reports which model actually answered."""
+
+    async def aget_state(self, config):
+        return SimpleNamespace(
+            values=ANSWER_MODEL_VALUES,
+            next=(),
+            tasks=[],
+            created_at="2026-10-04T00:00:00Z",
+        )
+
+
+async def test_a_model_info_frame_reports_the_model_that_answered(
+    session_factory, executor_env, broker
+):
+    """The transcript's model label comes from this frame and nowhere else.
+
+    ``run_executor._post_run_frames`` reads ``answer_model`` off the finished
+    checkpoint and appends a ``model_info`` payload. Without it the UI has only
+    the group the user picked, so a provider fallback (the case where the label
+    matters most) is invisible. The synthesizer writes ``answer_model``; this
+    pins that the executor surfaces it.
+    """
+    run = await _new_run(session_factory)
+    await _run_executor(
+        session_factory, broker, run=run, graph=StateWithAnswerModel(TWO_DELTAS)
+    )
+
+    async with session_factory() as session:
+        events = await RunService(session).events_after(run.id, 0)
+
+    by_type = {e.payload["type"]: e.payload for e in events}
+    assert "model_info" in by_type, [e.payload.get("type") for e in events]
+    assert by_type["model_info"] == {
+        "type": "model_info",
+        "model": ANSWER_MODEL_VALUES["answer_model"],
+    }
+    # Emitted before the terminal frame, so a client that stops reading at `done`
+    # still has the label.
+    assert [e.payload["type"] for e in events][-1] == "done"
+
+
+async def test_no_model_info_frame_when_the_checkpoint_names_no_model(
+    session_factory, executor_env, broker
+):
+    """The frame is emitted only when there is a model to report.
+
+    ``POST_RUN_VALUES`` carries no ``answer_model`` -- a run whose state is
+    unreadable, or one that never reached the synthesizer, must not invent a
+    label. (The positive test above would still pass if the frame were emitted
+    unconditionally; this is the half that fails then.)
+    """
+    assert "answer_model" not in POST_RUN_VALUES
+
+    _, events = await _post_run_frames_on_the_wire(session_factory, broker)
+
+    assert "model_info" not in {e.payload["type"] for e in events}
+
+
+class StateInterrupted(FakeGraph):
+    """A graph parked on a HITL interrupt.
+
+    LangGraph keeps the pending interrupt on ``snapshot.tasks[].interrupts`` --
+    *not* on a ``__interrupt__`` values key -- and ``_post_run_frames`` is the
+    only place that reads it. Every other executor fixture left ``aget_state``
+    returning ``None``, so the ``hitl_request`` frame, which is the single thing
+    that makes an approval card appear at all, was never built in a test.
+    """
+
+    async def aget_state(self, config):
+        interrupt = SimpleNamespace(
+            value={
+                "tool_name": "execute_python",
+                "arguments": {"code": "import os; os.system('ls')"},
+                "reason": "runs a shell command",
+            }
+        )
+        return SimpleNamespace(
+            values={},
+            next=("approval",),
+            tasks=[SimpleNamespace(interrupts=[interrupt])],
+            created_at="2026-10-13T00:00:00Z",
+        )
+
+
+async def test_an_interrupted_run_persists_a_hitl_request_frame(
+    session_factory, executor_env, broker
+):
+    """The approval card exists only if this frame reaches the log.
+
+    The BFF translates ``hitl_request`` into an annotation and the hook turns
+    that into ``pendingHITL``; if the frame is missing the run finishes
+    "completed" with the flagged tool silently unexecuted and nothing to click.
+    This is the seam that had no test: ``test_hitl_approval.py`` covers the
+    graph-level interrupt, and the frontend covers rendering, but nothing asked
+    whether the *executor* surfaces the parked interrupt.
+    """
+    run = await _new_run(session_factory)
+    await _run_executor(session_factory, broker, run=run, graph=StateInterrupted([]))
+
+    async with session_factory() as session:
+        events = await RunService(session).events_after(run.id, 0)
+
+    by_type = {e.payload["type"]: e.payload for e in events}
+    assert "hitl_request" in by_type, [e.payload.get("type") for e in events]
+    frame = by_type["hitl_request"]
+    assert frame["thread_id"] == "t"
+    assert frame["tool_name"] == "execute_python"
+    assert frame["arguments"] == {"code": "import os; os.system('ls')"}
+    assert frame["reason"] == "runs a shell command"
+    # The parked node's name travels so the BFF can build a readable request.
+    assert frame["state"]["next"] == ["approval"]
+    # Emitted before the terminal frame, so a client that stops reading at `done`
+    # still has the card.
+    assert [e.payload["type"] for e in events][-1] == "done"
 
 
 async def test_a_replayed_post_run_frame_is_byte_identical_to_the_old_wire_format(

@@ -92,7 +92,7 @@ async def list_deliveries(
     ]
 
 
-@router.post("/{endpoint_id}/redeliver")
+@router.post("/{endpoint_id}/redeliver/{delivery_id}")
 async def redeliver(
     endpoint_id: UUID,
     delivery_id: UUID,

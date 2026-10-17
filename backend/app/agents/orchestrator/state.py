@@ -18,7 +18,7 @@ class AgentState(TypedDict):
     user_id: str
     conversation_id: str
     trace_id: str
-    mode: str  # normal | agent | code | research
+    mode: str  # normal | agent | code | research | fast
 
     # Context & Personalization
     system_prompt: str
@@ -41,6 +41,7 @@ class AgentState(TypedDict):
 
     # Tree of Thoughts & Grounding
     tot_candidates: list[str]
+    tot_synthesis: str
     citations: list[dict[str, Any]]
     evidence_score: float
     evidence_gate_passed: bool | None
@@ -84,3 +85,10 @@ class AgentState(TypedDict):
     artifact_version: int
     artifact_created: bool
     artifact_reason: str
+
+    # Model selection (user-facing picker). `model` is the caller's requested
+    # synthesis group (`fast_chat` / `complex_reasoning`), whitelisted before it
+    # reaches the router. `answer_model` is what actually answered, so the
+    # transcript can report a fallback instead of the label the user picked.
+    model: str | None
+    answer_model: str

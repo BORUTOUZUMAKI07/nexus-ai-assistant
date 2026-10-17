@@ -262,6 +262,77 @@ async def test_fork_copies_messages_up_to_fork_point(
 
 
 @pytest.mark.asyncio
+async def test_fork_without_a_fork_point_forks_at_the_latest_message(
+    client, user_auth_headers, db_session, test_user
+):
+    """An omitted fork point forks the whole conversation.
+
+    This is the shape the UI sends: a turn streamed live carries a client-side
+    `msg-<ts>` id, so the client cannot name a message UUID and omits the field.
+    It must be accepted and branch at the end, not rejected as a missing field.
+    """
+    repo = ConversationRepository(db_session)
+    parent = await repo.create(user_id=test_user.id, title="Live chat")
+    first = await repo.add_message(parent.id, "user", "q1")
+    second = await repo.add_message(
+        parent.id, "assistant", "a1", parent_message_id=first.id
+    )
+    await repo.add_message(parent.id, "user", "q2", parent_message_id=second.id)
+
+    resp = await client.post(
+        f"/api/v1/conversations/{parent.id}/fork",
+        json={"branch_name": "From the UI"},
+        headers=user_auth_headers,
+    )
+    assert resp.status_code == 200
+    branch = resp.json()
+    assert branch["id"] != parent.id
+
+    detail = await client.get(
+        f"/api/v1/conversations/{branch['id']}", headers=user_auth_headers
+    )
+    # Forked at the end, so every parent message is copied.
+    assert len(detail.json()["messages"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_fork_rejects_a_fork_point_that_is_not_in_the_conversation(
+    client, user_auth_headers, db_session, test_user
+):
+    """A foreign/nonexistent message id is a 400, not a branch-FK 500.
+
+    The branch link has a NOT NULL FK to `messages.id`; without the membership
+    check this would copy every message and then die on the FK insert.
+    """
+    repo = ConversationRepository(db_session)
+    parent = await repo.create(user_id=test_user.id, title="Parent")
+    await repo.add_message(parent.id, "user", "only")
+
+    resp = await client.post(
+        f"/api/v1/conversations/{parent.id}/fork",
+        json={"fork_message_id": str(uuid.uuid4()), "branch_name": "bad point"},
+        headers=user_auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_fork_rejects_an_empty_conversation(
+    client, user_auth_headers, db_session, test_user
+):
+    """Nothing to branch: an empty conversation cannot be forked."""
+    repo = ConversationRepository(db_session)
+    parent = await repo.create(user_id=test_user.id, title="Empty")
+
+    resp = await client.post(
+        f"/api/v1/conversations/{parent.id}/fork",
+        json={"branch_name": "no messages"},
+        headers=user_auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("query", ["?limit=0", "?limit=101", "?offset=-1", "?offset=1000001"])
 async def test_conversation_pagination_rejects_out_of_bounds(client, user_auth_headers, query):
     response = await client.get(f"/api/v1/conversations{query}", headers=user_auth_headers)

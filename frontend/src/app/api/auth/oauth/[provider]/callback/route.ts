@@ -5,6 +5,7 @@ import {
   REFRESH_TOKEN_MAX_AGE,
   TOKEN_COOKIE,
   authCookieOptions,
+  requestOrigin,
 } from "@/lib/auth";
 import { backendFetch } from "@/lib/proxy";
 
@@ -21,7 +22,7 @@ type Ctx = { params: Promise<{ provider: string }> };
  *
  * Degradations are deliberate and documented:
  *   * `2fa_required`  — TOTP-enabled accounts bounce to the password sign-in,
- *     which returns the same preauth challenge (the SSO page has no TOTP UI).
+ *     which returns the same preauth challenge (the OAuth page has no TOTP UI).
  *   * provider errors  — bounce to /signin with an `error` query so the page
  *     can render the message without ever leaking tokens to the browser.
  */
@@ -32,7 +33,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const state = searchParams.get("state") ?? "";
   if (!code || !state) {
     return NextResponse.redirect(
-      new URL("/signin?error=oauth_missing_params", req.url),
+      new URL("/signin?error=oauth_missing_params", requestOrigin(req)),
     );
   }
 
@@ -56,18 +57,18 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         ? data.detail
         : `oauth_callback_failed_${res.status}`;
     return NextResponse.redirect(
-      new URL(`/signin?error=${encodeURIComponent(detail)}`, req.url),
+      new URL(`/signin?error=${encodeURIComponent(detail)}`, requestOrigin(req)),
     );
   }
 
   if (data?.status === "2fa_required") {
     return NextResponse.redirect(
-      new URL("/signin?oauth=2fa", req.url),
+      new URL("/signin?oauth=2fa", requestOrigin(req)),
     );
   }
 
   if (data?.access_token) {
-    const response = NextResponse.redirect(new URL("/app", req.url));
+    const response = NextResponse.redirect(new URL("/app", requestOrigin(req)));
     const cookieOptions = authCookieOptions(req);
     response.cookies.set(TOKEN_COOKIE, String(data.access_token), {
       ...cookieOptions,
@@ -82,5 +83,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     return response;
   }
 
-  return NextResponse.redirect(new URL("/signin?error=oauth_no_token", req.url));
+  return NextResponse.redirect(
+    new URL("/signin?error=oauth_no_token", requestOrigin(req)),
+  );
 }

@@ -1,8 +1,12 @@
 # Service Level Objectives (SLOs)
 
-> Applies to the Nexus AI Assistant API (backend). Written for operators who
-> scrape `/metrics` into Prometheus and page from the rules in
-> [`docs/alerting/alert-rules.yml`](alerting/alert-rules.yml).
+> Applies to the Nexus AI Assistant API (backend). The metric families below
+> are emitted by the in-process `MetricsCollector` and reach the sink one of two
+> ways: **OTLP push** to the Layer-2 collector → New Relic (the deployed path —
+> see `docs/observability-deployment.md`), or a Prometheus **scrape** of
+> `/metrics` (the local/debug path). The alert rules in
+> [`docs/alerting/alert-rules.yml`](alerting/alert-rules.yml) use the same
+> family names on either path.
 
 ## 1. Objectives and SLI definitions
 

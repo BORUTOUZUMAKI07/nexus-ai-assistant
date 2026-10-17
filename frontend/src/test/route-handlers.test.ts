@@ -121,15 +121,23 @@ function loadRouteStatic(file: string): Promise<RouteModule> {
  * flags, some take multipart uploads -- so a bare { json } object throws
  * `TypeError: Invalid URL` and the route never gets exercised.
  */
-function nextRequest(route: string, search = "", body: unknown = { probe: "body" }) {
-  const url = `http://localhost${route}${search}`
+function nextRequest(
+  route: string,
+  search = "",
+  body: unknown = { probe: "body" },
+  // `url` reproduces the deployed server, where a route handler's request URL
+  // carries the *bound* host (0.0.0.0) rather than the browser's Host header;
+  // `headers` supplies that Host header.
+  overrides: { url?: string; headers?: Record<string, string> } = {},
+) {
+  const url = overrides.url ?? `http://localhost${route}${search}`
   const upload = new FormData()
   upload.set("file", new File(["audio-bytes"], "clip.wav", { type: "audio/wav" }))
   return {
     url,
     nextUrl: new URL(url),
     // /api/auth/logout derives cookie flags from the forwarded proto.
-    headers: new Headers({ "x-forwarded-proto": "https" }),
+    headers: new Headers({ "x-forwarded-proto": "https", ...overrides.headers }),
     cookies: new Map(),
     json: async () => body,
     formData: async () => upload,
@@ -198,11 +206,16 @@ interface BackendCall {
  * test instead of drifting unnoticed.
  */
 const EXCEPTIONS: Record<string, { backendPath?: string; directFetch?: boolean }> = {
-  // These need the raw response body (streaming, multipart), so they call
-  // fetch() directly instead of going through the proxy helpers.
+  // These need the raw response body (streaming, multipart, binary), so they
+  // call fetch() directly instead of going through the proxy helpers.
   "/api/chat": { directFetch: true },
   "/api/hitl": { directFetch: true },
   "/api/audio/transcribe": { directFetch: true },
+  // TTS returns audio bytes, not JSON, so proxyJson cannot carry it.
+  "/api/audio/speech": { directFetch: true },
+  // Image generation can outrun the shared helper's 30s JSON ceiling (the
+  // backend's own provider timeout is 60s), so it fetches directly.
+  "/api/images/generate": { directFetch: true },
 }
 
 /** True when the route is expected to bypass the proxy helpers. */
@@ -216,7 +229,13 @@ function isDirect(route: string) {
  * These are covered by dedicated tests below that assert both branches, so the
  * generic sweep skips them rather than papering over a missing call.
  */
-const SHORT_CIRCUITS = new Set(["/api/auth/oauth/[provider]/callback"])
+const SHORT_CIRCUITS = new Set([
+  "/api/auth/oauth/[provider]/callback",
+  // Pure re-export of the route above (`export { GET } from ".../oauth/..."`),
+  // so it short-circuits for exactly the same reason: with no code/state it
+  // redirects without forwarding, and its backend path is the oauth one.
+  "/api/auth/callback/[provider]",
+])
 
 /**
  * A body each route's own input validation will accept.
@@ -245,6 +264,9 @@ const SAMPLE_SEARCHES: Record<string, string> = {
   "/api/chat":
     "?runId=11111111-1111-4111-8111-111111111111" +
     "&conversationId=22222222-2222-4222-8222-222222222222",
+  // Speech rejects an empty `text` with a 400 before forwarding; a probe with
+  // no query would prove only that the validation works.
+  "/api/audio/speech": "?text=hello",
 }
 
 /**
@@ -539,6 +561,51 @@ describe("routes that short-circuit on bad input", () => {
     expect(res.headers.get("location")).toBe("http://localhost/app")
   })
 
+  it("the OAuth callback redirects to the browser's Host, not the bound 0.0.0.0", async () => {
+    // The deployed standalone server binds 0.0.0.0, so `request.url` is
+    // `http://0.0.0.0:3000/...` even though the browser is on `localhost`.
+    // Redirecting there is a different host, so the host-only session cookies
+    // just set on this response are never sent and sign-in appears broken.
+    const file = ROUTES.find((r) => r.route === "/api/auth/oauth/[provider]/callback")?.file
+    expect(file).toBeDefined()
+    const mod = await loadRoute(file!)
+    backendFetch.mockImplementation(async () =>
+      fakeBackendResponse(200, { access_token: "at", refresh_token: "rt", expires_in: 60 }),
+    )
+
+    const res = await mod.GET!(
+      nextRequest("/api/auth/oauth/[provider]/callback", "?code=abc&state=xyz", undefined, {
+        url: "http://0.0.0.0:3000/api/auth/oauth/[provider]/callback?code=abc&state=xyz",
+        headers: { host: "localhost:3000", "x-forwarded-proto": "http" },
+      }),
+      routeContext("/api/auth/oauth/[provider]/callback"),
+    )
+
+    expect(res.status).toBe(307)
+    expect(res.headers.get("location")).toBe("http://localhost:3000/app")
+    // It must not leak the bound host back to the browser.
+    expect(res.headers.get("location")).not.toContain("0.0.0.0")
+  })
+
+  it("the OAuth callback error redirect also uses the browser's Host", async () => {
+    const file = ROUTES.find((r) => r.route === "/api/auth/oauth/[provider]/callback")?.file
+    expect(file).toBeDefined()
+    const mod = await loadRoute(file!)
+
+    const res = await mod.GET!(
+      nextRequest("/api/auth/oauth/[provider]/callback", "", undefined, {
+        url: "http://0.0.0.0:3000/api/auth/oauth/[provider]/callback",
+        headers: { host: "nexus.example.com", "x-forwarded-proto": "https" },
+      }),
+      routeContext("/api/auth/oauth/[provider]/callback"),
+    )
+
+    expect(res.status).toBe(307)
+    expect(res.headers.get("location")).toBe(
+      "https://nexus.example.com/signin?error=oauth_missing_params",
+    )
+  })
+
   it("a POST relay with a malformed JSON body answers 400 without calling the backend", async () => {
     const file = ROUTES.find(
       (r) => r.route === "/api/admin/optimization/run",
@@ -558,6 +625,47 @@ describe("routes that short-circuit on bad input", () => {
     expect(res.status).toBe(400)
     await expect(res.json()).resolves.toEqual({ detail: "invalid_json_body" })
     expect(proxyJson).not.toHaveBeenCalled()
+  })
+})
+
+describe("the chat relay speaks the backend's field names, not the hook's", () => {
+  beforeEach(() => {
+    backendFetch.mockReset()
+    proxyJson.mockReset()
+    backendFetch.mockImplementation(async () => fakeBackendResponse())
+  })
+
+  it("forwards the approved-plan preamble as plan_preamble, not planPreamble", async () => {
+    // The hook sends `planPreamble` to this route; the backend's
+    // StreamChatRequest is `extra="forbid"` and names the field `plan_preamble`.
+    // Forwarding the camelCase spelling put an unexpected key on the wire, so
+    // every approved plan answered 422 and the approved task never ran -- with
+    // no red test, because the backend test constructs StreamChatRequest
+    // directly and never sees the wire name.
+    const file = ROUTES.find((r) => r.route === "/api/chat")?.file
+    expect(file).toBeDefined()
+    const mod = await loadRoute(file!)
+
+    const direct = captureDirectFetch()
+    try {
+      await mod.POST!(
+        nextRequest("/api/chat", "", {
+          messages: [{ role: "user", content: "organize lunch" }],
+          conversationId: "80604eba-a54f-498c-838a-a3e624816e5f",
+          mode: "agent",
+          planPreamble: "APPROVED PLAN - execute: 1. Do X",
+        }),
+        routeContext("/api/chat"),
+      )
+    } finally {
+      direct.restore()
+    }
+
+    expect(direct.seen).toHaveLength(1)
+    const body = JSON.parse(String(direct.seen[0].init.body)) as Record<string, unknown>
+    expect(body.plan_preamble).toBe("APPROVED PLAN - execute: 1. Do X")
+    // The exact key the backend rejects must not be sent.
+    expect(body).not.toHaveProperty("planPreamble")
   })
 })
 

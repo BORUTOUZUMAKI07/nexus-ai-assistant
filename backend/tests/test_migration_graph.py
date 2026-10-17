@@ -179,3 +179,96 @@ def test_rls_revision_is_reachable_from_head() -> None:
         "`rls_disabled_in_public` and `sensitive_columns_exposed` would still "
         "be reported by Supabase Shield"
     )
+
+
+def _declared_unique_constraints() -> dict[str, str]:
+    """Named ``UniqueConstraint`` in the models -> the file that declares it.
+
+    Read with `ast` rather than by importing: importing builds the SQLModel
+    metadata and needs a database URL, which would keep this out of the unit
+    suite (same reasoning as `_graph`).
+    """
+    declared: dict[str, str] = {}
+    for path in sorted((BACKEND / "app").rglob("models.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute):
+                called = func.attr
+            elif isinstance(func, ast.Name):
+                called = func.id
+            else:
+                continue
+            if not called.endswith("UniqueConstraint"):
+                continue
+            for kw in node.keywords:
+                if (
+                    kw.arg == "name"
+                    and isinstance(kw.value, ast.Constant)
+                    and isinstance(kw.value.value, str)
+                ):
+                    declared[kw.value.value] = str(path.relative_to(REPO))
+    return declared
+
+
+def _migration_string_constants() -> set[str]:
+    """String literals used in migration *code*, docstrings excluded.
+
+    Docstrings are excluded deliberately: `c2a1b2c3d4e5` names
+    `uq_run_events_run_id_seq` in its module docstring *and* creates it, so a
+    naive substring scan would keep passing after the `create_unique_constraint`
+    call was deleted -- the "passes for the wrong reason" shape this repo keeps
+    finding.
+    """
+    constants: set[str] = set()
+    for path in _revision_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        docstrings: set[int] = set()
+        for node in ast.walk(tree):
+            if isinstance(
+                node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                body = getattr(node, "body", [])
+                if (
+                    body
+                    and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)
+                ):
+                    docstrings.add(id(body[0].value))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and id(node) not in docstrings
+            ):
+                constants.add(node.value)
+    return constants
+
+
+def test_every_declared_unique_constraint_is_created_by_a_migration() -> None:
+    """A constraint the models declare but no revision creates is invisible.
+
+    ``create_all`` at startup only builds tables that do not exist, so adding a
+    ``UniqueConstraint`` to a model changes nothing on any database that already
+    has the table. The org-member and api-key constraints were added in
+    ``domain/org/models.py`` and ``domain/user/models.py`` with no revision,
+    which would have left them absent in production while a fresh test database
+    -- built by ``create_all`` from the current models -- had them, so no test
+    could have noticed.
+    """
+    declared = _declared_unique_constraints()
+    assert declared, "no named UniqueConstraint found under app/**/models.py"
+
+    constants = _migration_string_constants()
+    missing = {
+        name: origin for name, origin in declared.items() if name not in constants
+    }
+    assert not missing, (
+        f"UniqueConstraint(s) declared in models but created by no revision: "
+        f"{missing}. `create_all` does not alter existing tables, so these would "
+        "be missing on any database that already has the table. Add a revision "
+        "under backend/migrations/versions/ that creates them."
+    )

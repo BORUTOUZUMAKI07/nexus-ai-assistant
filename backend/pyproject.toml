@@ -12,7 +12,6 @@ dependencies = [
     "gunicorn>=22.0.0",
     "python-multipart>=0.0.9",
     "httpx>=0.27.0",
-    "aiofiles>=23.2.0",
     
     # Database & ORM
     "sqlmodel>=0.0.21",
@@ -55,16 +54,18 @@ dependencies = [
     "instructor>=1.3.0",
     "openai>=1.30.0",
     "anthropic>=0.28.0",
-    "tiktoken>=0.7.0",
     
     # Vector DB & Embeddings & RAG
-    "qdrant-client>=1.9.0",
-    "sentence-transformers>=3.0.0",
+    # [fastembed] extra: the local CPU fallback for embeddings in
+    # services/rag/retrieval.py. Without the extra the module is simply absent,
+    # so the "offline" fallback raised ModuleNotFoundError the moment
+    # GEMINI_API_KEY was unset. fastembed is ONNX-based (no torch); onnxruntime
+    # is already present via flashrank.
+    "qdrant-client[fastembed]>=1.9.0",
     "rank-bm25>=0.2.2",
     "flashrank>=0.2.0",
     "pymupdf>=1.24.0",
     "python-docx>=1.1.0",
-    "pillow>=10.4.0",
     
     # Sandboxing & Web Research
     "e2b-code-interpreter>=0.0.10",
@@ -85,7 +86,10 @@ dependencies = [
     "guardrails-ai>=0.5.0",
     # edge-tts: free, key-less TTS via Microsoft Edge neural voices (2026-09).
     # Dropped Minimax (needs paid credits). No provider key or billing needed.
-    "edge-tts>=6.1.0",
+    # >=7.3.0 is required, not merely newer: Microsoft moved the readaloud
+    # endpoint to the Sec-MS-GEC v2 handshake, and every earlier release gets a
+    # 403 on the WSS upgrade (verified: 7.2.8 -> 403, 7.3.1 -> audio bytes).
+    "edge-tts>=7.3.0",
     "structlog>=24.0.0",
     "sentry-sdk>=2.7.0",
     
@@ -96,9 +100,6 @@ dependencies = [
     "pydantic[email]>=2.7.0",
     "pydantic-settings>=2.3.0",
     "pyyaml>=6.0.1",
-    "tenacity>=8.3.0",
-    "cachetools>=5.3.0",
-    "msgspec>=0.18.0",
     "python-dotenv>=1.0.0",
 ]
 

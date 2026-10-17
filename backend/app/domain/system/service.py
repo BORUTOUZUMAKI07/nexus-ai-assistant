@@ -70,4 +70,4 @@ class SystemService:
     async def get_audit_logs(
         self, user_id: UUID | None = None, limit: int = 100, offset: int = 0
     ) -> list[AuditLog]:
-        return await self.repo.get_audit_logs(limit=limit, user_id=user_id)
+        return await self.repo.get_audit_logs(limit=limit, offset=offset, user_id=user_id)

@@ -61,11 +61,13 @@ class SystemRepository(BaseRepository[SystemConfig]):
         await self.session.refresh(db_audit)
         return db_audit
 
-    async def get_audit_logs(self, limit: int = 100, user_id: UUID | None = None) -> list[AuditLog]:
+    async def get_audit_logs(
+        self, limit: int = 100, offset: int = 0, user_id: UUID | None = None
+    ) -> list[AuditLog]:
         statement = select(AuditLog)
         if user_id:
             statement = statement.where(AuditLog.user_id == user_id)
-        statement = statement.order_by(AuditLog.created_at.desc()).limit(limit)
+        statement = statement.order_by(AuditLog.created_at.desc()).offset(offset).limit(limit)
         result = await self.session.exec(statement)
         return list(result.all())
 

@@ -6,6 +6,7 @@ import io
 
 import structlog
 from backend.app.api.deps import get_current_user
+from backend.app.core.config import settings
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.ai.litellm_client import ai_client, tts_media_type
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -39,15 +40,31 @@ async def transcribe_audio_endpoint(
         )
 
     try:
-        content = await file.read()
-        if not content:
+        content = await file.read(1024 * 1024)
+        chunks: list[bytes] = []
+        total = 0
+        max_audio_mb = settings.MAX_AUDIO_MB
+        max_bytes = max_audio_mb * 1024 * 1024
+        while True:
+            if not content:
+                break
+            if total + len(content) > max_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"Audio exceeds the {max_audio_mb}MB upload limit.",
+                )
+            total += len(content)
+            chunks.append(content)
+            content = await file.read(1024 * 1024)
+        file_bytes = b"".join(chunks)
+        if not file_bytes:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Empty audio recording received",
             )
 
         # LiteLLM/Groq expects a file-like object with a recognizable filename
-        buf = io.BytesIO(content)
+        buf = io.BytesIO(file_bytes)
         buf.name = filename
 
         transcription = await ai_client.transcribe_audio(buf)
@@ -89,7 +106,7 @@ async def synthesize_speech_endpoint(
     try:
         media_type = tts_media_type()
     except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     if not text.strip():
         raise HTTPException(status_code=400, detail="text must not be empty")
     if len(text) > 4000:
@@ -98,11 +115,16 @@ async def synthesize_speech_endpoint(
         audio_bytes = await ai_client.synthesize_speech(text.strip(), voice=voice)
     except RuntimeError as exc:
         raise HTTPException(status_code=501, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except Exception as exc:
-        logger.error("audio_synthesis_failed", user_id=str(current_user.id), error=str(exc))
+        err = str(exc)
+        logger.error("audio_synthesis_failed", user_id=str(current_user.id), error=err)
+        if "voice" in err.lower() or "tts" in err.lower() or "format" in err.lower():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Speech synthesis failed: {str(exc)}",
+            detail=f"Speech synthesis failed: {err}",
         )
     return Response(
         content=audio_bytes,

@@ -8,9 +8,8 @@ every structured call -- including the artifact classifier -- was invisible to
 import ast
 from pathlib import Path
 
-import pytest
-
 import backend.app.services.structured_output as so
+import pytest
 
 
 @pytest.mark.asyncio

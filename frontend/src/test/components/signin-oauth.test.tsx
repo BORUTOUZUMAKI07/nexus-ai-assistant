@@ -10,7 +10,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => routerMock,
 }))
 
-describe("Sign-in page SSO", () => {
+describe("Sign-in page OAuth", () => {
   const assign = vi.fn()
 
   beforeEach(() => {
@@ -35,7 +35,7 @@ describe("Sign-in page SSO", () => {
     const url = assign.mock.calls[0][0] as string
     expect(url.startsWith("https://idp.example/authorize?")).toBe(true)
     // The PKCE params come straight from the backend proxy handler.
-    expect(url).toContain("state=test-sso-state")
+    expect(url).toContain("state=test-oauth-state")
     expect(url).toContain("code_challenge_method=S256")
   })
 
@@ -50,7 +50,7 @@ describe("Sign-in page SSO", () => {
     expect(assign.mock.calls[0][0] as string).toContain("code_challenge_method=S256")
   })
 
-  it("surfaces an inline error when SSO is unconfigured", async () => {
+  it("surfaces an inline error when OAuth is unconfigured", async () => {
     // Override the MSW handler for this test: 404 = backend has no OAuth config.
     const { http, HttpResponse } = await import("msw")
     const { server } = await import("@/test/mocks/server")
@@ -58,7 +58,7 @@ describe("Sign-in page SSO", () => {
       // The literal path has to be re-declared above the catch-all. A
       // `:provider` override alone also captures `/providers` — `:provider`
       // matches the string "providers" — so the page would fetch a 404, treat
-      // it as "no SSO configured", and render no buttons at all. Same ordering
+      // it as "no OAuth configured", and render no buttons at all. Same ordering
       // rule as the app, for the same reason.
       http.get("/api/auth/oauth/providers", () =>
         HttpResponse.json({
@@ -114,7 +114,7 @@ describe("Sign-in page provider availability", () => {
    * once the page has actually called it.
    *
    * The handle is the point. Every "hides X" assertion below asserts an
-   * *absence*, and the SSO section is also absent while the list is still in
+   * *absence*, and the OAuth section is also absent while the list is still in
    * flight — so `waitFor(() => expect(queryByRole(...)).toBeNull())` succeeds on
    * its very first tick, before the response has even been requested. All five
    * of those tests passed against a page that rendered every provider
@@ -163,7 +163,7 @@ describe("Sign-in page provider availability", () => {
     expect(screen.queryByRole("button", { name: /continue with github/i })).toBeNull()
   })
 
-  it("hides the whole SSO section when nothing is configured", async () => {
+  it("hides the whole OAuth section when nothing is configured", async () => {
     const { served } = await mockProviders([
       { name: "google", configured: false },
       { name: "github", configured: false },
@@ -181,7 +181,7 @@ describe("Sign-in page provider availability", () => {
 
   it("hides the section when the provider list cannot be fetched", async () => {
     // Degradation choice: a sign-in page that cannot reach the server has not
-    // learned that SSO exists, and offering a button that will 404 is worse
+    // learned that OAuth exists, and offering a button that will 404 is worse
     // than offering none. Password login works either way.
     const { served } = await mockProviders(
       { detail: "backend_unavailable" },
@@ -205,7 +205,7 @@ describe("Sign-in page provider availability", () => {
     // proves nothing about the status check. A reverse proxy or CDN in front of
     // the backend is the case that bites: it can answer 502/503 while replaying
     // a cached 200 body, and that body *is* a valid provider list. Parsing it
-    // would offer SSO buttons on a response that reported failure.
+    // would offer OAuth buttons on a response that reported failure.
     const { served } = await mockProviders(
       [{ name: "google", configured: true }],
       { status: 503 },
@@ -217,7 +217,7 @@ describe("Sign-in page provider availability", () => {
     expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument()
   })
 
-  it("does not show the SSO section before the list arrives", async () => {
+  it("does not show the OAuth section before the list arrives", async () => {
     // The wrong direction to flicker: rendering optimistically and hiding a
     // moment later shows the user a button that then vanishes.
     const { served } = await mockProviders([{ name: "google", configured: true }])
@@ -248,7 +248,7 @@ describe("Sign-in page provider availability", () => {
   })
 
   it("tolerates a malformed provider list", async () => {
-    // A shape change on the server must degrade to "no SSO", not throw during
+    // A shape change on the server must degrade to "no OAuth", not throw during
     // render and take the whole sign-in page down.
     const { served } = await mockProviders("not-an-array")
 
@@ -256,5 +256,78 @@ describe("Sign-in page provider availability", () => {
 
     expect(screen.queryByRole("button", { name: /continue with/i })).toBeNull()
     expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument()
+  })
+})
+
+// ── the messages the OAuth callback redirects back with ──────────────────────
+//
+// The backend callback (and the BFF proxy that mirrors it) sends the user to
+// `/signin?error=…` on a failed exchange, and `/signin?oauth=2fa` when a
+// TOTP-enabled account must finish on the password form. Neither query key was
+// read anywhere, so a failed provider sign-in landed on an unexplained blank
+// page. The page reads them through `useSyncExternalStore` (see
+// `resolveOAuthError`) rather than a mount effect, so these tests also pin the
+// render-time derivation — a `setState`-in-effect would be a second source of
+// truth for the same message, and `react-hooks/set-state-in-effect` rejects it.
+
+describe("Sign-in page OAuth callback messages", () => {
+  const assign = vi.fn()
+
+  function setSearch(search: string) {
+    Object.defineProperty(window, "location", {
+      value: { ...window.location, assign, search },
+      configurable: true,
+      writable: true,
+    })
+  }
+
+  beforeEach(() => {
+    routerMock.replace.mockClear()
+    assign.mockReset()
+    setSearch("")
+  })
+
+  it("explains a ?oauth=2fa redirect without a form submission", async () => {
+    setSearch("?oauth=2fa")
+    render(<SignInPage />)
+
+    expect(
+      await screen.findByText(/two-factor authentication is required/i),
+    ).toBeInTheDocument()
+  })
+
+  it("maps a known ?error= code to its message", async () => {
+    setSearch("?error=oauth_no_token")
+    render(<SignInPage />)
+
+    expect(
+      await screen.findByText(/could not complete sign-in\./i),
+    ).toBeInTheDocument()
+  })
+
+  it("shows the provider-failure message for a prefixed callback error", async () => {
+    setSearch("?error=oauth_callback_failed_google")
+    render(<SignInPage />)
+
+    expect(
+      await screen.findByText(/could not complete sign-in with the provider/i),
+    ).toBeInTheDocument()
+  })
+
+  it("surfaces an unknown ?error= value verbatim", async () => {
+    // A backend that grows a new error code reaches the user unchanged rather
+    // than being swallowed into a generic message.
+    setSearch("?error=account_disabled")
+    render(<SignInPage />)
+
+    expect(await screen.findByText(/account_disabled/)).toBeInTheDocument()
+  })
+
+  it("shows no message without a query string", async () => {
+    render(<SignInPage />)
+    await screen.findByRole("button", { name: /sign in/i })
+
+    expect(screen.queryByText(/two-factor authentication is required/i)).toBeNull()
+    expect(screen.queryByText(/could not complete sign-in/i)).toBeNull()
   })
 })

@@ -100,11 +100,20 @@ def route_after_critic(state: AgentState) -> Literal["tool_node", "synthesizer"]
     return "synthesizer"
 
 
-def route_after_planner(state: AgentState) -> Literal["tree_of_thoughts", "orchestrator"]:
+def route_after_planner(
+    state: AgentState,
+) -> Literal["tree_of_thoughts", "orchestrator", "synthesizer"]:
     """
     Conditional routing — complex multi-step requests take the Tree of Thoughts
     reasoning path, everything else flows through the standard orchestrator.
+
+    Fast mode short-circuits to the synthesizer: a single direct answer with no
+    planner LLM call, no orchestrator routing, no subagents, no tools and no RAG
+    retrieval. The composer's Fast/Deep toggle is the only writer of this value,
+    so it is the one place the two execution shapes are chosen.
     """
+    if state.get("mode") == "fast":
+        return "synthesizer"
     if state.get("plan"):
         return "tree_of_thoughts"
     return "orchestrator"
@@ -200,9 +209,18 @@ def _build_workflow() -> StateGraph:
         {
             "tree_of_thoughts": "tree_of_thoughts",
             "orchestrator": "orchestrator",
+            # Fast mode's landing point: bypasses ToT, the orchestrator, the
+            # subagents, the tool node and the retrieval/critic grader.
+            "synthesizer": "synthesizer",
         },
     )
-    workflow.add_edge("tree_of_thoughts", "synthesizer")
+    # ToT used to edge straight to the synthesizer, which meant a planned,
+    # multi-step request skipped the orchestrator, the subagents, the tool node
+    # and the retrieval/critic grader: a "search the web, then summarise" prompt
+    # the planner decomposed never touched the web tool. ToT is a reasoning
+    # step, not a shortcut -- it feeds the orchestrator, which is where tools,
+    # subagents and RAG are actually routed.
+    workflow.add_edge("tree_of_thoughts", "orchestrator")
     workflow.add_conditional_edges(
         "orchestrator",
         route_after_orchestrator,

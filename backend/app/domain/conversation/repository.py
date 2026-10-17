@@ -15,6 +15,7 @@ from backend.app.domain.conversation.models import (
 from backend.app.domain.file.models import File, FileChunk, FileMetadata
 from backend.app.domain.plan.models import Plan
 from backend.app.domain.run.models import AgentRun, RunEvent
+from backend.app.domain.share.models import ConversationShare
 from backend.app.domain.tool.models import ToolCall
 from backend.app.domain.usage.models import UsageLog
 from sqlmodel import delete, select
@@ -106,16 +107,34 @@ class ConversationRepository(BaseRepository[Conversation]):
         return conversation
 
     async def update(self, conversation: Conversation, update_data: dict) -> Conversation:
+        """
+        Apply a partial update.
+
+        ``update_data`` is built with ``ConversationUpdate.model_dump(exclude_unset=True)``,
+        so a key is present only when the client actually sent it. An explicit
+        ``null`` is therefore a request to *clear* a nullable column -- e.g.
+        removing a conversation from a project (``project_id: null``).
+
+        The previous rule skipped every ``None``, which silently dropped those
+        requests: the PATCH still returned 200 (with the old value), so the
+        Projects view's "remove from project" action was a no-op end to end.
+        An explicit null for a non-nullable column is ignored rather than issued
+        as an UPDATE that would violate its NOT NULL constraint.
+        """
+        columns = type(conversation).__table__.columns
         for key, value in update_data.items():
-            if value is not None and hasattr(conversation, key):
-                setattr(conversation, key, value)
+            if key not in columns:
+                continue
+            if value is None and not columns[key].nullable:
+                continue
+            setattr(conversation, key, value)
         conversation.updated_at = datetime.now(UTC).replace(tzinfo=None)
         self.session.add(conversation)
         await self.session.commit()
         await self.session.refresh(conversation)
         return conversation
 
-    async def delete(self, conversation: Conversation) -> None:
+    async def delete(self, conversation: Conversation, *, commit: bool = True) -> None:
         """
         Hard-deletes a conversation and everything that references it in
         dependency order (live FKs are NO ACTION — no cascades exist).
@@ -123,9 +142,25 @@ class ConversationRepository(BaseRepository[Conversation]):
         Each child group is removed with a single bulk DELETE statement; a
         single-statement delete in Postgres is self-consistent for the
         self-referencing ``messages.parent_message_id`` fine.
+
+        ``commit=False`` leaves the transaction open for a caller deleting
+        several conversations that needs the whole erasure to be atomic (GDPR
+        account erasure passes it). This method used to commit unconditionally,
+        so an FK failure part-way through account deletion left half the user's
+        data gone and the account still alive.
         """
         conv_id = conversation.id
         message_sub = select(Message.id).where(Message.conversation_id == conv_id)
+
+        # Shares reference conversations.id via a NO-ACTION FK and are not
+        # reachable through messages, so they MUST be removed here. They used to
+        # be omitted, and deleting a shared conversation raised
+        # ``conversation_shares_conversation_id_fkey`` -- which is exactly how
+        # GDPR account erasure 500'd on every account that had ever shared a
+        # chat (the row was only cleared later, by ``created_by``).
+        await self.session.exec(
+            delete(ConversationShare).where(ConversationShare.conversation_id == conv_id)
+        )
 
         # Branch links pointing at this conversation (either direction).
         await self.session.exec(
@@ -190,7 +225,8 @@ class ConversationRepository(BaseRepository[Conversation]):
         await self.session.exec(delete(AgentRun).where(AgentRun.conversation_id == conv_id))
 
         await self.session.delete(conversation)
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
 
     # Message Operations
     async def get_messages(
@@ -277,12 +313,16 @@ class ConversationRepository(BaseRepository[Conversation]):
         )
         self.session.add(message)
 
-        # Update conversation token_count and updated_at
-        conversation = await self.get_by_id(conversation_id)
-        if conversation:
-            conversation.token_count += (prompt_tokens + completion_tokens)
-            conversation.updated_at = datetime.now(UTC).replace(tzinfo=None)
-            self.session.add(conversation)
+        # Update conversation token_count and updated_at (RMW with row lock)
+        from sqlalchemy import update
+        await self.session.exec(
+            update(Conversation)
+            .where(Conversation.id == conversation_id)
+            .values(
+                token_count=Conversation.token_count + (prompt_tokens + completion_tokens),
+                updated_at=datetime.now(UTC).replace(tzinfo=None),
+            )
+        )
 
         await self.session.commit()
         await self.session.refresh(message)
@@ -309,12 +349,35 @@ class ConversationRepository(BaseRepository[Conversation]):
         return message
 
     # Branching / Forking
-    async def fork_conversation(self, user_id: UUID, parent_conv_id: UUID, fork_message_id: UUID, branch_name: str) -> Conversation:
+    async def fork_conversation(
+        self,
+        user_id: UUID,
+        parent_conv_id: UUID,
+        fork_message_id: UUID | None,
+        branch_name: str,
+    ) -> Conversation:
         # IDOR guard: scope the parent lookup to the requesting user so a stranger's
         # conversation can never be forked/read.
         parent_conv = await self.get_by_id(parent_conv_id, user_id=user_id)
         if not parent_conv:
             raise ValueError("Parent conversation not found")
+
+        # Read the parent's messages first: the fork point has to be one of them,
+        # and even an omitted one still needs a real message id for the branch
+        # link (`conversation_branches.fork_message_id` is NOT NULL with an FK to
+        # `messages.id`).
+        parent_messages = await self.get_messages(parent_conv_id)
+        if fork_message_id is None:
+            # "Fork from here" with no id named: the latest turn is the only fork
+            # point the UI offers, so default to the end. An empty conversation
+            # has nothing to branch, and the FK forbids inventing an id for it.
+            if not parent_messages:
+                raise ValueError("Cannot fork an empty conversation")
+            fork_message_id = parent_messages[-1].id
+        elif all(msg.id != fork_message_id for msg in parent_messages):
+            # A fork point from another conversation would copy every message and
+            # then fail the branch-link FK; reject it explicitly instead.
+            raise ValueError("Fork message does not belong to the conversation")
 
         # Create new conversation
         new_conv = Conversation(
@@ -337,7 +400,6 @@ class ConversationRepository(BaseRepository[Conversation]):
         self.session.add(branch)
 
         # Copy messages up to fork_message_id
-        parent_messages = await self.get_messages(parent_conv_id)
         msg_map = {}
         for msg in parent_messages:
             new_msg = Message(

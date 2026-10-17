@@ -4,7 +4,12 @@
 #     promtool check rules docs/alerting/alert-rules.yml
 #
 # Metrics referenced here come from the zero-dependency /metrics endpoint
-# (backend/app/api/v1/metrics.py). Families:
+# (backend/app/api/v1/metrics.py) for local/dev Prometheus scraping. In the
+# deployed stack the same samples are pushed to New Relic over OTLP (the
+# collector's metrics pipeline is fed by the `otlp` receiver, not a scrape —
+# see docs/observability-deployment.md), so a scrape-based `up{job="nexus-backend"}`
+# alert is only meaningful for a deployment that still scrapes /metrics.
+# Families (identical names on both paths):
 #   nexus_requests_total{operation}                     counter
 #   nexus_errors_total{error}                           counter
 #   nexus_latency_seconds{operation,quantile}           summary (+_sum/_count)

@@ -11,9 +11,11 @@ from backend.app.api.v1 import (
     conversations,
     evaluation,
     files,
+    images,
     messages,
     orgs,
     plans,
+    projects,
     prompts,
     settings,
     shares,
@@ -30,6 +32,7 @@ api_router.include_router(conversations.router)
 api_router.include_router(messages.router)
 api_router.include_router(audio.router)
 api_router.include_router(files.router)
+api_router.include_router(images.router)
 api_router.include_router(tools.router)
 api_router.include_router(prompts.router)
 api_router.include_router(settings.router)
@@ -42,4 +45,5 @@ api_router.include_router(admin.router)
 api_router.include_router(evaluation.router)
 api_router.include_router(shares.public_router)
 api_router.include_router(plans.router)
+api_router.include_router(projects.router)
 api_router.include_router(artifacts.router)

@@ -4,7 +4,7 @@ Pure HTTP transport layer — delegates all conversation use cases to Conversati
 """
 import asyncio
 from collections.abc import AsyncGenerator
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID
 
 import structlog
@@ -26,6 +26,8 @@ from backend.app.domain.conversation.schemas import (
 from backend.app.domain.run.service import RunService
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.database.session import async_session_factory
+from backend.app.infrastructure.resilience.rate_limit import rate_limit
+from backend.app.services.byok import bind_byok_keys, load_user_byok_keys, reset_byok_keys
 from backend.app.services.conversation_service import ConversationService
 from backend.app.services.evaluation.guardrail_service import guardrail_service
 from backend.app.services.org_service import OrganizationService
@@ -194,8 +196,15 @@ class StreamChatRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     messages: list[dict] = Field(min_length=1, max_length=100)
-    mode: Literal["normal", "agent", "code", "research"] = "normal"
+    # `fast` is the composer's Fast toggle: a single direct synthesizer call with
+    # none of the agent machinery (no planner LLM, no routing, no subagents, no
+    # tools, no RAG). `normal`/`agent`/`code`/`research` all take the full graph.
+    mode: Literal["normal", "agent", "code", "research", "fast"] = "normal"
     stream: bool = True
+    # Synthesis model group requested by the picker (e.g. "fast_chat"). Optional
+    # and whitelisted server-side by `resolve_answer_model`, so an unknown value
+    # degrades to the default instead of breaking the router.
+    model: str | None = Field(default=None, max_length=64)
     # Approved-plan preamble: prepended to the agent system prompt when Plan
     # mode approval hands execution back to the streaming agent path.
     plan_preamble: str | None = Field(default=None, max_length=4000)
@@ -215,6 +224,7 @@ async def stream_conversation(
     current_user: User = Depends(get_current_user),
     conv_svc: ConversationService = Depends(get_conversation_service),
     usage_svc: UsageService = Depends(get_usage_service),
+    _rl: None = rate_limit("conversations.stream", limit=20, window_seconds=60),
 ) -> StreamingResponse:
     """
     SSE streaming endpoint consumed by the Next.js /api/chat proxy.
@@ -227,6 +237,13 @@ async def stream_conversation(
     a client that reconnects mid-answer gets the frames it missed rather than a
     truncated reply that looks finished.
     """
+    # The per-user stream ceiling is enforced by the `_rl` dependency above, which
+    # runs before this body. `rate_limit(...)` returns a FastAPI dependency — it is
+    # not itself the enforcer, and calling it inline (as this route used to) raised
+    # a TypeError that the surrounding fail-open `except` swallowed, so the chat
+    # stream was never actually throttled. `_check_and_enforce` fails open on a
+    # limiter/Redis outage but raises RateLimitError (-> 429) on a real overage.
+
     thread_id = str(conversation_id)
     user_messages = body.messages
 
@@ -234,7 +251,7 @@ async def stream_conversation(
     # UsageLog/CostLog rows roll up per org (fail-open: an org-lookup hiccup
     # must never break the stream).
     try:
-        org_id = await OrganizationService(usage_svc._repo.session).resolve_org_id(current_user.id)
+        org_id = await OrganizationService(usage_svc.session).resolve_org_id(current_user.id)
     except Exception as exc:
         org_id = None
         logger.warning("org_resolution_failed_fail_open", thread_id=thread_id, error=str(exc))
@@ -292,7 +309,7 @@ async def stream_conversation(
     # Compile the system prompt through the same path the non-streaming /messages
     # endpoints use. Previously this route passed only {"messages", "mode"} into
     # the graph, so `bootstrap_node` always fell back to its hardcoded default:
-    # the prompt_templates/*.txt base, the CAG static-prefix cache and the
+    # the prompt_templates/*.txt base, the static-context prompt cache and the
     # `skills` table were all bypassed for streaming chat — the path the UI
     # actually uses. Fail-open: on any error the graph keeps its own default.
     try:
@@ -365,9 +382,13 @@ async def stream_conversation(
     # entry in `body.messages` -- including an injected `role: "system"` turn --
     # reached the graph verbatim (P1 #17). Done outside the try/except so a
     # rejected injection is a 422, never a silently-swallowed pass-through.
-    graph_messages = [
-        _sanitize_replayed_message(m) for m in (user_messages or [])[-max_agentic_turns:]
-    ]
+    graph_messages = []
+    for m in (user_messages or [])[-max_agentic_turns:]:
+        try:
+            graph_messages.append(_sanitize_replayed_message(m))
+        except Exception:
+            # If sanitization fails, reject the request rather than passing through
+            raise HTTPException(status_code=422, detail="Invalid message content")
 
     # ── The run is the unit of work; this request is only a reader ─────────
     #
@@ -409,6 +430,7 @@ async def stream_conversation(
             graph_input={
                 "messages": graph_messages,
                 "mode": body.mode,
+                **({"model": body.model} if body.model else {}),
                 **({"system_prompt": compiled_system_prompt} if compiled_system_prompt else {}),
                 **({"active_skills": [s.name for s in active_skills]} if active_skills else {}),
             },
@@ -574,6 +596,19 @@ async def hitl_feedback(
         )
 
     try:
+        # BYOK: the resumed graph makes more model calls (the synthesizer runs
+        # after the approved tool), so the user's stored keys have to be bound
+        # here too -- the resume is off the SSE path and never went through
+        # `execute_run`, where the streaming path binds them. Fail-open.
+        _byok_token = None
+        try:
+            async with async_session_factory() as _byok_session:
+                _byok_token = bind_byok_keys(
+                    await load_user_byok_keys(_byok_session, current_user.id)
+                )
+        except Exception as exc:
+            logger.warning("byok_bind_failed", thread_id=thread_id, error_type=type(exc).__name__)
+
         # Verify the thread is actually parked at an interrupt and that the
         # parked approval has not expired — refuse to resume a stale request.
         snapshot = await orchestrator_graph.aget_state(
@@ -649,4 +684,6 @@ async def hitl_feedback(
         logger.exception("hitl_resume_error", thread_id=thread_id, error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
+        if _byok_token is not None:
+            reset_byok_keys(_byok_token)
         await _release_stream_slot(thread_id)

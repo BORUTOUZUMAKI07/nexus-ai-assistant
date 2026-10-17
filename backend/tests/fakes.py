@@ -244,10 +244,6 @@ class FakeSession:
         pass
 
 
-def utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
-
-
 class FakeRunStore:
     """Shared backing rows for the run log, so several sessions see one dataset.
 

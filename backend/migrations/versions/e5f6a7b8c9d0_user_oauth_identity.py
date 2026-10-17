@@ -4,9 +4,9 @@ Revision ID: e5f6a7b8c9d0
 Revises: d3e4f5a6b7c8
 Create Date: 2026-09-28 10:15:00.000000
 
-Gives SSO accounts a stable, provider-issued join key.
+Gives OAuth accounts a stable, provider-issued join key.
 
-Until now ``AuthService.sso_login`` resolved every login by email and the
+Until now ``AuthService.oauth_login`` resolved every login by email and the
 ``User`` row carried no record of *which* IdP identity had signed in. Two
 problems follow from that: (1) a provider that reassigns or recycles an email
 address can hand a previously-linked address to a different person, who would
@@ -14,7 +14,7 @@ then inherit the account on the next login; (2) there is no way to detect a
 subject id that has already been bound to a different account.
 
 ``oauth_sub`` stores the OIDC ``sub`` claim — per-account, immutable, and
-provider-scoped — and ``oauth_provider`` scopes it. ``sso_login`` now looks the
+provider-scoped — and ``oauth_provider`` scopes it. ``oauth_login`` now looks the
 user up by ``(oauth_provider, oauth_sub)`` first and only falls back to the
 email to *adopt* a pre-existing password account, binding the subject at that
 moment so every later login resolves by subject.

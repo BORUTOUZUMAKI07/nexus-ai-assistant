@@ -260,9 +260,3 @@ def get_artifact_service(session: AsyncSession = Depends(get_db)) -> "ArtifactSe
     from backend.app.services.artifact_service import ArtifactService
     return ArtifactService(session)
 
-
-def get_hook_service(session: AsyncSession = Depends(get_db)) -> "HookService":
-    """Inject HookService (lifecycle hook policy CRUD) with database session."""
-    from backend.app.services.hook_service import HookService
-    return HookService(session)
-

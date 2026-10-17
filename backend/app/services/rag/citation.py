@@ -7,7 +7,8 @@ import re
 from typing import Any
 
 import structlog
-from backend.app.domain.file.schemas import RAGCitation
+
+from app.domain.file.schemas import RAGCitation
 
 logger = structlog.get_logger(__name__)
 
@@ -27,10 +28,12 @@ class CitationService:
         structured_citations: list[RAGCitation] = []
 
         for idx, chunk in enumerate(chunks, start=1):
-            filename = chunk.get("metadata", {}).get("filename", "Document")
+            metadata = chunk.get("metadata") or {}
+            filename = metadata.get("filename", "Document")
             chunk_idx = chunk.get("chunk_index", 0)
             score = chunk.get("rerank_score", chunk.get("score", 1.0))
             content = chunk.get("content", "").strip()
+            file_id = chunk.get("file_id") or metadata.get("file_id")
 
             formatted_context_blocks.append(
                 f"[{idx}] Source: {filename} (Section/Chunk {chunk_idx})\n{content}"
@@ -38,12 +41,12 @@ class CitationService:
 
             structured_citations.append(
                 RAGCitation(
-                    file_id=chunk.get("file_id") or chunk.get("metadata", {}).get("file_id"),
+                    file_id=file_id,
                     filename=filename,
                     chunk_index=chunk_idx,
                     score=score,
                     content_snippet=content[:200] + "..." if len(content) > 200 else content,
-                    metadata=chunk.get("metadata", {}),
+                    metadata=metadata,
                 )
             )
 

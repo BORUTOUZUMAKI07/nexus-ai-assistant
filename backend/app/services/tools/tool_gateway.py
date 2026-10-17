@@ -39,6 +39,58 @@ BANNED_PATTERNS = [
     r"\.env",
 ]
 
+# Conditions named by ``requires_approval_if`` in config/permissions.yaml.
+#
+# The permission ladder has two *modes* -- a tool is either ``automatic`` or
+# ``approval_required`` -- plus a conditional third rung: an automatic tool
+# (the sandboxed code interpreter) that still needs a human when the specific
+# call is high-impact. That rung was declared in the YAML and never evaluated,
+# so model-written code reaching the gateway ran anything it liked with no
+# approval and no card. These patterns are what make it real. They match
+# *effects* (spawning processes, touching the filesystem, opening the network),
+# not the incidental presence of the word "os".
+_SYSTEM_COMMAND_PATTERNS = (
+    r"\bos\.system\b",
+    r"\bos\.popen\b",
+    r"\bos\.spawn",
+    r"\bos\.exec",
+    r"\bos\.remove\b",
+    r"\bos\.unlink\b",
+    r"\bos\.rmdir\b",
+    r"\bos\.rename\b",
+    r"\bsubprocess\b",
+    r"\bshutil\.rmtree\b",
+    r"\bpty\.spawn",
+    r"\bshell\s*=\s*True\b",
+    r"\b(chmod|chown|chgrp|kill|pkill|killall)\b",
+    r"\b(mkfs|fdisk|mount|umount)\b",
+    r"\brm\s+-rf?\b",
+)
+_NETWORK_PATTERNS = (
+    r"\bsocket\b",
+    r"\burllib\b",
+    r"\brequests\b",
+    r"\bhttpx\b",
+    r"\baiohttp\b",
+    r"\bhttp\.client\b",
+    r"\bsmtplib\b",
+    r"\bftplib\b",
+    r"\btelnetlib\b",
+    r"\bparamiko\b",
+    r"\basyncio\.open_connection\b",
+    r"\bcurl\b",
+    r"\bwget\b",
+    r"\bwebbrowser\b",
+)
+# Human-readable form of each condition, shown on the approval card. A missing
+# entry falls back to the raw condition name rather than to nothing, so a new
+# YAML condition is legible before anyone remembers to add a sentence here.
+_APPROVAL_CONDITION_REASONS = {
+    "contains_system_commands": "it runs shell or system commands",
+    "contains_socket_calls": "it opens a network connection",
+    "execution_time_exceeds_20s": "it is declared to run longer than 20 seconds",
+}
+
 
 class ToolGateway:
     """
@@ -86,6 +138,57 @@ class ToolGateway:
         auto_tools = self.permissions_config.get("automatic", [])
         return tool_name in auto_tools
 
+    def _approval_conditions(self, tool_name: str) -> list[str]:
+        """The ``requires_approval_if`` conditions declared for this tool."""
+        entry = self.permissions_config.get("tools", {}).get(tool_name, {})
+        conditions = entry.get("requires_approval_if") or []
+        return conditions if isinstance(conditions, list) else []
+
+    @staticmethod
+    def _argument_text(arguments: dict[str, Any]) -> str:
+        """Flatten argument values to one string for the effect-pattern scan."""
+        return " ".join(str(v) for v in arguments.values())
+
+    def _condition_matches(
+        self, condition: str, arguments: dict[str, Any], code: str
+    ) -> bool:
+        """Evaluate one ``requires_approval_if`` condition against a concrete call."""
+        if condition == "contains_system_commands":
+            return any(re.search(p, code, re.IGNORECASE) for p in _SYSTEM_COMMAND_PATTERNS)
+        if condition == "contains_socket_calls":
+            return any(re.search(p, code, re.IGNORECASE) for p in _NETWORK_PATTERNS)
+        if condition == "execution_time_exceeds_20s":
+            raw = arguments.get("timeout_seconds", arguments.get("timeout"))
+            try:
+                return int(raw) > 20
+            except (TypeError, ValueError):
+                return False
+        return False
+
+    def requires_approval(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> tuple[bool, str | None]:
+        """The full permission-ladder decision for one concrete call.
+
+        Returns ``(needs_approval, reason)``. ``check_permission`` only answers
+        the *mode* question (automatic vs. approval-required); this adds the
+        ``requires_approval_if`` conditions, so a normally-automatic tool whose
+        arguments are high-impact still asks.
+
+        This is the single source both ``tool_node`` (which raises the HITL card)
+        and ``execute_tool`` (which must refuse an unapproved call) consult, so
+        the card and the gate can never disagree about whether a call needed a
+        human.
+        """
+        if not self.check_permission(tool_name):
+            return True, f"'{tool_name}' is on the approval-required list."
+        code = self._argument_text(arguments)
+        for condition in self._approval_conditions(tool_name):
+            if self._condition_matches(condition, arguments, code):
+                reason = _APPROVAL_CONDITION_REASONS.get(condition, condition)
+                return True, f"'{tool_name}' requires approval because {reason}."
+        return False, None
+
     async def execute_tool(
         self,
         tool_name: str,
@@ -107,15 +210,18 @@ class ToolGateway:
         # 1. Poka-yoke validation
         self.validate_poka_yoke(tool_name, arguments)
 
-        # 2. Permission Ladder Check
-        is_automatic = self.check_permission(tool_name)
-        if not is_automatic and not is_user_approved:
-            logger.info("tool_requires_approval", tool_name=tool_name)
+        # 2. Permission Ladder Check (mode + requires_approval_if conditions)
+        needs_approval, approval_reason = self.requires_approval(tool_name, arguments)
+        if needs_approval and not is_user_approved:
+            logger.info("tool_requires_approval", tool_name=tool_name, reason=approval_reason)
             return {
                 "status": "requires_approval",
                 "tool_name": tool_name,
                 "arguments": arguments,
-                "message": f"Execution of tool '{tool_name}' requires explicit user confirmation.",
+                "message": (
+                    f"Execution of tool '{tool_name}' requires explicit user confirmation."
+                    + (f" {approval_reason}" if approval_reason else "")
+                ),
             }
 
         # 2.5 Lifecycle hooks (pre-tool policy: block / redact / log).

@@ -23,7 +23,6 @@ import structlog
 from backend.app.core.config import settings
 from backend.app.domain.webhook.models import WebhookDelivery, WebhookEndpoint
 from backend.app.services.tools.web_search import (
-    _PRIVATE_NETS,
     _SSRF_BLOCKED_HOSTS,
     _is_reserved_ip,
 )

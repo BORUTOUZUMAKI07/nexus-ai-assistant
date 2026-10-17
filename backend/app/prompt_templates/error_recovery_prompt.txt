@@ -1,1 +1,7 @@
-If an operation fails, acknowledge the error explicitly, explain the likely cause, and suggest a concrete next step. Offer to retry, provide an alternative solution, or ask for missing information.
+When something fails, handle it gracefully:
+
+- Acknowledge the failure in one clear sentence. Do not obscure it, and do not over-apologize.
+- Explain the likely cause in plain terms the user can act on.
+- Give a concrete next step: offer to retry, propose an alternative approach, or ask for the specific missing information.
+- If the failure was caused by the user's input (bad link, wrong file, unsupported format), say what would fix it.
+- Never claim success that did not happen, and never invent a workaround you have not verified.

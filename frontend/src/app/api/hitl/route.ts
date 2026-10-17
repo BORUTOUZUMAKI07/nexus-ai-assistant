@@ -12,6 +12,26 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL ??
   "http://127.0.0.1:8000";
 
+/**
+ * Ceiling for the approval round-trip.
+ *
+ * This one request is unlike every other upstream call: approving resumes the
+ * parked graph **inline**, so the backend runs the remaining graph — the
+ * approved tool (E2B sandbox) and then the synthesizer — before it responds.
+ * A healthy resume is tens of seconds, which the 30s ceiling `lib/proxy.ts`
+ * applies to ordinary JSON round-trips does not cover.
+ *
+ * Timing out here is not a graceful degradation, either: the backend keeps
+ * going and persists the answer while the client shows an error and keeps a
+ * card whose thread is no longer parked, so a retry answers "not waiting for an
+ * approval". The ceiling therefore has to fit a real resume. `tool_node` is
+ * budgeted 180s and the synthesizer 300s, so no finite ceiling covers the
+ * absolute worst case; 150s sits above the realistic worst case (sandbox +
+ * one synthesis) while still failing a genuinely wedged backend rather than
+ * hanging forever.
+ */
+const HITL_RESUME_TIMEOUT_MS = 150_000;
+
 export async function POST(req: NextRequest) {
   let body: { threadId?: unknown; action?: unknown; data?: unknown };
   try {
@@ -39,9 +59,10 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({ action, data }),
         // An approval decision is the one request in this product that must not
         // hang silently: without a ceiling a stalled backend holds the socket
-        // and the user's Approve click appears to do nothing. 30s matches the
-        // ceiling lib/proxy.ts applies to every other upstream call.
-        signal: AbortSignal.timeout(30_000),
+        // and the user's Approve click appears to do nothing. See
+        // HITL_RESUME_TIMEOUT_MS for why this ceiling is larger than
+        // lib/proxy.ts's 30s for ordinary calls.
+        signal: AbortSignal.timeout(HITL_RESUME_TIMEOUT_MS),
       }
     );
 

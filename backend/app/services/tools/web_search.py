@@ -323,7 +323,16 @@ class WebSearchService:
                 )
                 if hasattr(scrape_res, "markdown"):
                     markdown_content = scrape_res.markdown or ""
-                    title = (scrape_res.metadata or {}).get("title", url) if hasattr(scrape_res, "metadata") else url
+                    metadata = getattr(scrape_res, "metadata", None)
+                    if isinstance(metadata, dict):
+                        title = metadata.get("title") or url
+                    else:
+                        # firecrawl >= 4.x returns a pydantic ``DocumentMetadata``
+                        # object, not a dict, so ``.get`` raised AttributeError --
+                        # which the ``except`` below swallowed. Every scrape then
+                        # silently fell back to httpx and the whole provider path
+                        # was dead code that looked alive.
+                        title = getattr(metadata, "title", None) or url
                 else:
                     markdown_content = scrape_res.get("markdown", "")
                     title = scrape_res.get("metadata", {}).get("title", url)

@@ -24,7 +24,7 @@ from backend.app.domain.conversation.schemas import (
 )
 from backend.app.domain.usage.schemas import UsageLogCreate
 from backend.app.domain.user.models import User
-from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.infrastructure.ai.litellm_client import ai_client, resolve_provider
 from backend.app.infrastructure.cache.response_cache import response_cache
 from backend.app.services.context_compiler import context_compiler
 from backend.app.services.conversation_service import ConversationService
@@ -127,6 +127,17 @@ async def send_message_sync(
     cache_hit_payload = await response_cache.get(
         str(current_user.id), target_model, sanitized_content, prompt_variant=experiment_variant
     )
+    if cache_hit_payload is None:
+        try:
+            from backend.app.services.semantic_response_cache import semantic_response_cache
+
+            sem = await semantic_response_cache.get(
+                str(current_user.id), target_model, sanitized_content, prompt_variant=experiment_variant
+            )
+            if sem is not None:
+                cache_hit_payload = sem
+        except Exception:  # pragma: no cover - fail-open
+            cache_hit_payload = None
 
     # 5. Generate Completion
     if cache_hit_payload is not None:
@@ -156,6 +167,21 @@ async def send_message_sync(
             cost_usd=cost_tracking_service.calculate_cost(target_model, prompt_tok, comp_tok),
             prompt_variant=experiment_variant,
         )
+        try:
+            from backend.app.services.semantic_response_cache import semantic_response_cache
+
+            await semantic_response_cache.set(
+                str(current_user.id),
+                target_model,
+                sanitized_content,
+                response_text,
+                tokens_input=prompt_tok,
+                tokens_output=comp_tok,
+                cost_usd=cost_tracking_service.calculate_cost(target_model, prompt_tok, comp_tok),
+                prompt_variant=experiment_variant,
+            )
+        except Exception as exc:  # noqa: BLE001 - cache write must not fail the reply
+            logger.debug("response_cache_write_failed", error=str(exc))
 
     # 6. Save Assistant Message
     assistant_msg = await conv_svc.add_message(
@@ -197,7 +223,7 @@ async def send_message_sync(
         user_id=current_user.id,
         org_id=org_id,
         model=target_model,
-        provider="groq",
+        provider=resolve_provider(target_model),
         prompt_tokens=prompt_tok,
         completion_tokens=comp_tok,
     )
@@ -318,7 +344,7 @@ async def send_message_stream(
                 user_id=current_user.id,
                 org_id=org_id,
                 model=target_model,
-                provider="groq",
+                provider=resolve_provider(target_model),
                 prompt_tokens=prompt_tok,
                 completion_tokens=comp_tok,
             )

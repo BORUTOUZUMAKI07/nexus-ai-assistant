@@ -6,6 +6,18 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Field, SQLModel
 
 
+class Project(SQLModel, table=True):
+    __tablename__ = "projects"
+    __table_args__ = {"extend_existing": True}
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    user_id: uuid.UUID = Field(foreign_key="users.id", index=True, nullable=False)
+    name: str = Field(max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None))
+
+
 class Conversation(SQLModel, table=True):
     __tablename__ = "conversations"
     __table_args__ = {"extend_existing": True}
@@ -13,7 +25,8 @@ class Conversation(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True, nullable=False)
     title: str = Field(default="New Conversation")
-    model: str = Field(default="complex_reasoning")
+    model: str = Field(default="llama-3.3-70b-versatile")
+    project_id: uuid.UUID | None = Field(default=None, foreign_key="projects.id", index=True)
     system_prompt: str | None = Field(default=None)
     context_summary: str | None = Field(default=None, description="Compressed conversation context summary")
     is_pinned: bool = Field(default=False)

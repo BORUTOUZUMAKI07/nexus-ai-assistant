@@ -7,7 +7,7 @@
 
 Nexus AI Assistant is a full-stack AI copilot: a **FastAPI** backend built as a
 **Domain-Driven Design (DDD) modular monolith** with a **LangGraph**
-multi-agent orchestrator, and a **Next.js 16.3.4** (React 19.2.8) frontend that
+multi-agent orchestrator, and a **Next.js 16.4.2** (React 19.2.8) frontend that
 talks to the API exclusively through BFF-style Next.js route handlers.
 
 ```mermaid
@@ -35,7 +35,7 @@ graph TD
     end
 
     subgraph Storage
-        API --> PG[(PostgreSQL pgvector - 37 tables)]
+        API --> PG[(PostgreSQL pgvector - 38 tables)]
         RAG --> Qdrant[(Qdrant hybrid vector DB)]
         API --> RD[(Redis: cache, rate limit, Celery broker)]
         API --> Celery[Celery worker + beat]
@@ -71,12 +71,12 @@ One bounded context per folder, each with `models.py` (SQLModel tables),
 - `experiment` / `optimization` / `redteam` — bandits, prompt optimization
   runs, red-team probe runs.
 
-**37 tables** total (verified: `SQLModel.metadata.tables` contains exactly
+**38 tables** total (verified: `SQLModel.metadata.tables` contains exactly
 `agent_runs, api_keys, artifact_versions, artifacts, audit_logs, bandit_rewards,
 conversation_branches, conversation_shares, conversations, cost_logs,
 evaluation_logs, file_chunks, file_metadata, files, hook_policies,
 message_attachments, messages, organization_invites, organization_members,
-organizations, plans, prompt_optimization_runs, prompt_templates,
+organizations, plans, projects, prompt_optimization_runs, prompt_templates,
 prompt_versions, redteam_runs, run_events, skills, system_configs, tool_calls,
 tool_permissions, tools, usage_logs, user_memories, user_settings, users,
 webhook_deliveries, webhook_endpoints`).
@@ -173,13 +173,16 @@ Checkpointing uses `AsyncPostgresSaver` + `InMemoryStore`, with full
 
 - Zero-dependency Prometheus `/metrics` endpoint renders the in-process
   `MetricsCollector` (families `nexus_requests_total`, `nexus_errors_total`,
-  `nexus_latency_seconds`, `nexus_latency_avg_seconds`).
-- 3-layer vendor funnel (all free-tier): the app keeps `/metrics` as local
-  truth and exports structured logs over OTLP/HTTP; the **Layer-2 collector**
-  (`docker/otel-collector-config.yaml`, compose service + Render blueprint in
-  `render.yaml`) tail-samples, batches, scrapes `/metrics`, and forwards to
-  **New Relic** (Layer 3), which owns the ingest key. LangSmith covers AI
-  traces; Sentry covers errors.
+  `nexus_latency_seconds`, `nexus_latency_avg_seconds`). In the deployed setup
+  those same samples also leave the process over **OTLP**; `/metrics` stays as a
+  local debug surface.
+- 3-layer vendor funnel (all free-tier): the app exports **logs, metrics and
+  traces** over OTLP/HTTP with one shared Basic-auth header; the **Layer-2
+  collector** (`docker/otel-collector-config.yaml`, built from
+  `docker/otel-collector.Dockerfile`, compose service + Render blueprint in
+  `render.yaml`) tail-samples, batches, buffers to disk, and forwards to
+  **New Relic** (Layer 3), which owns the ingest key. LangSmith covers the
+  AI/agent traces; Sentry covers errors.
 - SLOs, alerting rules, and runbooks are kept in sync across
   [`docs/slo.md`](slo.md), [`docs/alerting/alert-rules.yml`](alerting/alert-rules.yml),
   and [`docs/runbooks/`](runbooks/README.md).

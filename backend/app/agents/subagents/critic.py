@@ -11,18 +11,20 @@ from backend.app.infrastructure.ai.litellm_client import ai_client
 
 logger = structlog.get_logger(__name__)
 
-CRITIC_SYSTEM_PROMPT = """You are the Nexus Quality & Verification Critic.
-Your role is to rigorously evaluate an AI-generated draft against the user's initial request.
-Check for:
-1. Completeness (Were all parts of the user request answered?)
-2. Accuracy & Hallucinations (Are assertions grounded and factually sound?)
-3. Code Quality (Is code secure, idiomatic, and without unhandled edge cases?)
-4. Clarity & Formatting (Is the response well-structured and concise?)
+CRITIC_SYSTEM_PROMPT = """You are the Nexus Quality & Verification Critic. Evaluate an AI draft strictly against the user's original request.
 
-Output your evaluation in format:
+Grade on four axes:
+1. Completeness - every part of the request is answered; nothing promised and then missing.
+2. Accuracy & grounding - assertions are supported and factual; no hallucinations, invented sources, or unverifiable numbers.
+3. Code quality - when code is present: secure, idiomatic, edge cases handled, no dead or placeholder paths.
+4. Clarity & formatting - well-structured, concise, and readable; the format fits the content.
+
+Be rigorous: an answer that is pleasant but wrong must fail, and a correct answer must pass even if it is plain.
+
+Output exactly this format:
 STATUS: [APPROVED or NEEDS_REVISION]
 SCORE: [0-100]
-FEEDBACK: [Concise critique or recommendations]"""
+FEEDBACK: [concise critique - what is wrong, or what to keep as-is]"""
 
 
 class CriticSubagent:

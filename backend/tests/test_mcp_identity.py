@@ -7,9 +7,8 @@ authorization). These tests pin the binding and the ownership check.
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
-
 import backend.app.mcp.server as server
+import pytest
 
 
 class _Ctx:
@@ -37,8 +36,8 @@ def test_authenticated_user_id_is_none_without_an_http_request(monkeypatch):
 
 
 def test_authenticated_user_id_reads_the_bearer_token(monkeypatch):
-    import fastmcp.server.dependencies as deps
     import backend.app.core.security as sec
+    import fastmcp.server.dependencies as deps
 
     uid = uuid4()
 
@@ -52,8 +51,8 @@ def test_authenticated_user_id_reads_the_bearer_token(monkeypatch):
 
 
 def test_authenticated_user_id_rejects_a_non_access_token(monkeypatch):
-    import fastmcp.server.dependencies as deps
     import backend.app.core.security as sec
+    import fastmcp.server.dependencies as deps
 
     class _Req:
         headers = {"Authorization": "Bearer tok"}
@@ -102,8 +101,8 @@ async def test_create_artifact_binds_owner_to_the_caller(monkeypatch):
     caller, attacker = uuid4(), uuid4()
     monkeypatch.setattr(server, "_authenticated_user_id", lambda: caller)
 
-    import backend.app.services.artifact_service as art_mod
     import backend.app.infrastructure.database.session as sess_mod
+    import backend.app.services.artifact_service as art_mod
 
     monkeypatch.setattr(art_mod, "ArtifactService", _RecordingArtifacts)
     monkeypatch.setattr(sess_mod, "async_session_factory", lambda: _Ctx(object()))
@@ -119,9 +118,9 @@ async def test_create_artifact_binds_owner_to_the_caller(monkeypatch):
 async def test_create_artifact_refuses_a_conversation_the_caller_does_not_own(monkeypatch):
     monkeypatch.setattr(server, "_authenticated_user_id", lambda: uuid4())
 
-    import backend.app.services.artifact_service as art_mod
     import backend.app.domain.conversation.repository as conv_mod
     import backend.app.infrastructure.database.session as sess_mod
+    import backend.app.services.artifact_service as art_mod
 
     calls = {"create": 0}
 
@@ -148,8 +147,8 @@ async def test_shared_key_path_may_still_pass_an_explicit_user_id(monkeypatch):
     monkeypatch.setattr(server, "_authenticated_user_id", lambda: None)
     explicit = uuid4()
 
-    import backend.app.services.artifact_service as art_mod
     import backend.app.infrastructure.database.session as sess_mod
+    import backend.app.services.artifact_service as art_mod
 
     monkeypatch.setattr(art_mod, "ArtifactService", _RecordingArtifacts)
     monkeypatch.setattr(sess_mod, "async_session_factory", lambda: _Ctx(object()))
@@ -166,9 +165,9 @@ async def test_shared_key_path_may_still_pass_an_explicit_user_id(monkeypatch):
 async def test_request_user_input_refuses_a_conversation_the_caller_does_not_own(monkeypatch):
     monkeypatch.setattr(server, "_authenticated_user_id", lambda: uuid4())
 
-    import backend.app.services.tools.elicitations as elic_mod
     import backend.app.domain.conversation.repository as conv_mod
     import backend.app.infrastructure.database.session as sess_mod
+    import backend.app.services.tools.elicitations as elic_mod
 
     parked = {"n": 0}
 

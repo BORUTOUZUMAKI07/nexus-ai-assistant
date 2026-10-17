@@ -117,7 +117,7 @@ def create_access_token(
         # Identity and lifetime claims are controlled exclusively by this
         # function. Callers must not override subject, expiry, token type, or
         # token identifier through the extension-claims parameter.
-        reserved_claims = {"sub", "exp", "iat", "jti", "type", "iss", "aud"}
+        reserved_claims = {"sub", "exp", "iat", "jti", "type", "iss", "aud", "role"}
         collisions = reserved_claims.intersection(additional_claims)
         if collisions:
             raise ValueError(

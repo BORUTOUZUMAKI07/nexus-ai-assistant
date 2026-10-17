@@ -40,7 +40,7 @@ class UserRepository(BaseRepository[User]):
     async def get_by_oauth_identity(self, provider: str, subject: str) -> User | None:
         """Look a user up by the IdP's stable subject id.
 
-        This is the authoritative SSO join key. Email is deliberately NOT part
+        This is the authoritative OAuth join key. Email is deliberately NOT part
         of the predicate: matching on it would let anyone who controls a
         recycled or reassigned address inherit an existing account.
         """
@@ -327,3 +327,23 @@ class UserRepository(BaseRepository[User]):
             await self.session.commit()
             await self.session.refresh(api_key)
             return api_key
+
+    async def delete_api_key(self, user_id: UUID, key_id: UUID) -> bool:
+        """Remove one BYOK key, scoped to its owner (the IDOR guard).
+
+        A hard delete, deliberately not the ``is_active = False`` soft delete the
+        memory path uses: ``uq_api_key_user_provider`` is an unconditional unique
+        constraint on ``(user_id, provider)``, so a deactivated row would survive
+        the constraint while ``get_api_key_by_provider`` (which filters on
+        ``is_active``) stops seeing it -- and re-adding the same provider would
+        then INSERT into a duplicate and 500. ``False`` means the row does not
+        exist *or* belongs to another user; both are answered as 404.
+        """
+        statement = select(APIKey).where(APIKey.id == key_id, APIKey.user_id == user_id)
+        result = await self.session.exec(statement)
+        api_key = result.first()
+        if api_key:
+            await self.session.delete(api_key)
+            await self.session.commit()
+            return True
+        return False

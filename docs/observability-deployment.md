@@ -1,13 +1,27 @@
 # Observability Deployment Checklist (Layer-2 collector → New Relic)
 
-> Status: **pending — deploy later.** The code (3-layer observability) is on
-> `main`; bringing New Relic live is an ops task on the free tier. Steps below
-> were verified against `docker/otel-collector-config.yaml`, `docker-compose.yml`,
-> `render.yaml`, and `backend/app/core/config.py`.
+> Status: **live locally; the remote deploy is the remaining ops step.** New
+> Relic is wired end to end on this machine — the app exports **all three
+> signals (logs, metrics, traces)** over OTLP/HTTP to the Layer-2 collector, and
+> the collector forwards them to New Relic. The app never touches a New Relic
+> key. Every claim below was verified against
+> `docker/otel-collector-config.yaml`, `docker/otel-collector.Dockerfile`,
+> `docker-compose.yml`, `render.yaml`, and `backend/app/core/config.py`.
 
-The app never touches a New Relic key. The **collector** owns
-`NEW_RELIC_LICENSE_KEY`; the app only needs `NEW_RELIC_ENABLED` +
-`NEW_RELIC_OTLP_ENDPOINT`.
+## 0. What ships where (three layers)
+
+| Layer | Component | Owns |
+|---|---|---|
+| L1 | the app | OTLP **logs + metrics + traces** (`services/observability/otel.py`, `logs.py`, `metrics.py`), plus a local `/metrics` debug surface |
+| L2 | OpenTelemetry Collector | receives OTLP, tail-samples traces, batches, buffers to disk, forwards |
+| L3 | New Relic | the sink; receives the OTLP export from L2 |
+
+LangSmith is a separate concern: it is the **LLM/agent layer** (node I/O,
+prompts, token counts, the graph span tree). New Relic is the **infra/ops
+layer** (HTTP latency/throughput/errors, app logs, alerting). Both are wired;
+neither replaces the other. The app holds the collector's address and the OTLP
+credentials, but *not* the New Relic ingest key — that lives only on the
+collector (`${env:NEW_RELIC_LICENSE_KEY}`).
 
 ## 1. Stand up the Layer-2 collector
 
@@ -15,16 +29,35 @@ Pick ONE of:
 
 **(a) Local dev (docker compose):**
 
-```bash
-# from the repo root
-$env:NEW_RELIC_LICENSE_KEY = "xxxx"   # PowerShell; or use the .env `docker compose` reads
-docker compose up otel-collector
+```powershell
+# from the repo root; or put these in the gitignored root .env that compose reads
+$env:NEW_RELIC_LICENSE_KEY = "xxxx"
+$env:OTLP_AUTH_USER = "nexus"; $env:OTLP_AUTH_PASSWORD = "a-real-secret"
+docker compose up -d --build otel-collector
 ```
 
 - Config: `docker/otel-collector-config.yaml` (mounted read-only).
-- `extra_hosts: host.docker.internal:host-gateway` already lets it scrape the
-  host app's `/metrics` at `host.docker.internal:8000`.
-- Health: `curl http://localhost:13133/healthz`. Self-metrics on `:8888`.
+- The collector is **built from `docker/otel-collector.Dockerfile`**, not pulled
+  from upstream (compose `build:` + `image: nexus-otel-collector:local`). The
+  file pre-creates `/var/lib/otelcol/storage` owned by the collector uid
+  (10001) so the fresh `otel_storage` named volume inherits that ownership.
+  Against the upstream image the volume is root-owned and the collector exits at
+  startup with `open .../exporter_otlphttp_newrelic_logs: permission denied`.
+- Because of that, **after changing the config, rebuild and drop the old
+  volume**:
+
+  ```powershell
+  docker compose rm -sf otel-collector
+  docker volume rm nexusai-assistant_otel_storage
+  docker compose build otel-collector
+  docker compose up -d otel-collector
+  ```
+
+- Health: `curl http://localhost:13133/healthz` → `{"status":"Server ready"}`;
+  readiness marker in the logs is `Everything is ready`. Self-metrics on `:8888`.
+- `otelcol validate` exits **0** on a config that dies at startup (it only
+  unmarshals; it never builds the component graph). Always boot the real
+  container — that is what `tests/test_otel_collector_config.py` does.
 
 **(b) Render (free tier):** deploy the blueprint in `render.yaml`
 (rootDir `docker`, `otel-collector.Dockerfile`, `PORT=4318`). Render forwards
@@ -33,14 +66,20 @@ public HTTPS :443 → :4318. No Render health check is configured (the agent's
 
 ## 2. Set the collector secrets (Render: `sync: false`, prompt at deploy)
 
-- `NEW_RELIC_LICENSE_KEY` — **required**. New Relic ingest key (agent-side only).
-- `ENVIRONMENT` — `production` / `development` (becomes a resource attribute).
-- `METRICS_SCRAPE_TARGET` — the app's public URL for `/metrics`, e.g.
-  `https://nexus-backend.onrender.com` (compose default: `host.docker.internal:8000`).
-  Leaving this empty breaks collector startup on purpose (Prometheus refuses an
-  empty target).
-- `METRICS_TOKEN` — set it **both here and on the app** if you guard `/metrics`
-  (see step 4). Empty string is fine for local dev.
+- `NEW_RELIC_LICENSE_KEY` — **required**. New Relic ingest key (collector-side
+  only; never in the app env or a tracked file).
+- `ENVIRONMENT` — `production` / `development` (becomes the
+  `deployment.environment` resource attribute).
+- `SERVICE_VERSION` — e.g. `1.0.0` (becomes `service.version`; app default
+  `dev`).
+- `OTLP_AUTH_USER` / `OTLP_AUTH_PASSWORD` — **required**. HTTP basic auth for
+  the OTLP receiver; the app must send the same pair. Change the `nexus`/`nexus`
+  placeholder in production.
+
+There is no `METRICS_SCRAPE_TARGET` / `METRICS_TOKEN` any more: metrics arrive
+over **OTLP push** from every app process, not from a Prometheus scrape of one
+process. (Scraping one process under-reports under multiple workers; and a
+public `/metrics` is an unnecessary exposure.)
 
 ## 3. Point the app at the collector
 
@@ -48,58 +87,81 @@ In the app's env (`.env` / Render app service):
 
 ```
 NEW_RELIC_ENABLED=true
-NEW_RELIC_OTLP_ENDPOINT=http://localhost:4318        # local: the compose collector
-NEW_RELIC_OTLP_ENDPOINT=https://your-collector.onrender.com   # prod: your Render collector
-NEW_RELIC_EXPORT_INTERVAL_SECONDS=30                 # default, optional
+NEW_RELIC_OTLP_ENDPOINT=http://localhost:4318                 # local: the compose collector
+NEW_RELIC_OTLP_ENDPOINT=https://your-collector.onrender.com    # prod: your Render collector
+NEW_RELIC_EXPORT_INTERVAL_SECONDS=30                           # default, optional
+OTLP_AUTH_USER=nexus                                           # must match the collector
+OTLP_AUTH_PASSWORD=nexus
+SERVICE_VERSION=dev                                            # prod: the release tag
 ```
 
 - Requires the `[observability]` extras installed (`uv sync --extra observability`).
-- Export is fail-open and env-gated; wrong endpoint = dropped telemetry, never
-  a crash.
+- Export is fail-open and env-gated; a wrong endpoint is dropped telemetry,
+  never a crash. The emitter gets one shared `Authorization: Basic <base64>`
+  header — logs, metrics and traces authenticate identically.
+- All three signals (logs, metrics, traces) are wired from `core/logging.py`
+  under `NEW_RELIC_ENABLED`. Traces also include an HTTP server span per request
+  and a span per graph node (`services/observability/tracing.py`).
 
-## 4. (Optional) Guard `/metrics`
+## 4. `/metrics` is now a local debug surface, not the export path
 
-`/metrics` is open by default. To require a bearer token:
+Metrics leave the app over OTLP. The old Prometheus `/metrics` endpoint is kept
+for local inspection and the admin viewer; it can still be guarded:
 
 - App: `METRICS_TOKEN=<secret>` → scrapers must send
   `Authorization: Bearer <secret>` (enforced in `api/v1/metrics.py`).
-- Collector: the prometheus scrape in `docker/otel-collector-config.yaml`
-  already sends `authorization: Bearer ${env:METRICS_TOKEN}` — set the same
-  value in the collector env.
-- Note: the `otlp` receiver on :4318 is PUBLIC on Render's free tier; the
-  config's commented `basicauth/server` block is the lock-down if you need it.
+- The collector no longer scrapes it, so there is nothing to configure on the
+  collector side. `docs/alerting/alert-rules.yml` and `docs/slo.md` still
+  describe the metric families (`nexus_requests_total`, `nexus_errors_total`,
+  `nexus_latency_seconds`) — they now arrive at New Relic over OTLP with the
+  same names.
 
 ## 5. Verify
 
-- Collector: `curl http://localhost:13133/healthz` (local) → `{"status":"Server
-  ready"}`; watch its logs for `otlphttp/newrelic` export failures/429s.
-- App: startup log `otlp_log_handler_wired endpoint=...` when
-  `NEW_RELIC_ENABLED=true`; `/metrics` renders the `nexus_*` families.
-- New Relic: check `Logs` and `Metrics` query tabs; errors/429s in collector
-  logs mean the free-tier ingest quota was hit (by design, sampling keeps NR
-  spend low: 100% of error spans, 10% of the rest).
+- Collector: `curl http://localhost:13133/healthz` → `{"status":"Server ready"}`;
+  watch its logs for `otlphttp/newrelic` export failures/429s (a free-tier
+  quota hit is by design; tail sampling keeps NR spend low — 100% of error
+  spans, 10% of the rest).
+- OTLP receiver auth: `POST http://localhost:4318/v1/logs` **without** an
+  `Authorization` header → `401`; with `Authorization: Basic base64(nexus:nexus)`
+  → `200`.
+- App startup, with `NEW_RELIC_ENABLED=true`:
 
-### 5a. Already verified without the credential (2026-10-04)
+  ```
+  otlp_log_handler_wired    endpoint=http://localhost:4318/v1/logs
+  otlp_trace_provider_wired endpoint=http://localhost:4318/v1/traces
+  otlp_meter_provider_wired endpoint=http://localhost:4318/v1/metrics
+  ```
 
-The app half of this checklist is **code-complete and measured**, so the only
-remaining work is the ops half. Verified with `NEW_RELIC_ENABLED=true` and
-`NEW_RELIC_OTLP_ENDPOINT=http://127.0.0.1:4318` (deliberately unreachable):
+- Signals arriving at the collector (its `debug` exporter prints counts):
+  `Logs {"resource logs": 1, "log records": N}`,
+  `Traces {"resource spans": 2, "spans": 2}`,
+  `Metrics {"resource metrics": …, "data points": …}`.
+- New Relic: check the `Logs`, `Metrics` and `Traces` (distributed tracing)
+  tabs.
+
+### 5a. Already verified without a remote deploy (2026-10-16)
+
+New Relic ingest requires a key this environment does not own for the *remote*
+deploy, but every local hop was measured end to end:
 
 | Check | Result |
 |---|---|
-| handler attaches | yes — root handlers `['StreamHandler', 'LoggingHandler']` |
-| endpoint | `http://127.0.0.1:4318/v1/logs` (`base` + `/v1/logs`) |
-| startup event | `otlp_log_handler_wired` |
-| idempotent | second `setup_otlp_log_handler()` returns the same handler; handler count stays 2 |
-| fail-open | a log call raised nothing; export failure surfaces as a log line, and `shutdown_otlp_log_handler()` returns cleanly |
+| collector boots from the Dockerfile | yes — `/healthz` `{"status":"Server ready"}`, `Everything is ready` |
+| OTLP auth enforced | `POST /v1/logs` no auth → `401`; `Basic nexus:nexus` → `200` |
+| logs reach L2 | debug exporter: `log records: 19–21` per batch |
+| traces reach L2 | debug exporter: `resource spans: 2, spans: 2` (HTTP server spans) |
+| metrics reach L2 | debug exporter: `data points: …` (HTTP request latency/throughput/errors) |
+| app wiring | `otlp_log_handler_wired` + `otlp_trace_provider_wired` + `otlp_meter_provider_wired` on startup |
 
-**Not verified, and not verifiable from here:** anything requiring the ingest
-key or a deployed collector — the actual New Relic `Logs`/`Metrics` tabs, the
-free-tier quota behaviour, and sampling. Those need steps 1–4 done on an
-account this environment has no access to.
+**Not verified from here:** the New Relic `Logs`/`Metrics`/`Traces` tabs, the
+free-tier quota behaviour, and sampling. Those need step 1–3 done on an account
+this environment has no access to.
 
-One thing to know when you run this yourself: the wiring lives inside
-`setup_logging()` (`core/logging.py:183`), **not** at module import. A script
-that imports `core.logging` and inspects `logging.getLogger().handlers` without
-calling `setup_logging()` will see zero OTLP handlers and conclude the feature
-is broken. `main.py:40` calls it at import, so the real app is fine.
+One thing to know when you run this yourself: the log wiring lives inside
+`setup_logging()` (`core/logging.py`), **not** at module import. A script that
+imports `core.logging` and inspects `logging.getLogger().handlers` without
+calling `setup_logging()` sees zero OTLP handlers and concludes the feature is
+broken. `main.py` calls it at import, so the real app is fine. Under pytest,
+`tests/conftest.py` forces `NEW_RELIC_ENABLED=false` **before** the settings
+singleton is built, so the OTel surface is a strict no-op in the suite.

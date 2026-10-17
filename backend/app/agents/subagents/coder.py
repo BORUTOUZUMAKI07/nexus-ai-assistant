@@ -14,10 +14,16 @@ from backend.app.services.tools.tool_gateway import tool_gateway
 
 logger = structlog.get_logger(__name__)
 
-CODER_SYSTEM_PROMPT = """You are the Nexus Code Specialist.
-You write production-grade, bug-free Python code.
-When instructed, output only executable Python code in ```python ... ``` blocks.
-If provided an execution error, analyze the traceback and produce corrected code."""
+CODER_SYSTEM_PROMPT = """You are the Nexus Code Specialist - a production software engineer.
+You write correct, idiomatic, well-typed Python and explain your reasoning only when it helps.
+
+Rules:
+1. Output complete, runnable code. No placeholders, TODO stubs, or pseudo-code unless the task is explicitly about design.
+2. When a code answer is requested, return it as a single ```python ... ``` block and nothing else, so it can be executed directly.
+3. Prefer the standard library and widely-supported packages. If a dependency is required, state it explicitly.
+4. When given an execution error, read the traceback precisely: identify the root cause, fix the bug, and do not rerun the identical snippet.
+5. Handle edge cases: empty inputs, boundary values, and obvious failure modes. Keep the code simple enough that it clearly works.
+6. Never invent APIs, and never report test output you did not observe."""
 
 
 class CoderSubagent:
@@ -55,16 +61,36 @@ class CoderSubagent:
             code = self.extract_code(response)
             latest_code = code
 
-            # 2. Execute in sandbox -- routed through the shared ``tool_gateway``
+            # 2. Permission gate. A call the ladder flags (system commands,
+            # network access) must not run on the model's say-so. Return it to
+            # the graph instead: ``subagent_dispatcher_node`` queues it and
+            # ``tool_node`` raises the HITL interrupt, so a human decides before
+            # the sandbox ever sees it. Benign code runs below so the
+            # self-correction loop keeps working.
+            needs_approval, approval_reason = tool_gateway.requires_approval(
+                "execute_python", {"code": code}
+            )
+            if needs_approval:
+                logger.info("coder_code_requires_hitl_approval", attempt=attempt)
+                return {
+                    "subagent": "coder",
+                    "status": "requires_approval",
+                    "code": code,
+                    "approval_reason": approval_reason,
+                    "attempts": attempt + 1,
+                }
+
+            # 3. Execute in sandbox -- routed through the shared ``tool_gateway``
             # so the poka-yoke banned-pattern screen, lifecycle hooks and rate
             # limit apply to model-generated code too. Calling ``code_executor``
-            # directly was an unpoliced second route to arbitrary code execution;
-            # the final code is *also* gated by the graph's ``tool_node`` HITL step.
+            # directly was an unpoliced second route to arbitrary code execution.
+            # ``requires_approval`` above already returned the flagged cases, so
+            # this proceeds only for code the ladder permits automatically.
             gw_result = await tool_gateway.execute_tool(
                 tool_name="execute_python",
                 arguments={"code": code},
                 user_id=UUID(int=0),
-                is_user_approved=True,
+                is_user_approved=False,
             )
             if gw_result.get("status") == "success":
                 execution_res = gw_result.get("result") or {}

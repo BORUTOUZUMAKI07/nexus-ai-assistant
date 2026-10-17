@@ -1,7 +1,7 @@
 """
 Provider-based OAuth adapters (Authorization Code + PKCE, RFC 6749/7636).
 
-Two first-class providers, mirroring the url-shortner SSO design:
+Two first-class providers, mirroring the url-shortner OAuth design:
 
   * **Google** — OIDC; the userinfo ``email_verified`` claim is the gate.
   * **GitHub** — plain OAuth2; it has no trustable userinfo claim, so a
@@ -12,7 +12,7 @@ Two first-class providers, mirroring the url-shortner SSO design:
 Each adapter is infrastructure-only: it builds the authorize URL, performs the
 token exchange and fetches the identity. It touches no ORM and no database —
 identity resolution and token issuance on the app side live on
-``AuthService.sso_login`` (SRP).
+``AuthService.oauth_login`` (SRP).
 
 ``OAuthService`` orchestrates one provider: it mints the PKCE code_verifier,
 persists the one-time ``state -> code_verifier`` mapping via an injectable
@@ -29,6 +29,7 @@ a seam for tests:
 
 State is strictly one-time use: a replayed or unknown ``state`` is rejected.
 """
+import asyncio
 import base64
 import hashlib
 import secrets
@@ -127,25 +128,90 @@ class OAuthStateStore(Protocol):
 
 
 class _CacheOAuthStateStore:
-    """Redis-backed state store via the app's ICacheService (injectable)."""
+    """Redis-backed state store with in-memory fallback when cache is offline."""
+
+    _mem_store: dict[str, tuple[str, float]] = {}
+    # The local fallback is bounded: an entry is normally removed by `pop`, but
+    # an abandoned sign-in is never popped, so an uncapped dict would grow for
+    # the life of the process (one `state` per started login). 512 is far above
+    # any realistic number of *concurrent* in-flight logins on one worker and
+    # far below a leak worth noticing.
+    _MEM_STORE_MAX = 512
 
     def __init__(self, ttl_seconds: int | None = None) -> None:
         self._ttl_seconds = ttl_seconds
 
+    def _prune_mem_store(self, now: float) -> None:
+        """Drop expired entries, then oldest survivors while over the cap.
+
+        A plain dict preserves insertion order, so `next(iter(...))` is the
+        oldest insertion — FIFO eviction is enough here: expired entries are the
+        common case, and anything old enough to be evicted is a login the user
+        abandoned.
+        """
+        store = self._mem_store
+        for key, (_, expires_at) in list(store.items()):
+            if expires_at <= now:
+                store.pop(key, None)
+        while len(store) >= self._MEM_STORE_MAX and store:
+            store.pop(next(iter(store)), None)
+
     async def set(self, state: str, code_verifier: str, ttl_seconds: int | None = None) -> None:
-        await get_cache_service().set(
-            f"oauth:state:{state}",
-            code_verifier,
-            ttl_seconds=ttl_seconds or self._ttl_seconds,
-        )
+        import time
+
+        ttl = ttl_seconds or self._ttl_seconds or 600
+        now = time.time()
+        if len(self._mem_store) >= self._MEM_STORE_MAX:
+            self._prune_mem_store(now)
+        # Process-local copy first: it is the fallback when the cache is
+        # unreachable, and it makes a same-process callback independent of the
+        # cache's round-trip time.
+        self._mem_store[state] = (code_verifier, now + ttl)
+        try:
+            cache = get_cache_service()
+            # Best-effort *shared* write, bounded so a stalled cache cannot delay
+            # the redirect to the provider. The local copy above still makes the
+            # state usable in this process if this write does not complete.
+            await asyncio.wait_for(
+                cache.set(f"oauth:state:{state}", code_verifier, ttl_seconds=ttl),
+                timeout=0.2,
+            )
+        except Exception as exc:
+            # A cache outage must not fail the sign-in; the local copy carries
+            # it. Deliberately fail-open, but logged (never a bare `pass`) so the
+            # missing shared write is visible rather than silent.
+            logger.warning("oauth_state_cache_set_failed", error=str(exc))
 
     async def pop(self, state: str) -> str | None:
-        cache = get_cache_service()
-        code_verifier = await cache.get(f"oauth:state:{state}")
-        if code_verifier is None:
-            return None
-        await cache.delete(f"oauth:state:{state}")
-        return code_verifier
+        import time
+
+        # Consume the SHARED copy first. The state is strictly one-time use
+        # across processes, and the local copy is only a fallback for when the
+        # cache is unreachable. Returning the local copy while leaving the Redis
+        # entry alive would make an already-used state replayable by any other
+        # process -- or by this one after a restart -- because that entry is what
+        # a subsequent pop consults once the local copy is gone.
+        try:
+            cache = get_cache_service()
+            code_verifier = await asyncio.wait_for(
+                cache.get(f"oauth:state:{state}"),
+                timeout=0.3,
+            )
+            if code_verifier is not None:
+                await cache.delete(f"oauth:state:{state}")
+                self._mem_store.pop(state, None)
+                return code_verifier
+        except Exception as exc:
+            # Cache unreachable: fall through to the process-local copy below.
+            # Logged (never a bare `pass`).
+            logger.warning("oauth_state_cache_get_failed", error=str(exc))
+
+        item = self._mem_store.pop(state, None)
+        if item is not None:
+            verifier, expires_at = item
+            if time.time() <= expires_at:
+                return verifier
+        return None
 
 
 class OAuthProvider(Protocol):
@@ -257,15 +323,23 @@ class GitHubOAuthProvider:
             resp = await client.post(
                 self.TOKEN_URL,
                 data=data,
-                headers={"Accept": "application/json"},
+                headers={"Accept": "application/json", "User-Agent": "Nexus-AI-Assistant"},
                 timeout=_HTTP_TIMEOUT,
             )
             resp.raise_for_status()
-            return dict(resp.json())
+            payload = dict(resp.json())
+            if "error" in payload:
+                err_desc = payload.get("error_description") or payload.get("error")
+                raise AuthenticationError(f"GitHub authentication error: {err_desc}")
+            return payload
 
     async def fetch_userinfo(self, token: dict[str, Any]) -> dict[str, Any]:
         access_token = _bearer_token(token)
-        headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"}
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Nexus-AI-Assistant",
+        }
         async with httpx.AsyncClient() as client:
             user_resp = await client.get(self.USERINFO_URL, headers=headers, timeout=_HTTP_TIMEOUT)
             user_resp.raise_for_status()
@@ -312,11 +386,14 @@ class GitHubOAuthProvider:
 def _bearer_token(token: dict[str, Any]) -> str:
     access_token = token.get("access_token")
     if not access_token:
+        err_desc = token.get("error_description") or token.get("error")
+        if err_desc:
+            raise AuthenticationError(f"Provider error: {err_desc}")
         raise AuthenticationError("Provider token exchange returned no access token.")
     return str(access_token)
 
 
-class SSOProviderRegistry:
+class OAuthProviderRegistry:
     """Name -> provider adapter registry (extensible for future IdPs)."""
 
     providers: dict[str, type] = {}
@@ -360,8 +437,8 @@ class SSOProviderRegistry:
         return described
 
 
-SSOProviderRegistry.register("google", GoogleOAuthProvider)
-SSOProviderRegistry.register("github", GitHubOAuthProvider)
+OAuthProviderRegistry.register("google", GoogleOAuthProvider)
+OAuthProviderRegistry.register("github", GitHubOAuthProvider)
 
 
 class _UnconfiguredProvider:
@@ -413,7 +490,7 @@ class OAuthService:
     @classmethod
     def for_provider(cls, provider_name: str) -> "OAuthService":
         """Build the adapter for a registered provider, or a never-enabled stub."""
-        provider = SSOProviderRegistry.get(provider_name)
+        provider = OAuthProviderRegistry.get(provider_name)
         if provider is None:
             provider = _UnconfiguredProvider(provider_name)
         return cls(provider=provider)

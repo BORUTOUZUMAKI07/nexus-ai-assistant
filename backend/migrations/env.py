@@ -115,7 +115,7 @@ PGBOUNCER_SAFE_CONNECT_ARGS = {
 # database, except LangGraph's checkpoint_* tables, which are runtime-owned and
 # filtered out by include_object below.
 from backend.app.domain.user.models import User, UserSettings, UserMemory, APIKey
-from backend.app.domain.conversation.models import Conversation, Message, MessageAttachment, ConversationBranch
+from backend.app.domain.conversation.models import Conversation, Message, MessageAttachment, ConversationBranch, Project
 from backend.app.domain.experiment.models import BanditReward
 from backend.app.domain.file.models import File, FileChunk, FileMetadata
 from backend.app.domain.tool.models import Tool, ToolCall, ToolPermission

@@ -1,7 +1,7 @@
 import { proxyJson } from "@/lib/proxy";
 
 /**
- * GET /api/auth/oauth/providers — which SSO providers this deployment can use.
+ * GET /api/auth/oauth/providers — which OAuth providers this deployment can use.
  *
  * The sign-in page needs this before it has a session, which is why the backend
  * endpoint is unauthenticated and why this relay adds no credential of its own.

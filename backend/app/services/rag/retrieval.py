@@ -12,6 +12,7 @@ from backend.app.infrastructure.vector.base import IVectorStore
 from backend.app.infrastructure.vector.qdrant_client import (
     vector_db as _default_vector_db,
 )
+from backend.app.services.byok import get_byok_key
 from backend.app.services.rag.base import IRetriever
 
 logger = structlog.get_logger(__name__)
@@ -57,13 +58,13 @@ async def _embed_with_gemini(
         for i in range(0, len(texts), 100):
             batch = texts[i : i + 100]
             if len(batch) == 1:
-                url = f"https://generativelanguage.googleapis.com/v1beta/{clean_model}:embedContent?key={api_key}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/{clean_model}:embedContent"
                 payload = {
                     "model": clean_model,
                     "content": {"parts": [{"text": batch[0]}]},
                     "outputDimensionality": dimension,
                 }
-                resp = await client.post(url, json=payload)
+                resp = await client.post(url, json=payload, headers={"x-goog-api-key": api_key})
                 resp.raise_for_status()
                 data = resp.json()
                 vals = data.get("embedding", {}).get("values", [])
@@ -73,7 +74,7 @@ async def _embed_with_gemini(
                     )
                 all_embeddings.append(vals)
             else:
-                url = f"https://generativelanguage.googleapis.com/v1beta/{clean_model}:batchEmbedContents?key={api_key}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/{clean_model}:batchEmbedContents"
                 payload = {
                     "requests": [
                         {
@@ -84,7 +85,7 @@ async def _embed_with_gemini(
                         for t in batch
                     ]
                 }
-                resp = await client.post(url, json=payload)
+                resp = await client.post(url, json=payload, headers={"x-goog-api-key": api_key})
                 resp.raise_for_status()
                 data = resp.json()
                 embeddings = data.get("embeddings", [])
@@ -234,7 +235,8 @@ class RetrievalService(IRetriever):
 
         try:
             # 1. Primary: Google Gemini API (0 MB local RAM, fast)
-            if settings.GEMINI_API_KEY and (
+            _gemini_key = get_byok_key("gemini") or settings.GEMINI_API_KEY
+            if _gemini_key and (
                 "gemini" in self.embedding_model.lower()
                 or "text-embedding" in self.embedding_model.lower()
             ):
@@ -242,11 +244,14 @@ class RetrievalService(IRetriever):
                     texts=texts,
                     model=self.embedding_model,
                     dimension=settings.EMBEDDING_DIMENSION,
-                    api_key=settings.GEMINI_API_KEY,
+                    api_key=_gemini_key,
                 )
 
-            # 2. Fallback: local FastEmbed CPU model
-            model = await asyncio.to_thread(_get_fastembed_model, self.embedding_model)
+            # 2. Fallback: local FastEmbed CPU model. Uses FASTEMBED_MODEL, NOT
+            # EMBEDDING_MODEL: the latter is a Gemini endpoint id that fastembed
+            # can never load, so handing it to _get_fastembed_model made the
+            # offline path dead on arrival. See config.FASTEMBED_MODEL.
+            model = await asyncio.to_thread(_get_fastembed_model, settings.FASTEMBED_MODEL)
             vectors = await asyncio.to_thread(_embed_texts_sync, model, texts)
             for vec in vectors:
                 if len(vec) != settings.EMBEDDING_DIMENSION:

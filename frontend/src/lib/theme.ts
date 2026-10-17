@@ -8,32 +8,28 @@ import { useSyncExternalStore } from "react";
  * distinguish "never chose" from "chose dark". Persisting locally keeps the
  * light default intact with zero backend changes.
  *
- * <html data-theme="light|dark"  data-accent="cyan|violet|emerald">
- * (lime is the unset default, so no data-accent attribute is written for it)
+ * <html data-theme="light|dark">
+ *
+ * **There is exactly ONE brand accent — Electric Acid Lime — and it is not a
+ * preference.** The old cyan/violet/emerald `data-accent` swaps were removed on
+ * 2026-10-14 at the product owner's request ("only acid lime is good"). No
+ * `data-accent` attribute is ever written; `THEME_INIT_SCRIPT` also clears any
+ * stale value a returning visitor still has in storage from the previous build.
  */
 export type ThemeMode = "light" | "dark" | "system";
-export type Accent = "lime" | "cyan" | "violet" | "emerald";
 
 export const THEME_KEY = "nexus-theme";
-export const ACCENT_KEY = "nexus-accent";
 
 export const THEME_MODES: ThemeMode[] = ["light", "dark", "system"];
-export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [
-  { id: "lime", label: "Acid Lime", swatch: "#d7e600" },
-  { id: "cyan", label: "Signal Teal", swatch: "#02b8cc" },
-  { id: "violet", label: "Iris Violet", swatch: "#6366f1" },
-  { id: "emerald", label: "Emerald", swatch: "#10b981" },
-];
 
 export interface ThemeState {
   mode: ThemeMode;
-  accent: Accent;
 }
 
 /** Runs before first paint (inlined in <head>) so there is no theme flash. */
-export const THEME_INIT_SCRIPT = `(function(){try{var d=document.documentElement;var m=localStorage.getItem("${THEME_KEY}")||"light";var a=localStorage.getItem("${ACCENT_KEY}")||"lime";var t=m==="system"?(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):m;d.setAttribute("data-theme",t==="dark"?"dark":"light");if(a!=="lime"){d.setAttribute("data-accent",a);}}catch(e){}})();`;
+export const THEME_INIT_SCRIPT = `(function(){try{var d=document.documentElement;var m=localStorage.getItem("${THEME_KEY}")||"light";var t=m==="system"?(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):m;d.setAttribute("data-theme",t==="dark"?"dark":"light");d.removeAttribute("data-accent");}catch(e){}})();`;
 
-const SERVER_STATE: ThemeState = { mode: "light", accent: "lime" };
+const SERVER_STATE: ThemeState = { mode: "light" };
 let cached: ThemeState = SERVER_STATE;
 let initialised = false;
 const listeners = new Set<() => void>();
@@ -41,18 +37,11 @@ const listeners = new Set<() => void>();
 function isMode(v: unknown): v is ThemeMode {
   return v === "light" || v === "dark" || v === "system";
 }
-function isAccent(v: unknown): v is Accent {
-  return v === "lime" || v === "cyan" || v === "violet" || v === "emerald";
-}
 
 function readStored(): ThemeState {
   try {
     const m = window.localStorage.getItem(THEME_KEY);
-    const a = window.localStorage.getItem(ACCENT_KEY);
-    return {
-      mode: isMode(m) ? m : "light",
-      accent: isAccent(a) ? a : "lime",
-    };
+    return { mode: isMode(m) ? m : "light" };
   } catch {
     return SERVER_STATE;
   }
@@ -69,12 +58,13 @@ export function resolveMode(mode: ThemeMode): "light" | "dark" {
 function applyToDocument(state: ThemeState) {
   const root = document.documentElement;
   root.setAttribute("data-theme", resolveMode(state.mode));
-  if (state.accent === "lime") root.removeAttribute("data-accent");
-  else root.setAttribute("data-accent", state.accent);
+  // Single accent: never write data-accent, and strip any value left over from
+  // the previous multi-accent build so its swap block can't linger.
+  root.removeAttribute("data-accent");
 }
 
 function commit(next: ThemeState) {
-  if (next.mode === cached.mode && next.accent === cached.accent) return;
+  if (next.mode === cached.mode) return;
   cached = next;
   applyToDocument(cached);
   listeners.forEach((l) => l());
@@ -89,15 +79,6 @@ export function setThemeMode(mode: ThemeMode) {
   commit({ ...cached, mode });
 }
 
-export function setAccent(accent: Accent) {
-  try {
-    window.localStorage.setItem(ACCENT_KEY, accent);
-  } catch {
-    /* storage blocked — still apply for this session */
-  }
-  commit({ ...cached, accent });
-}
-
 function subscribe(listener: () => void) {
   if (!initialised) {
     initialised = true;
@@ -106,7 +87,7 @@ function subscribe(listener: () => void) {
   listeners.add(listener);
 
   const onStorage = (e: StorageEvent) => {
-    if (e.key === THEME_KEY || e.key === ACCENT_KEY || e.key === null) commit(readStored());
+    if (e.key === THEME_KEY || e.key === null) commit(readStored());
   };
   window.addEventListener("storage", onStorage);
 
@@ -140,6 +121,5 @@ export function useTheme() {
     ...state,
     resolved: resolveMode(state.mode),
     setMode: setThemeMode,
-    setAccent,
   };
 }

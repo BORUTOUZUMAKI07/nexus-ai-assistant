@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Sliders,
   Key,
@@ -13,32 +14,59 @@ import {
   AlertCircle,
 } from "lucide-react";
 import {
-  fetchSettings,
   updateSettings,
-  fetchMemories,
   createMemory,
   deleteMemory,
-  fetchAPIKeys,
   addAPIKey,
+  deleteAPIKey,
   UserSettings,
   UserMemory,
   APIKey,
 } from "@/lib/api";
+import {
+  useSettingsQuery,
+  useMemoriesQuery,
+  useAPIKeysQuery,
+  settingsKeys,
+  mergeAPIKey,
+} from "@/lib/queries";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
-
-const MODELS = [
-  { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B" },
-  { id: "deepseek-r1-distill-llama-70b", name: "DeepSeek R1 Distill" },
-  { id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" },
-];
+import { MODELS, modelDisplayName } from "@/lib/models";
 
 export const SettingsView: React.FC = () => {
-  const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [memories, setMemories] = useState<UserMemory[]>([]);
-  const [keys, setKeys] = useState<APIKey[]>([]);
+  const queryClient = useQueryClient();
+  const settingsQuery = useSettingsQuery();
+  const memoriesQuery = useMemoriesQuery();
+  const keysQuery = useAPIKeysQuery();
 
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // The form draft is local state rather than the query cache: this panel is
+  // editable, so reading the cache directly would make a half-typed field
+  // indistinguishable from saved server state and let a background refetch
+  // overwrite unsaved edits.
+  const [settings, setSettings] = useState<UserSettings | null>(null);
+  const memories = useMemo(
+    () => memoriesQuery.data ?? [],
+    [memoriesQuery.data]
+  );
+  const keys = useMemo(() => keysQuery.data ?? [], [keysQuery.data]);
+
+  // The settings dropdown offers the same two models as the sidebar picker, from
+  // the single source in `lib/models`, so the "default model" a user saves is a
+  // real router group the chat can honor. A value stored before this change (a
+  // legacy slug) is kept as an extra option rather than dropped, so an older
+  // default is shown instead of rendering the select blank.
+  const modelOptions = useMemo(() => {
+    const known = MODELS.map((m) => ({
+      id: m.id as string,
+      name: `${m.name} · ${m.provider}`,
+    }));
+    const stored = settings?.default_model;
+    if (stored && !known.some((o) => o.id === stored)) {
+      return [...known, { id: stored, name: modelDisplayName(stored) ?? stored }];
+    }
+    return known;
+  }, [settings?.default_model]);
+
   const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
 
@@ -53,31 +81,33 @@ export const SettingsView: React.FC = () => {
   const [keyLabel, setKeyLabel] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const [settingsData, memoriesData, keysData] = await Promise.all([
-        fetchSettings(),
-        fetchMemories(),
-        fetchAPIKeys(),
-      ]);
-      setSettings(settingsData);
-      setMemories(memoriesData);
-      setKeys(keysData);
-    } catch (err) {
-      setLoadError(
-        err instanceof Error ? err.message : "Could not load settings"
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // Hydrate the editable draft once the server value arrives. Guarded on
+  // `settings === null` so a save (or a later refetch) never clobbers edits.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-  }, [load]);
+    if (settings === null && settingsQuery.data) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSettings(settingsQuery.data);
+    }
+  }, [settings, settingsQuery.data]);
+
+  const loading =
+    settingsQuery.isPending || memoriesQuery.isPending || keysQuery.isPending;
+  const firstError =
+    settingsQuery.error ?? memoriesQuery.error ?? keysQuery.error;
+  const loadError = firstError
+    ? firstError instanceof Error
+      ? firstError.message
+      : "Could not load settings"
+    : null;
+
+  // Named wrapper so the Retry button's `onClick={load}` is unchanged.
+  const load = () => {
+    void Promise.all([
+      settingsQuery.refetch(),
+      memoriesQuery.refetch(),
+      keysQuery.refetch(),
+    ]);
+  };
 
   const patch = (next: Partial<UserSettings>) =>
     setSettings((prev) => (prev ? { ...prev, ...next } : prev));
@@ -95,6 +125,9 @@ export const SettingsView: React.FC = () => {
         max_tokens: settings.max_tokens,
       });
       setSettings(updated);
+      // Keep the cache in step with the saved draft so a remount does not show
+      // pre-save values (the draft is local and would be re-hydrated from here).
+      queryClient.setQueryData(settingsKeys.settings, updated);
       setSavedNotice(true);
       setTimeout(() => setSavedNotice(false), 2500);
     } finally {
@@ -110,7 +143,12 @@ export const SettingsView: React.FC = () => {
         content: memoryContent.trim(),
         category: memoryCategory,
       });
-      setMemories((prev) => [created, ...prev]);
+      // Prepend to the cache, not a refetch: the response is authoritative and a
+      // refetch against the (static) fixture would drop the just-added row.
+      queryClient.setQueryData<UserMemory[]>(settingsKeys.memories, (prev) => [
+        created,
+        ...(prev ?? []),
+      ]);
       setMemoryContent("");
     } finally {
       setMemoryBusy(false);
@@ -120,7 +158,9 @@ export const SettingsView: React.FC = () => {
   const handleDeleteMemory = async (id: string) => {
     try {
       await deleteMemory(id);
-      setMemories((prev) => prev.filter((m) => m.id !== id));
+      queryClient.setQueryData<UserMemory[]>(settingsKeys.memories, (prev) =>
+        (prev ?? []).filter((m) => m.id !== id)
+      );
     } catch (err) {
       console.warn("Delete memory failed:", err);
     }
@@ -135,11 +175,26 @@ export const SettingsView: React.FC = () => {
         key_value: keyValue.trim(),
         label: keyLabel.trim() || null,
       });
-      setKeys((prev) => [created, ...prev]);
+      // The backend upserts by (user, provider) and returns the existing row's
+      // id, so this must replace rather than append — see `mergeAPIKey`.
+      queryClient.setQueryData<APIKey[]>(settingsKeys.keys, (prev) =>
+        mergeAPIKey(prev, created)
+      );
       setKeyValue("");
       setKeyLabel("");
     } finally {
       setKeyBusy(false);
+    }
+  };
+
+  const handleDeleteKey = async (id: string) => {
+    try {
+      await deleteAPIKey(id);
+      queryClient.setQueryData<APIKey[]>(settingsKeys.keys, (prev) =>
+        (prev ?? []).filter((k) => k.id !== id)
+      );
+    } catch (err) {
+      console.warn("Delete API key failed:", err);
     }
   };
 
@@ -223,7 +278,7 @@ export const SettingsView: React.FC = () => {
               onChange={(e) => patch({ default_model: e.target.value })}
               className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
             >
-              {MODELS.map((m) => (
+              {modelOptions.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
                 </option>
@@ -348,16 +403,25 @@ export const SettingsView: React.FC = () => {
                     {k.key_preview}
                   </span>
                 </div>
-                <span
-                  className={`flex items-center gap-1 text-[10px] font-mono ${
-                    k.is_active
-                      ? "text-[var(--status-success)]"
-                      : "text-[var(--status-danger)]"
-                  }`}
-                >
-                  <CheckCircle2 className="w-3 h-3" />
-                  {k.is_active ? "active" : "inactive"}
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span
+                    className={`flex items-center gap-1 text-[10px] font-mono ${
+                      k.is_active
+                        ? "text-[var(--status-success)]"
+                        : "text-[var(--status-danger)]"
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3 h-3" />
+                    {k.is_active ? "active" : "inactive"}
+                  </span>
+                  <button
+                    onClick={() => handleDeleteKey(k.id)}
+                    className="text-[var(--text-faint)] hover:text-[var(--status-danger)] p-1 transition-colors"
+                    title="Delete API key"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>

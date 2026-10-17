@@ -28,7 +28,7 @@ class RedisService(ICacheService):
 
     async def set(self, key: str, value: str, ttl_seconds: int | None = None) -> bool:
         if ttl_seconds:
-            return await self.client.setex(key, ttl_seconds, value)
+            return await self.client.set(key, value, ex=ttl_seconds)
         return await self.client.set(key, value)
 
     async def set_if_absent(self, key: str, value: str, ttl_seconds: int) -> bool:

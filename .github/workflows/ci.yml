@@ -177,12 +177,17 @@ jobs:
         run: uv run bandit -c pyproject.toml -r app -q
 
       - name: pip-audit (locked venv)
-        # Only PYSEC-2026-1325 (Minerva timing attack on P-256) is ignored and
-        # only because no patched release exists AND it is not exploitable
-        # here: python-jose ships ecdsa for ES* algorithms the app never uses
-        # (JWT_ALGORITHM=HS256, see the pyproject comment near python-jose).
+        # Two advisories are ignored, each because no patched release exists in
+        # our pinned set AND the affected code path is unreachable here:
+        #   * PYSEC-2026-1325 (ecdsa Minerva timing attack on P-256) — python-jose
+        #     ships ecdsa for the ES* algorithms the app never uses
+        #     (JWT_ALGORITHM=HS256, see the pyproject comment near python-jose).
+        #   * PYSEC-2026-4298 (python-jose algorithm-confusion via DER-encoded
+        #     public keys) — the advisory fires only when the verifier does not
+        #     pin the accepted algorithm, and our single decode call site does:
+        #     core/security.py `jwt.decode(token, key, algorithms=[_algorithm()])`.
         # New advisories with published fixes fail this job on purpose.
-        run: uv run pip-audit -l --skip-editable --ignore-vuln PYSEC-2026-1325
+        run: uv run pip-audit -l --skip-editable --ignore-vuln PYSEC-2026-1325 --ignore-vuln PYSEC-2026-4298
 
       - uses: actions/setup-node@v4
         with:
@@ -191,8 +196,13 @@ jobs:
           cache-dependency-path: ./frontend/package-lock.json
 
       - name: npm audit (frontend)
+        # `npm audit` has no `--ignore-vuln`, so an advisory with no fixed
+        # release (currently only GHSA-vfj7-8cjw-p6xm, a dev-only glob matcher
+        # reached via eslint-config-next) would force the gate off. The wrapper
+        # keeps failing on every other high/critical advisory and documents each
+        # allowance inline — see frontend/scripts/npm-audit-gate.mjs.
         working-directory: frontend
-        run: npm audit --audit-level=high
+        run: npm run audit:gate
 
   live-llm-eval-gates:
     name: Live LLM-judge gates (prompt-regression + arena + conversational + RAG)

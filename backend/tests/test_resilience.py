@@ -125,6 +125,22 @@ async def test_web_search_duckduckgo_retries_with_backoff(monkeypatch):
 # ── CoderSubagent self-correction loop ────────────────────────────────────────
 
 
+def _fake_gateway(execute_tool, needs_approval=False):
+    """A gateway stub carrying *both* seams the coder consults.
+
+    The coder now asks ``requires_approval`` before executing, so a stub with
+    only ``execute_tool`` would raise ``AttributeError`` -- the retry-loop tests
+    below are about execution feedback, not the ladder, so the default is a
+    benign verdict. ``requires_approval`` is synchronous (it is a pure decision),
+    so the stub is too.
+    """
+
+    def _requires_approval(tool_name, arguments):
+        return needs_approval, ("stubbed" if needs_approval else None)
+
+    return SimpleNamespace(execute_tool=execute_tool, requires_approval=_requires_approval)
+
+
 @pytest.mark.asyncio
 async def test_coder_subagent_succeeds_on_first_attempt(monkeypatch):
     async def _completion(*args, **kwargs):
@@ -134,7 +150,7 @@ async def test_coder_subagent_succeeds_on_first_attempt(monkeypatch):
         return {"status": "success", "result": {"success": True, "stdout": "hi", "charts": []}}
 
     monkeypatch.setattr(coder_module, "ai_client", SimpleNamespace(completion=_completion))
-    monkeypatch.setattr(coder_module, "tool_gateway", SimpleNamespace(execute_tool=_execution_success))
+    monkeypatch.setattr(coder_module, "tool_gateway", _fake_gateway(_execution_success))
 
     res = await coder_subagent.execute(task_description="print hi")
 
@@ -157,7 +173,7 @@ async def test_coder_subagent_retries_then_succeeds(monkeypatch):
         return {"status": "success", "result": {"success": True, "stdout": "hi", "charts": []}}
 
     monkeypatch.setattr(coder_module, "ai_client", SimpleNamespace(completion=_completion))
-    monkeypatch.setattr(coder_module, "tool_gateway", SimpleNamespace(execute_tool=_execution_flaky))
+    monkeypatch.setattr(coder_module, "tool_gateway", _fake_gateway(_execution_flaky))
 
     res = await coder_subagent.execute(task_description="print hi", max_retries=2)
 
@@ -174,7 +190,7 @@ async def test_coder_subagent_fails_after_exhausting_retries(monkeypatch):
         return {"status": "error", "error": "persistent bug"}
 
     monkeypatch.setattr(coder_module, "ai_client", SimpleNamespace(completion=_completion))
-    monkeypatch.setattr(coder_module, "tool_gateway", SimpleNamespace(execute_tool=_execution_fail))
+    monkeypatch.setattr(coder_module, "tool_gateway", _fake_gateway(_execution_fail))
 
     res = await coder_subagent.execute(task_description="print hi", max_retries=2)
 

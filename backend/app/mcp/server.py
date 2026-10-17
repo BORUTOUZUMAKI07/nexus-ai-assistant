@@ -63,7 +63,7 @@ def _authenticated_user_id():
     except Exception:
         return None
 
-    token = ""
+    token = ""  # nosec B105 - empty initializer, not a credential; filled below
     authz = request.headers.get("Authorization", "")
     if authz.lower().startswith("bearer "):
         token = authz[7:].strip()
@@ -394,10 +394,9 @@ async def request_user_input(conversation_id: str, message: str, schema_json: st
     """
     from uuid import UUID
 
+    from backend.app.domain.conversation.repository import ConversationRepository
     from backend.app.infrastructure.database.session import async_session_factory
     from backend.app.services.tools.elicitations import ElicitationService
-
-    from backend.app.domain.conversation.repository import ConversationRepository
 
     try:
         schema = json.loads(schema_json)
@@ -495,9 +494,11 @@ def code_review_prompt(code: str, language: str = "python") -> str:
     Prompt template for thorough code review and security audit.
     """
     return (
-        f"Please perform a senior-level code review on the following {language} code:\n\n"
-        f"```{language}\n{code}\n```\n\n"
-        "Evaluate: 1. Correctness 2. Security vulnerabilities 3. Performance & edge cases."
+        f"Perform a senior-level code review of the {language} code below. "
+        "Evaluate correctness, security, edge cases, and performance. "
+        "Report each finding with its severity and a concrete fix, then give an "
+        "overall verdict and an improved version of the code.\n\n"
+        f"```{language}\n{code}\n```"
     )
 
 
@@ -507,6 +508,9 @@ def research_brief_prompt(topic: str) -> str:
     Prompt template for synthesizing deep research briefs.
     """
     return (
-        f"Produce a comprehensive, structured research brief on: '{topic}'.\n"
-        "Structure: Executive Summary, Key Findings, Market / Technical Impact, Challenges, and Recommendations."
+        f"Produce a comprehensive, structured research brief on the topic below.\n"
+        "Cover an executive summary, key findings, technical impact, open "
+        "challenges, and actionable recommendations. Cite verifiable sources and "
+        "separate established facts from open questions.\n\n"
+        f"Topic: {topic}"
     )

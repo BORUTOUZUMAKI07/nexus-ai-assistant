@@ -1,13 +1,13 @@
 # Nexus AI Assistant — Frontend
 
-The Next.js **16.3.4** (App Router) + **React 19.2.8** chat client for Nexus AI
+The Next.js **16.4.2** (App Router) + **React 19.2.8** chat client for Nexus AI
 Assistant. It proxies every backend call through BFF-style route handlers:
 the browser talks to `localhost:3000`, and `src/app/api/**/route.ts` forwards
 to the FastAPI backend (`localhost:8000`) with credentials/cookies attached.
 
 ## At a glance
 
-- **Pages**: landing (`src/app/page.tsx`), SSO sign-in (`src/app/signin/`),
+- **Pages**: landing (`src/app/page.tsx`), OAuth sign-in (`src/app/signin/`),
   the main app shell (`src/app/app/page.tsx` — sidebar + chat + views).
 - **Core components** (`src/components/`): `ChatArea`, `ChatInput` (slash
   commands, audio capture, file attach), `CommandPalette` (⌘K), `Sidebar`,
@@ -21,7 +21,7 @@ to the FastAPI backend (`localhost:8000`) with credentials/cookies attached.
   header); `src/proxy.ts` is the edge middleware that server-side-gates `/app`.
   Backend address resolution: `BACKEND_URL` → legacy `NEXT_PUBLIC_API_URL` →
   `http://127.0.0.1:8000`.
-- **Stack**: Next 16.3.4 · React 19.2.8 · TypeScript 5 · Tailwind 4 ·
+- **Stack**: Next 16.4.2 · React 19.2.8 · TypeScript 5 · Tailwind 4 ·
   Radix UI + `cmdk` · `lucide-react` · `motion` · `sonner` · Vitest 4 ·
   Playwright · MSW (test mocking).
 
@@ -92,7 +92,7 @@ Verified against `src/components/CommandPalette.tsx:68`,
 src/
 ├── app/
 │   ├── page.tsx              # landing page
-│   ├── signin/page.tsx       # SSO sign-in
+│   ├── signin/page.tsx       # OAuth sign-in
 │   ├── app/page.tsx          # main app shell
 │   ├── api/**/*/route.ts     # BFF route handlers (proxy to backend)
 │   └── layout.tsx, globals.css, ...

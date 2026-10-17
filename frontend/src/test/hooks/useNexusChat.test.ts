@@ -615,6 +615,110 @@ describe("useNexusChat", () => {
     await waitFor(() => expect(userContents(result)).toEqual(["first", "second"]))
   })
 
+  it("reloads the resumed answer after an approval so the result is visible", async () => {
+    // The backend resumes the graph inline and persists the answer, but it does
+    // not stream the resumed turn back to this client. Without a reload the card
+    // cleared and the user saw nothing until a manual refresh -- the approval
+    // "succeeded" and produced no visible result, which is indistinguishable
+    // from it having failed. This pins that resolving re-fetches the
+    // conversation, and the resumed answer lands in the transcript.
+    let historyFetches = 0
+    server.use(
+      http.get("/api/conversations/:id", () => {
+        historyFetches += 1
+        // The first (mount) hydration sees the run still pending -- there is no
+        // answer row yet. Only the reload that follows the approval sees the
+        // resumed answer, so its presence in the transcript cannot be inherited
+        // from the mount hydration (§9.13: the fixture must make the reload the
+        // only way the assertion can hold).
+        const messages =
+          historyFetches > 1
+            ? [
+                { id: "u1", role: "user", content: "run it", citations: [], tool_calls: [] },
+                {
+                  id: "a1",
+                  role: "assistant",
+                  content: "RESUMED ANSWER",
+                  citations: [],
+                  tool_calls: [],
+                },
+              ]
+            : [{ id: "u1", role: "user", content: "run it", citations: [], tool_calls: [] }]
+        return HttpResponse.json({ id: "t1", messages })
+      })
+    )
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse(
+          chatStreamBody([], [
+            { type: "hitl_request", data: { thread_id: "t1", request: "Run tool?" } },
+          ]),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        )
+      )
+    )
+
+    const { result } = renderHook(() => useNexusChat({ conversationId: "t1" }))
+    // The mount effect hydrates the visible conversation once.
+    await waitFor(() => expect(historyFetches).toBeGreaterThan(0))
+    const beforeResolve = historyFetches
+
+    await act(async () => {
+      await result.current.sendMessage("run it")
+    })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.pendingHITL).not.toBeNull()
+
+    await act(async () => {
+      await result.current.resolveHITL("approve")
+    })
+
+    // Resolving reloads, so the resumed answer is now in the transcript.
+    await waitFor(() => expect(historyFetches).toBeGreaterThan(beforeResolve))
+    await waitFor(() =>
+      expect(
+        result.current.messages.some(
+          (m) => m.role === "assistant" && m.content === "RESUMED ANSWER"
+        )
+      ).toBe(true)
+    )
+    expect(result.current.pendingHITL).toBeNull()
+  })
+
+  it("keeps the request pending and rejects when the approval submit fails", async () => {
+    // The approval is the one flow that must not be lossy: a failed submit
+    // records the error, keeps `pendingHITL` so the card stays actionable, and
+    // re-throws so the caller can tell it apart from a success. Load-bearing:
+    // if the hook swallowed the error, `resolveHITL` would resolve and the card
+    // would retire on a request the backend never recorded.
+    server.use(
+      http.post("/api/hitl", () => new HttpResponse(null, { status: 500 }))
+    )
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse(
+          chatStreamBody([], [
+            { type: "hitl_request", data: { thread_id: "t1", request: "Run tool?" } },
+          ]),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        )
+      )
+    )
+    const { result } = renderHook(() => useNexusChat({ conversationId: "t1" }))
+    await act(async () => {
+      await result.current.sendMessage("run it")
+    })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.pendingHITL).not.toBeNull()
+
+    await act(async () => {
+      await expect(result.current.resolveHITL("approve")).rejects.toThrow()
+    })
+
+    expect(result.current.pendingHITL).not.toBeNull()
+    expect(result.current.error).toBeInstanceOf(Error)
+  })
+
   it("clearMessages drops queued turns along with the transcript", async () => {
     const release = gatedChat()
     const { result } = renderHook(() => useNexusChat())

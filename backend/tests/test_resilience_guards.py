@@ -212,7 +212,14 @@ async def test_llm_complete_skips_circuit_open_group_and_falls_back():
 async def test_llm_complete_open_everywhere_raises_without_calls():
     breaker = CircuitBreaker(failure_threshold=1, open_timeout_seconds=60.0)
     router = _FakeRouter()
-    for g in ("fast_chat", "large_context", "liquid_fallback", "vision_analysis"):
+    for g in (
+        "fast_chat",
+        "large_context",
+        "gemini_free",
+        "liquid_fallback",
+        "vision_analysis",
+        "vision_fallback",
+    ):
         await breaker.record_failure(g)
 
     svc = LiteLLMService(llm_router=router, circuit_breaker=breaker, in_flight_limiter=InFlightLimiter(8))
