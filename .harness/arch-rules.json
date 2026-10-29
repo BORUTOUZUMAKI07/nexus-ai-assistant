@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "note": "Architectural invariants enforced by scripts/check-arch.sh. Every rule must carry what/why/fix so a failure is a repair instruction, not a verdict. Promote a review finding here when the category of mistake repeats -- see the promotion rule in AGENTS.md.",
+  "rules": [
+    {
+      "id": "backend-no-bare-print",
+      "severity": "error",
+      "type": "absent",
+      "paths": ["backend/app"],
+      "glob": "*.py",
+      "pattern": "^\\s*print\\(",
+      "what": "Bare print() call in backend application code.",
+      "why": "print() bypasses the structured logger, so the line has no run id, no trace id and no level: it is invisible to observability and unusable in a replay. Every service logs structured events with structlog (AGENTS.md §0).",
+      "fix": "Replace print(...) with logger.info(\"event_name\", key=value) using the module's existing `logger = structlog.get_logger(__name__)`."
+    },
+    {
+      "id": "backend-no-requests",
+      "severity": "error",
+      "type": "absent",
+      "paths": ["backend/app"],
+      "glob": "*.py",
+      "pattern": "^\\s*(import requests|from requests)",
+      "what": "The synchronous `requests` library is imported in async application code.",
+      "why": "requests blocks the event loop. One slow upstream call freezes every concurrent request on that worker, which reads as a global outage rather than a slow provider.",
+      "fix": "Use `httpx.AsyncClient` (or the existing ai_client / tool gateway), and await the call."
+    },
+    {
+      "id": "backend-no-blocking-sleep",
+      "severity": "error",
+      "type": "absent",
+      "paths": ["backend/app"],
+      "glob": "*.py",
+      "pattern": "\\btime\\.sleep\\(",
+      "what": "time.sleep() in async application code.",
+      "why": "It blocks the event loop for the whole duration, so a 2s backoff becomes a 2s stall for every other request in flight (same failure mode as the sync-requests rule).",
+      "fix": "Use `await asyncio.sleep(...)`, or the retry/backoff helper in the relevant client."
+    },
+    {
+      "id": "backend-no-bare-except",
+      "severity": "error",
+      "type": "absent",
+      "paths": ["backend/app"],
+      "glob": "*.py",
+      "pattern": "except\\s*:",
+      "what": "Bare `except:` clause.",
+      "why": "A bare except also swallows KeyboardInterrupt and asyncio.CancelledError, so a client disconnect or a shutdown is converted into 'handled' and the task keeps running against a closed stream.",
+      "fix": "Catch `Exception as exc` (narrower if you know the type) and log it; use `except asyncio.CancelledError: raise` where cancellation must propagate."
+    },
+    {
+      "id": "services-must-not-import-routers",
+      "severity": "error",
+      "type": "absent",
+      "paths": ["backend/app/services"],
+      "glob": "*.py",
+      "pattern": "^\\s*(from|import) backend\\.app\\.api\\b",
+      "what": "A service imports the HTTP layer.",
+      "why": "Dependencies flow one way: router -> service -> domain/infrastructure. A service importing a router inverts that, makes the service untestable without the API, and is the start of the circular import that breaks app startup.",
+      "fix": "Move the shared logic into the service (or a domain module) and have the router call it. See docs/harness/architecture.md §3."
+    },
+    {
+      "id": "browser-must-not-call-backend-directly",
+      "severity": "error",
+      "type": "absent",
+      "paths": ["frontend/src/components", "frontend/src/hooks", "frontend/src/lib"],
+      "glob": "*.{ts,tsx}",
+      "pattern": "(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0):8000",
+      "exclude_paths": ["frontend/src/lib/proxy.ts"],
+      "what": "Browser-side code embeds the backend origin (:8000).",
+      "why": "The browser must never reach FastAPI directly: the BFF route handlers under frontend/src/app/api/** are the only client of the backend. A direct call skips the session cookie handling, the SSE translation and the error normalisation there, and breaks the moment the backend is not on localhost.",
+      "fix": "Call a same-origin BFF route (e.g. /api/chat) instead. `frontend/src/lib/proxy.ts` is excluded because it runs server-side."
+    }
+  ]
+}
