@@ -234,6 +234,267 @@ async def test_synthesizer_annotates_a_low_confidence_answer(monkeypatch):
     assert "Low confidence" in out["messages"][0].content
 
 
+# -- Web-mode synthesis: use the research, do not disclaim it ----------------
+#
+# The live finding: a research run gathered ~9k chars of evidence, the
+# synthesizer received it, and the final answer still said "I'm unable to fetch
+# live data" — the model's own prior beating the material in its prompt.
+
+
+async def _run_with_research(monkeypatch, subagent_outputs):
+    """Drive synthesizer_node and capture the exact messages it sends."""
+    from backend.app.agents.orchestrator import nodes
+    from backend.app.services.confidence_service import confidence_service
+
+    captured: dict = {}
+
+    async def fake_completion(**kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        return "Reuters reports a ceasefire agreement."
+
+    monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+    monkeypatch.setattr(
+        confidence_service,
+        "decide",
+        lambda *a, **k: {
+            "confidence": 0.95,
+            "action": "answer",
+            "grounded": True,
+            "threshold": 0.6,
+        },
+    )
+    state = _synth_state("What is the top story on reuters.com right now?")
+    if subagent_outputs is not None:
+        state["subagent_outputs"] = subagent_outputs
+    await nodes.synthesizer_node(state)
+    return captured
+
+
+async def test_research_findings_arrive_with_an_instruction_to_answer_from_them(monkeypatch):
+    captured = await _run_with_research(
+        monkeypatch, {"researcher": {"synthesis": "Reuters lead: ceasefire talks agreed."}}
+    )
+    system = captured["messages"][0]["content"]
+    everything = str(captured)
+
+    assert "### Research Findings" in everything
+    assert "Reuters lead: ceasefire talks agreed." in everything
+    # The instruction has to say, in as many words, the exact refusal the
+    # model kept producing — a vague "use your sources" did not move it.
+    assert "cannot access the internet" in system
+
+
+async def test_without_research_no_web_access_instruction_is_added(monkeypatch):
+    captured = await _run_with_research(monkeypatch, None)
+    assert "cannot access the internet" not in captured["messages"][0]["content"]
+
+
+async def test_an_empty_research_synthesis_renders_no_findings_block(monkeypatch):
+    """An empty block would both read as findings and trip the instruction."""
+    captured = await _run_with_research(monkeypatch, {"researcher": {"synthesis": "  "}})
+    assert "### Research Findings" not in str(captured)
+
+
+async def test_the_answer_directive_travels_with_the_findings(monkeypatch):
+    """The instruction at the tail of the system prompt was not enough.
+
+    Live: the system-tail line was present, and the model still opened with
+    "I cannot browse the live web". The correction now sits in the same message
+    as the evidence, where the model reads it as part of the question.
+    """
+    captured = await _run_with_research(
+        monkeypatch, {"researcher": {"synthesis": "Reuters lead: ceasefire talks agreed."}}
+    )
+    # The LAST user message carries both the findings and the directive.
+    user_msgs = [m["content"] for m in captured["messages"] if m["role"] == "user"]
+    assert user_msgs, "synthesizer sent no user message"
+    tail = user_msgs[-1]
+    assert "### Research Findings" in tail
+    assert "Reuters lead: ceasefire talks agreed." in tail
+    assert "### Answer from the block above" in tail
+    assert "never open" in tail.lower()
+
+
+async def test_a_refusal_despite_findings_is_reasked_exactly_once(monkeypatch):
+    """The backstop: a model that refuses while holding evidence gets one
+    corrective re-ask, and the answer that comes back is what the user sees."""
+    from backend.app.agents.orchestrator import nodes
+    from backend.app.services.confidence_service import confidence_service
+
+    calls: list[str] = []
+    replies = iter(
+        [
+            "I cannot browse the live web in real-time to retrieve that.",
+            "Reuters reports the top story: ceasefire talks agreed (reuters.com).",
+        ]
+    )
+
+    async def fake_completion(**kwargs):
+        calls.append(str(kwargs.get("messages")))
+        return next(replies)
+
+    monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+    monkeypatch.setattr(
+        confidence_service,
+        "decide",
+        lambda *a, **k: {
+            "confidence": 0.95,
+            "action": "answer",
+            "grounded": True,
+            "threshold": 0.6,
+        },
+    )
+    state = _synth_state("What is the top story on reuters.com right now?")
+    state["subagent_outputs"] = {"researcher": {"synthesis": "Reuters lead: ceasefire."}}
+
+    out = await nodes.synthesizer_node(state)
+
+    assert len(calls) == 2, f"expected draft + one correction, got {len(calls)} calls"
+    assert "Correction" in calls[1]
+    # The model's own corrected answer, not the synthesis fallback.
+    assert "Reuters reports the top story" in out["messages"][0].content
+    assert "cannot browse" not in out["messages"][0].content
+
+
+async def test_a_second_refusal_delivers_the_researchers_synthesis(monkeypatch):
+    """The guard is bounded AND the user never sees the refusal.
+
+    Live, the model paraphrased the banned phrasing ("I do not have access to
+    real-time browsing capabilities") instead of obeying the correction. The
+    researcher's own synthesis is a real sourced answer for this exact
+    question, so it is what gets delivered instead.
+    """
+    from backend.app.agents.orchestrator import nodes
+    from backend.app.services.confidence_service import confidence_service
+
+    calls: list[str] = []
+
+    async def always_refuse(**kwargs):
+        calls.append(str(kwargs.get("messages")))
+        return "I cannot access the live web for this."
+
+    monkeypatch.setattr(nodes.ai_client, "completion", always_refuse)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+    monkeypatch.setattr(
+        confidence_service,
+        "decide",
+        lambda *a, **k: {
+            "confidence": 0.95,
+            "action": "answer",
+            "grounded": True,
+            "threshold": 0.6,
+        },
+    )
+    state = _synth_state("What is the top story on reuters.com right now?")
+    state["subagent_outputs"] = {"researcher": {"synthesis": "Reuters lead: ceasefire talks agreed."}}
+
+    out = await nodes.synthesizer_node(state)
+    delivered = out["messages"][0].content
+
+    assert len(calls) == 2, f"guard looped: {len(calls)} calls"
+    assert "cannot access the live web" not in delivered
+    assert "Reuters lead: ceasefire talks agreed." in delivered
+
+
+async def test_a_sourced_answer_is_never_reasked(monkeypatch):
+    """The retry costs a model call, so a correct first draft must not pay it."""
+    from backend.app.agents.orchestrator import nodes
+    from backend.app.services.confidence_service import confidence_service
+
+    calls: list[str] = []
+
+    async def answer_first_time(**kwargs):
+        calls.append(str(kwargs.get("messages")))
+        return "The top story is the ceasefire agreement, per reuters.com."
+
+    monkeypatch.setattr(nodes.ai_client, "completion", answer_first_time)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+    monkeypatch.setattr(
+        confidence_service,
+        "decide",
+        lambda *a, **k: {
+            "confidence": 0.95,
+            "action": "answer",
+            "grounded": True,
+            "threshold": 0.6,
+        },
+    )
+    state = _synth_state("What is the top story on reuters.com right now?")
+    state["subagent_outputs"] = {"researcher": {"synthesis": "Reuters lead: ceasefire."}}
+
+    out = await nodes.synthesizer_node(state)
+
+    assert len(calls) == 1, f"healthy answer re-asked: {len(calls)} calls"
+    # A healthy draft must survive untouched -- no synthesis fallback either.
+    assert "The top story is the ceasefire agreement" in out["messages"][0].content
+
+
+async def test_without_findings_a_refusal_is_returned_untouched(monkeypatch):
+    """There is no evidence to answer from, so re-asking would just be noise."""
+    from backend.app.agents.orchestrator import nodes
+    from backend.app.services.confidence_service import confidence_service
+
+    calls: list[str] = []
+
+    async def refuse(**kwargs):
+        calls.append(str(kwargs.get("messages")))
+        return "I cannot access the live web for this."
+
+    monkeypatch.setattr(nodes.ai_client, "completion", refuse)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+    monkeypatch.setattr(
+        confidence_service,
+        "decide",
+        lambda *a, **k: {
+            "confidence": 0.95,
+            "action": "answer",
+            "grounded": True,
+            "threshold": 0.6,
+        },
+    )
+    state = _synth_state("What is the top story on reuters.com right now?")
+
+    await nodes.synthesizer_node(state)
+
+    assert len(calls) == 1, f"refusal without evidence was re-asked: {len(calls)} calls"
+
+
+def test_refusal_detector_separates_a_refusal_from_a_sourced_caveat():
+    """A caveat about genuinely missing evidence is an answer, not a refusal."""
+    from backend.app.agents.orchestrator.nodes import _looks_like_refusal
+
+    assert _looks_like_refusal(
+        "I cannot browse the live web in real-time to retrieve that."
+    )
+    assert _looks_like_refusal("I don't have access to real-time market data.")
+    assert _looks_like_refusal("As an AI, I cannot access the internet.")
+    # Sourced answers that mention the web late are NOT refusals.
+    assert not _looks_like_refusal(
+        "The top story is the ceasefire (reuters.com). Earlier web coverage was mixed."
+    )
+    assert not _looks_like_refusal(
+        "The findings establish the headline; they do not settle whether the vote was final."
+    )
+    assert not _looks_like_refusal("")
+
+
+async def test_findings_block_directive_and_instruction_are_both_present(
+    monkeypatch,
+):
+    """Both halves are required: without the findings block the directive would
+    point at nothing, and without the directive the block is read as context."""
+    captured = await _run_with_research(
+        monkeypatch, {"researcher": {"synthesis": "Reuters lead: ceasefire talks agreed."}}
+    )
+    everything = str(captured)
+    assert "### Research Findings" in everything
+    assert "### Answer from the block above" in everything
+    assert "cannot access the internet" in captured["messages"][0]["content"]
+
+
 async def test_synthesizer_leaves_a_confident_answer_alone(monkeypatch):
     out = await _run(
         monkeypatch,
@@ -868,7 +1129,6 @@ def test_inventory_covers_the_real_providers():
         "GOOGLE_OAUTH_CLIENT_SECRET",
         "GITHUB_OAUTH_CLIENT_SECRET",
         "MCP_API_KEY",
-        "SENTRY_DSN",
         "LANGGRAPH_CHECKPOINT_DSN",
     ):
         assert name in CREDENTIAL_NAMES, f"{name} dropped from the inventory"

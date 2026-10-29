@@ -106,10 +106,17 @@ async def test_usage_service_log_usage_persists_the_schema_it_is_handed():
 # ─── 2. Evidence Gate ────────────────────────────────────────────────────────
 
 
-def test_evidence_gate_fails_on_empty_context():
+def test_evidence_gate_reports_no_verdict_on_empty_context():
+    # "No evidence" is not "the evidence was checked and failed". With an
+    # empty knowledge base and no web results the gate has nothing to verify
+    # against, and reporting `False` renders a red "LOW EVIDENCE" badge on
+    # every answer the product gives — a claim nobody made. `None` is the
+    # schema's "not evaluated" state (AgentState.evidence_gate_passed is
+    # `bool | None`) and the client hides the evidence row for it.
     verdict = evidence_gate.verify_evidence_support("Some answer.", [])
-    assert verdict["passed_gate"] is False
+    assert verdict["passed_gate"] is None
     assert verdict["confidence_score"] == 0.0
+    assert verdict["citations"] == []
 
 
 def test_evidence_gate_passes_with_cited_context():
@@ -231,7 +238,10 @@ async def test_synthesizer_revises_draft_until_critic_approves(monkeypatch):
     assert update["messages"][0].content == "final draft answer"
     assert update["revision_count"] == 1
     assert update["critique"]["approved"] is True
-    assert update["evidence_gate_passed"] is False  # no citations provided
+    # No citations were provided, so the gate had nothing to evaluate: it
+    # reports "not evaluated" (None), not a failed verdict. See
+    # test_evidence_gate_reports_no_verdict_on_empty_context.
+    assert update["evidence_gate_passed"] is None
 
 
 @pytest.mark.asyncio

@@ -187,3 +187,25 @@ async def test_bootstrap_has_all_required_keys(monkeypatch):
                 "task_type", "pending_tool_calls", "tool_results", "citations",
                 "grader_verdict", "error"]:
         assert key in r, f"Missing key: {key}"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_preserves_an_unevaluated_evidence_gate(monkeypatch):
+    # bootstrap_node seeds state keys for the run ahead. Its job for the gate is
+    # to carry the previous state forward, not to interpret it: `bool(None)` is
+    # False, so a naive coercion manufactures a *failed* verdict for a run that
+    # never reached the gate (an error or budget stop ends right after
+    # bootstrap), and the client renders "LOW EVIDENCE" on a turn where no
+    # evidence was ever evaluated.
+    from backend.app.agents.orchestrator import nodes
+    monkeypatch.setattr(
+        nodes, "get_config",
+        lambda: {"configurable": {"user_id": "u1", "thread_id": "c1", "mode": "agent"}},
+    )
+    assert (await nodes.bootstrap_node({}))["evidence_gate_passed"] is None
+    assert (
+        await nodes.bootstrap_node({"evidence_gate_passed": True})
+    )["evidence_gate_passed"] is True
+    assert (
+        await nodes.bootstrap_node({"evidence_gate_passed": False})
+    )["evidence_gate_passed"] is False

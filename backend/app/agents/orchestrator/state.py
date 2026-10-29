@@ -92,3 +92,13 @@ class AgentState(TypedDict):
     # transcript can report a fallback instead of the label the user picked.
     model: str | None
     answer_model: str
+
+    # Exact prompt assembly for this turn, written by the synthesizer.
+    #
+    # The checkpoint already holds the transcript, but not the *assembly*: which
+    # memories, research findings and episodic summary were spliced into the
+    # system prompt, and which history slice survived compaction. Diagnosing the
+    # web-mode refusal took rebuilding a checkpoint blob by hand for exactly this
+    # reason. Capped (`truncated` says so) so one pathological prompt cannot
+    # bloat every checkpoint for the rest of the thread.
+    prompt_snapshot: dict[str, Any] | None

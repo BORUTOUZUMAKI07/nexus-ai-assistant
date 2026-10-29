@@ -20,6 +20,7 @@ from backend.app.infrastructure.cache.redis_client import redis_service
 from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.tools.code_execution import code_executor
+from backend.app.services.tools.effect_scan import scan_effects
 from backend.app.services.tools.hook_registry import hook_registry
 from backend.app.services.tools.web_search import web_search_service
 
@@ -46,42 +47,13 @@ BANNED_PATTERNS = [
 # (the sandboxed code interpreter) that still needs a human when the specific
 # call is high-impact. That rung was declared in the YAML and never evaluated,
 # so model-written code reaching the gateway ran anything it liked with no
-# approval and no card. These patterns are what make it real. They match
-# *effects* (spawning processes, touching the filesystem, opening the network),
-# not the incidental presence of the word "os".
-_SYSTEM_COMMAND_PATTERNS = (
-    r"\bos\.system\b",
-    r"\bos\.popen\b",
-    r"\bos\.spawn",
-    r"\bos\.exec",
-    r"\bos\.remove\b",
-    r"\bos\.unlink\b",
-    r"\bos\.rmdir\b",
-    r"\bos\.rename\b",
-    r"\bsubprocess\b",
-    r"\bshutil\.rmtree\b",
-    r"\bpty\.spawn",
-    r"\bshell\s*=\s*True\b",
-    r"\b(chmod|chown|chgrp|kill|pkill|killall)\b",
-    r"\b(mkfs|fdisk|mount|umount)\b",
-    r"\brm\s+-rf?\b",
-)
-_NETWORK_PATTERNS = (
-    r"\bsocket\b",
-    r"\burllib\b",
-    r"\brequests\b",
-    r"\bhttpx\b",
-    r"\baiohttp\b",
-    r"\bhttp\.client\b",
-    r"\bsmtplib\b",
-    r"\bftplib\b",
-    r"\btelnetlib\b",
-    r"\bparamiko\b",
-    r"\basyncio\.open_connection\b",
-    r"\bcurl\b",
-    r"\bwget\b",
-    r"\bwebbrowser\b",
-)
+# approval and no card.
+#
+# The decision is made by ``effect_scan.scan_effects``, which *resolves* the
+# submitted program with ``ast`` rather than pattern-matching its text: a regex
+# cannot see ``getattr(os, "sys" + "tem")`` or
+# ``importlib.import_module("subprocess")``, and finding #10 is that the regex
+# *was* the gate. See that module for what is recognised and what fails closed.
 # Human-readable form of each condition, shown on the approval card. A missing
 # entry falls back to the raw condition name rather than to nothing, so a new
 # YAML condition is legible before anyone remembers to add a sentence here.
@@ -146,17 +118,32 @@ class ToolGateway:
 
     @staticmethod
     def _argument_text(arguments: dict[str, Any]) -> str:
-        """Flatten argument values to one string for the effect-pattern scan."""
+        """Flatten argument values to one string for the effect-pattern fallback."""
         return " ".join(str(v) for v in arguments.values())
+
+    def _scan_text(self, arguments: dict[str, Any]) -> str:
+        """The Python body to resolve for a condition-bearing tool.
+
+        Every tool that declares an effect condition carries its program in
+        ``code``; a tool without one falls back to the flattened arguments so a
+        future tool that declares a condition is still scanned rather than
+        silently skipped.
+        """
+        for key in ("code", "source", "script"):
+            value = arguments.get(key)
+            if isinstance(value, str):
+                return value
+        return self._argument_text(arguments)
 
     def _condition_matches(
         self, condition: str, arguments: dict[str, Any], code: str
     ) -> bool:
         """Evaluate one ``requires_approval_if`` condition against a concrete call."""
-        if condition == "contains_system_commands":
-            return any(re.search(p, code, re.IGNORECASE) for p in _SYSTEM_COMMAND_PATTERNS)
-        if condition == "contains_socket_calls":
-            return any(re.search(p, code, re.IGNORECASE) for p in _NETWORK_PATTERNS)
+        if condition in ("contains_system_commands", "contains_socket_calls"):
+            scan = scan_effects(code)
+            if condition == "contains_system_commands":
+                return scan.system_commands or scan.unresolved
+            return scan.network or scan.unresolved
         if condition == "execution_time_exceeds_20s":
             raw = arguments.get("timeout_seconds", arguments.get("timeout"))
             try:
@@ -182,7 +169,7 @@ class ToolGateway:
         """
         if not self.check_permission(tool_name):
             return True, f"'{tool_name}' is on the approval-required list."
-        code = self._argument_text(arguments)
+        code = self._scan_text(arguments)
         for condition in self._approval_conditions(tool_name):
             if self._condition_matches(condition, arguments, code):
                 reason = _APPROVAL_CONDITION_REASONS.get(condition, condition)

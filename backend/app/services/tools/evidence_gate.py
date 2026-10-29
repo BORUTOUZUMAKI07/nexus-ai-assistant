@@ -25,12 +25,18 @@ class EvidenceGate:
     ) -> dict[str, Any]:
         """Calculates grounding and determines whether the evidence threshold is met."""
         if not retrieved_contexts:
-            # If no context was retrieved, flag that the response is ungrounded
+            # Nothing was retrieved, so the gate was never exercised. Reporting
+            # `False` here would be "checked and failed", which is a different —
+            # and false — claim: with no evidence sources the honest verdict is
+            # none at all. `None` is the state's "not evaluated" value
+            # (AgentState.evidence_gate_passed is `bool | None`) and the client
+            # hides the evidence row for it, so plain chat on an empty
+            # knowledge base does not wear a red badge on every answer.
             return {
-                "passed_gate": False,
+                "passed_gate": None,
                 "confidence_score": 0.0,
                 "citations": [],
-                "reason": "No retrieved context available for grounding verification.",
+                "reason": "No evidence sources available; gate not evaluated.",
             }
 
         citations = [

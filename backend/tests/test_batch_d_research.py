@@ -11,8 +11,10 @@ from backend.app.agents.subagents import researcher as r
 from backend.app.agents.subagents.researcher import (
     ResearcherSubagent,
     _clean_query,
+    _host_matches,
     _parse_json_list,
     _parse_reflection,
+    _preferred_domain,
 )
 
 PAGE = (
@@ -434,3 +436,92 @@ async def test_the_graph_node_still_works_with_the_new_signature(monkeypatch):
 
     out = await ResearcherSubagent().execute(topic="a question about X")
     assert out["synthesis"] == "SYNTHESIS"
+
+
+# -- the named site is the site that gets researched --------------------------
+#
+# The live finding these cover: "what is the top story on reuters.com" came back
+# from YouTube transcripts, because ranking and scraping followed the search
+# provider's order and the provider preferred videos *about* the site.
+
+
+def test_preferred_domain_reads_the_named_host():
+    assert _preferred_domain("what is the top story on reuters.com right now?") == "reuters.com"
+    assert _preferred_domain("site:bbc.co.uk latest headlines") == "bbc.co.uk"
+    # Ordinary prose with a dot in it is not a host instruction.
+    assert _preferred_domain("compare e.g. the two designs") is None
+    assert _preferred_domain("write it in str.py style") is None
+    assert _preferred_domain("no host here at all") is None
+
+
+def test_host_matches_subdomains_but_not_lookalikes():
+    assert _host_matches("https://www.reuters.com/world", "reuters.com")
+    assert _host_matches("https://reuters.com/x", "reuters.com")
+    assert not _host_matches("https://youtube.com/watch?v=1", "reuters.com")
+    assert not _host_matches("https://notreuters.com/x", "reuters.com")
+    assert not _host_matches("", "reuters.com")
+
+
+async def test_on_domain_results_are_ranked_ahead_of_off_domain_ones(monkeypatch):
+    """Off-domain results are kept, but the named site opens the synthesis."""
+    service = FakeSearch(
+        results=[
+            _result("https://www.youtube.com/watch?v=a", preview=False, content=PAGE),
+            _result("https://www.reuters.com/world/headline", preview=False, content=PAGE),
+        ]
+    )
+    _install(monkeypatch, service, ['["what is on reuters.com"]', "SYNTHESIS"])
+
+    sub = ResearcherSubagent()
+    sub._subqueries = _replies(["what is on reuters.com"])
+    out = await sub.execute("what is the top story on reuters.com right now?")
+
+    assert out["sources"][0].startswith("https://www.reuters.com"), out["sources"]
+    # The re-rank is a re-rank, not a filter: dropping the other source would
+    # remove evidence rather than improve it.
+    assert any(s.startswith("https://www.youtube.com") for s in out["sources"])
+
+
+async def test_the_scrape_budget_is_spent_on_the_named_site_first(monkeypatch):
+    """With one scrape to spend, the site the user named is the one fetched."""
+    monkeypatch.setattr(r.settings, "RESEARCH_MAX_SCRAPES", 1)
+    monkeypatch.setattr(r.settings, "RESEARCH_SCRAPE_CONCURRENCY", 1)
+    service = FakeSearch(
+        results=[
+            _result("https://www.youtube.com/watch?v=a"),
+            _result("https://www.reuters.com/world/headline"),
+        ]
+    )
+    _install(monkeypatch, service, ['["what is on reuters.com"]', "SYNTHESIS"])
+
+    sub = ResearcherSubagent()
+    sub._subqueries = _replies(["what is on reuters.com"])
+    await sub.execute("what is the top story on reuters.com right now?")
+
+    assert service.scrapes == ["https://www.reuters.com/world/headline"], service.scrapes
+
+
+async def test_a_named_site_adds_a_site_scoped_query(monkeypatch):
+    """Ranking cannot help when the provider returned no URL from that site."""
+    service = FakeSearch(results=[])
+    _install(monkeypatch, service, ['["news today"]', "SYNTHESIS"])
+
+    sub = ResearcherSubagent()
+    sub._subqueries = _replies(["news today"])
+    await sub.execute("what is the top story on reuters.com right now?")
+
+    queries = [q for q, _ in service.searches]
+    assert queries[0] == "news today"
+    assert any(q.startswith("site:reuters.com") for q in queries), queries
+
+
+async def test_no_site_scoped_query_is_added_when_the_topic_names_no_site(monkeypatch):
+    """The extra search must be paid for only when it can earn its cost."""
+    service = FakeSearch(results=[])
+    _install(monkeypatch, service, ['["news today"]', "SYNTHESIS"])
+
+    sub = ResearcherSubagent()
+    sub._subqueries = _replies(["news today"])
+    await sub.execute("summarise what happened in the news")
+
+    assert [q for q, _ in service.searches] == ["news today"]

@@ -151,6 +151,80 @@ class ContextCompiler:
         )
         return role, str(getattr(msg, "content", "") or "")
 
+    def _usable_tokens(self, system_prompt: str, model: str) -> int:
+        """Tokens left for history after the completion reserve and the system prompt.
+
+        Single definition so `budget_history` and the compaction funnel cannot
+        disagree about how much room there is — two formulas that drift produce
+        a funnel that trims to a budget the splitter does not use.
+        """
+        max_context = self.get_max_context(model)
+        usable = int(max_context * self.target_budget_ratio) - self.reserve_completion_tokens
+        return usable - self.estimate_tokens(system_prompt, model)
+
+    def stage_overflow(
+        self,
+        messages: list[Any],
+        system_prompt: str,
+        model: str,
+        kept_tokens: int,
+        per_message_chars: int = 4000,
+        max_summary_messages: int = 40,
+    ) -> dict[str, Any]:
+        """Compress overflow cheapest-first instead of summarising all of it.
+
+        The previous behaviour sent **every** over-budget message to one
+        summarisation call, on every turn, with no cap. Two costs followed from
+        that: a long conversation paid for an ever-growing LLM call each turn,
+        and the summary's input could itself overflow the summariser's window —
+        so the compaction meant to protect the context window could fail on its
+        own input and (because summarisation is fail-open) silently drop the
+        history it was supposed to preserve.
+
+        Three stages, and each one only runs if the previous one was not enough:
+
+        1. **Trim (deterministic, no LLM).** Cut each overflow message to
+           ``per_message_chars``, keeping the head where identifiers, file names
+           and stated constraints live. If the trimmed set now fits the budget,
+           it is replayed as-is — lossy at the character level, but no model
+           call and no invented text.
+        2. **Bound the summary input.** If trimming was not enough, summarise
+           at most ``max_summary_messages`` of the newest overflow, so the
+           summariser's own window is a constant rather than a function of
+           conversation length.
+        3. **Report the drop.** Anything older than that window is dropped, and
+           the count is returned so the caller can say so in the prompt instead
+           of the model silently losing history.
+
+        Returns a dict: ``replay`` (messages to append verbatim), ``summary_input``
+        (messages to summarise), ``dropped`` (count omitted entirely).
+        """
+        if not messages:
+            return {"replay": [], "summary_input": [], "dropped": 0}
+
+        trimmed: list[dict[str, str]] = []
+        for msg in messages:
+            role, content = self._agent_message_parts(msg)
+            if len(content) > per_message_chars:
+                removed = len(content) - per_message_chars
+                content = f"{content[:per_message_chars]} [...] ({removed} chars trimmed)"
+            trimmed.append({"role": role, "content": content})
+
+        trimmed_tokens = sum(self.estimate_tokens(t["content"], model) for t in trimmed)
+        remaining = self._usable_tokens(system_prompt, model) - kept_tokens
+
+        if trimmed_tokens <= remaining:
+            return {"replay": trimmed, "summary_input": [], "dropped": 0}
+
+        if len(trimmed) > max_summary_messages:
+            dropped = len(trimmed) - max_summary_messages
+            summary_input = trimmed[-max_summary_messages:]
+        else:
+            dropped = 0
+            summary_input = trimmed
+
+        return {"replay": [], "summary_input": summary_input, "dropped": dropped}
+
     def budget_history(
         self,
         messages: list[Any],
@@ -168,9 +242,7 @@ class ContextCompiler:
         Returns the kept messages unchanged — this method never rewrites or
         summarises, so callers stay in control of what the model actually sees.
         """
-        max_context = self.get_max_context(model)
-        usable = int(max_context * self.target_budget_ratio) - self.reserve_completion_tokens
-        remaining = usable - self.estimate_tokens(system_prompt, model)
+        remaining = self._usable_tokens(system_prompt, model)
 
         keep: list[Any] = []
         compress: list[Any] = []

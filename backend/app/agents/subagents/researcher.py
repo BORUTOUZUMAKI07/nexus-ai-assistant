@@ -49,15 +49,19 @@ Cost discipline, in priority order:
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from contextvars import ContextVar
 from typing import Any
+from urllib.parse import urlsplit
 
 import structlog
 from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
 from backend.app.services.rag.base import needs_scraping
+from backend.app.services.structured_parse import (
+    extract_json_array,
+    extract_json_object,
+)
 from backend.app.services.tools.web_search import web_search_service
 
 logger = structlog.get_logger(__name__)
@@ -115,6 +119,47 @@ STRUCTURED_MAX_TOKENS = 200
 _UNSAFE_QUERY_CHARS = re.compile(r"[^\w\s\-'\".,:;()\[\]/&+#%]")
 
 
+#: A domain written in the topic ("reuters.com", "site:reuters.com") says where
+#: the answer lives. Search results for such a question routinely rank videos and
+#: social posts *about* the site above the site itself, so the scrape budget then
+#: gets spent off-domain and the synthesis honestly reports that its sources are
+#: not the site the user asked about. Matching URLs are therefore ranked first.
+_PREFERRED_DOMAIN = re.compile(
+    r"(?:site\s*:\s*)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d{1,5})?(?:[/\s]|$)",
+    re.IGNORECASE,
+)
+
+#: Labels too short/ordinary to be a domain in running prose ("e.g", file
+#: extensions like "str.py" still match, which is harmless -- the check is only
+#: whether results from that host should be ranked first).
+_DOMAIN_TLDS = frozenset({"com", "org", "net", "io", "gov", "edu", "co", "uk", "us", "dev", "app", "ai", "info", "ca", "de", "fr", "in", "jp", "au", "nl", "ru", "ch", "se", "no", "es", "it", "br", "mx", "za", "tv", "me", "cc", "news", "media", "blog", "fm", "sh", "xyz", "tech", "online", "site", "page"})
+
+
+def _preferred_domain(topic: str) -> str | None:
+    """The host the topic explicitly names, or None.
+
+    Only a known-looking TLD counts, so ordinary prose with a stray dot ("e.g.",
+    "v1.5") cannot promote an unrelated URL to the front of the scrape queue.
+    """
+    for match in _PREFERRED_DOMAIN.finditer(str(topic or "")):
+        host = match.group(1).lower().strip(".")
+        tld = host.rsplit(".", 1)[-1]
+        if tld in _DOMAIN_TLDS and host.count(".") >= 1:
+            return host
+    return None
+
+
+def _host_matches(url: str, domain: str) -> bool:
+    """True when `url` is on `domain` or one of its subdomains."""
+    if not url or not domain:
+        return False
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host == domain or host.endswith("." + domain)
+
+
 def _clean_query(text: str, limit: int = 200) -> str:
     """Normalise a model-produced query into something safe to send."""
     cleaned = _UNSAFE_QUERY_CHARS.sub(" ", str(text or ""))
@@ -123,41 +168,23 @@ def _clean_query(text: str, limit: int = 200) -> str:
 
 
 def _parse_json_list(raw: str) -> list[str]:
-    """Pull a list of strings out of a model reply, tolerating prose and fences."""
-    if not raw:
+    """Pull a list of strings out of a model reply, tolerating prose and fences.
+
+    Extraction is delegated to the shared :func:`extract_json_array` so the
+    fence/prose/balanced-span rules live in one place rather than being
+    re-derived per call site.
+    """
+    parsed = extract_json_array(raw)
+    if parsed is None:
         return []
-    text = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    if fence:
-        text = fence.group(1).strip()
-    start, end = text.find("["), text.rfind("]")
-    if start != -1 and end > start:
-        try:
-            parsed = json.loads(text[start : end + 1])
-        except (ValueError, TypeError):
-            return []
-        if isinstance(parsed, list):
-            return [str(x) for x in parsed if isinstance(x, (str, int, float))]
-    return []
+    return [str(x) for x in parsed if isinstance(x, (str, int, float))]
 
 
 def _parse_reflection(raw: str) -> dict[str, Any]:
     """Pull the reflection object out of a model reply, defaulting to sufficient."""
     empty = {"sufficient": True, "gaps": [], "reason": "unparseable"}
-    if not raw:
-        return empty
-    text = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    if fence:
-        text = fence.group(1).strip()
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end <= start:
-        return empty
-    try:
-        parsed = json.loads(text[start : end + 1])
-    except (ValueError, TypeError):
-        return empty
-    if not isinstance(parsed, dict):
+    parsed = extract_json_object(raw)
+    if parsed is None:
         return empty
     gaps = parsed.get("gaps")
     return {
@@ -257,7 +284,12 @@ class ResearcherSubagent:
     # -- stage 2: gather ----------------------------------------------------
 
     async def _harvest(
-        self, queries: list[str], per_query: int, scrape_budget: int, seen: set[str]
+        self,
+        queries: list[str],
+        per_query: int,
+        scrape_budget: int,
+        seen: set[str],
+        preferred_domain: str | None = None,
     ) -> tuple[list[str], list[str], int]:
         """Search every sub-query concurrently, then fetch what needs fetching.
 
@@ -265,6 +297,12 @@ class ResearcherSubagent:
 
         Failures are per-sub-query, never fatal: one provider failure must not
         discard the evidence the others gathered.
+
+        `preferred_domain` (from the topic) is a stable re-rank, not a filter:
+        pages on that host come first so they win the scrape budget and open the
+        synthesis, while everything else is kept -- an off-domain source that
+        still answers the question is evidence, and dropping it would remove
+        evidence rather than improve it.
         """
         results_per_query = await asyncio.gather(
             *(self._search_one(q, per_query) for q in queries),
@@ -288,6 +326,18 @@ class ResearcherSubagent:
                 continue
             seen.add(url)
             unique.append(res)
+
+        if preferred_domain:
+            on_domain = [r for r in unique if _host_matches(r.get("url") or "", preferred_domain)]
+            off_domain = [r for r in unique if not _host_matches(r.get("url") or "", preferred_domain)]
+            if on_domain:
+                logger.info(
+                    "researcher_preferred_domain_ranked",
+                    domain=preferred_domain,
+                    on_domain=len(on_domain),
+                    total=len(unique),
+                )
+            unique = on_domain + off_domain
 
         evidence, sources, spent = await self._gather_evidence(unique, scrape_budget)
         return evidence, sources, spent
@@ -431,7 +481,11 @@ class ResearcherSubagent:
 
         logger.info("researcher_gap_fill", gaps=len(follow_ups), reason=reflection["reason"])
         new_evidence, new_sources, spent = await self._harvest(
-            follow_ups, per_query=2, scrape_budget=scrape_budget, seen=set()
+            follow_ups,
+            per_query=2,
+            scrape_budget=scrape_budget,
+            seen=set(),
+            preferred_domain=_preferred_domain(topic),
         )
         return evidence + new_evidence, new_sources, [], spent, reflection
 
@@ -461,11 +515,28 @@ class ResearcherSubagent:
         # 1. Breadth. Skipped when it cannot pay (see _subqueries).
         subqueries = await self._subqueries(topic)
 
+        # When the question names a site, add one site-scoped query so that site
+        # is actually in the result pool. Ranking alone cannot help if the
+        # provider never returned a single URL from it -- which is exactly how
+        # "what is the top story on reuters.com" ended up with YouTube sources.
+        preferred = _preferred_domain(topic)
+        if preferred and not any(
+            _host_matches(q, preferred) or preferred in q.lower() for q in subqueries
+        ):
+            scoped = _clean_query(f"site:{preferred} {topic}")
+            if scoped:
+                subqueries = [*subqueries, scoped]
+                logger.info("researcher_site_scoped_query_added", domain=preferred)
+
         # 2. Gather. The scrape budget is total, not per sub-query, so breadth
         #    cannot multiply into unbounded provider calls.
         seen: set[str] = set()
         evidence, sources, spent = await self._harvest(
-            subqueries, per_query=max_sources, scrape_budget=settings.RESEARCH_MAX_SCRAPES, seen=seen
+            subqueries,
+            per_query=max_sources,
+            scrape_budget=settings.RESEARCH_MAX_SCRAPES,
+            seen=seen,
+            preferred_domain=preferred,
         )
 
         # 3. Depth. Only runs when the harvest looks inadequate.
