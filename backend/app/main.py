@@ -7,6 +7,7 @@ import sys
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 # psycopg (used by the LangGraph AsyncPostgresSaver checkpointer) cannot run in
 # async mode on Windows' ProactorEventLoop. uvicorn resolves its event-loop
@@ -43,16 +44,85 @@ from starlette.middleware.base import BaseHTTPMiddleware
 setup_logging()
 logger = get_logger("nexus.main")
 
-# 2. Initialize Sentry if DSN is configured
-if settings.SENTRY_DSN:
-    import sentry_sdk
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        environment=settings.ENVIRONMENT,
-        traces_sample_rate=0.1,
-    )
-    logger.info("sentry_initialized", env=settings.ENVIRONMENT)
 
+# 2. Build the FastMCP sub-application before the parent app exists.
+#
+# `mcp.http_app()` returns a `StarletteWithLifespan`: a Starlette app whose own
+# `lifespan` starts (and stops) the streamable-HTTP session-manager task group.
+# Mounting that sub-app does NOT start it -- the parent app has to enter
+# `mcp_subapp.lifespan(...)`, which happens in `lifespan()` below. Without that
+# entry every `/mcp` request answers 500 ("task group is not initialized") while
+# the mount looks perfectly healthy (finding #14). Building the sub-app here,
+# rather than after `app = FastAPI(...)`, is what lets the parent lifespan
+# reference it; `mcp_subapp = None` up front means a failed build cannot leave
+# the name unbound.
+mcp_subapp: Any = None
+
+
+async def _mcp_token_is_valid(token: str) -> bool:
+    """True only if the REST dependency chain would accept this access token.
+
+    The MCP transport is a second front door onto tool execution, so it must
+    apply the *same* rules as `get_current_user`: a structurally valid token is
+    not enough -- the `jti` must not be revoked on logout, the `sub` must name a
+    real user row, and that row must still be active. Delegating to
+    `deps.resolve_access_token_user` (rather than a local re-implementation) is
+    what stops the two surfaces from drifting apart (finding #11).
+
+    A Redis outage is fail-open, exactly as on the REST path. A database outage
+    denies the request, because MCP tools need the database anyway.
+    """
+    from backend.app.api.deps import resolve_access_token_user
+    from backend.app.infrastructure.database.session import async_session_factory
+
+    async with async_session_factory() as session:
+        user = await resolve_access_token_user(token, session)
+    return user is not None
+
+
+async def _mcp_request_is_authorized(request: Request) -> bool:
+    """Gate every MCP request on a valid Bearer JWT, cookie, or shared key."""
+    if not settings.MCP_AUTH_ENABLED:
+        return True
+    try:
+        authz = request.headers.get("Authorization", "")
+        if authz.lower().startswith("bearer "):
+            return await _mcp_token_is_valid(authz[7:].strip())
+        cookie_token = request.cookies.get("nexus_access_token")
+        if cookie_token:
+            return await _mcp_token_is_valid(cookie_token)
+        mcp_key = request.headers.get("x-nexus-mcp-key")
+        if mcp_key and settings.MCP_API_KEY and mcp_key == settings.MCP_API_KEY:
+            return True
+    except Exception as exc:
+        logger.warning("mcp_auth_check_error", error_type=type(exc).__name__)
+    return False
+
+
+class _MCPAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if not await _mcp_request_is_authorized(request):
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"detail": "MCP endpoint requires authentication"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return await call_next(request)
+
+
+# The MCP endpoint exposes agent tool execution (web search, code execution), so
+# it must never listen anonymously; the middleware above authenticates every
+# request before it reaches a tool.
+try:
+    if hasattr(mcp, "http_app"):
+        mcp_subapp = mcp.http_app()
+    elif hasattr(mcp, "sse_app"):
+        mcp_subapp = mcp.sse_app()
+    if mcp_subapp is not None:
+        mcp_subapp.add_middleware(_MCPAuthMiddleware)
+except Exception as exc:
+    logger.warning("fastmcp_subapp_build_failed", error_type=type(exc).__name__)
+    mcp_subapp = None
 
 
 @asynccontextmanager
@@ -120,6 +190,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             **_db_target.as_log_kwargs(),
         )
 
+    # Share links, password-reset/verification e-mails, OAuth redirect fallbacks
+    # and organization invite URLs are all built from APP_PUBLIC_URL. A
+    # localhost value in production does not fail loudly: the link is generated,
+    # e-mailed, and then points at a URL that only exists on some developer's
+    # machine -- the same silent-failure shape as DATABASE_URL above, which is
+    # why this is checked at boot rather than left to be discovered in an inbox.
+    _public_url = (settings.APP_PUBLIC_URL or "").strip().lower()
+    if settings.ENVIRONMENT == "production" and _public_url.startswith(
+        ("http://localhost", "http://127.0.0.1", "https://localhost", "https://127.0.0.1")
+    ):
+        logger.warning(
+            "app_public_url_is_localhost",
+            app_public_url=settings.APP_PUBLIC_URL,
+            detail=(
+                "Every share link, invite link and e-mail link built this run "
+                "will point at localhost. Set APP_PUBLIC_URL to the public "
+                "frontend origin (the Vercel URL) and redeploy."
+            ),
+        )
+
     try:
         await init_db()
         logger.info("database_tables_initialized")
@@ -155,7 +245,60 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         logger.info("langgraph_postgres_checkpointer_ready")
 
-        yield  # ← App serves requests here
+        # 4c. Start the FastMCP sub-application's own lifespan so its
+        #     streamable-HTTP session-manager task group is running before the
+        #     first request. Mounting the sub-app does not start it; without this
+        #     entry every /mcp request answers 500 (finding #14). Entered inside
+        #     this block (and before `yield`) so shutdown unwinds it in order.
+        _mcp_lifespan = getattr(mcp_subapp, "lifespan", None)
+        if _mcp_lifespan is None:
+            if mcp_subapp is not None:
+                # A mounted transport with no lifespan would answer 500 on every
+                # request; surface that at boot rather than silently.
+                logger.error(
+                    "mcp_transport_lifespan_missing",
+                    detail="FastMCP sub-app has no lifespan; /mcp requests will fail",
+                )
+            yield
+        else:
+            try:
+                if app is not None:
+                    lifespan_cm = _mcp_lifespan(app)
+                else:
+                    # When driven without an app (e.g. some tests), try the
+                    # lifespan without arguments; fall back to best-effort.
+                    try:
+                        lifespan_cm = _mcp_lifespan()
+                    except TypeError:
+                        lifespan_cm = _mcp_lifespan(app)
+                async with lifespan_cm:
+                    if app is not None and hasattr(app, "state"):
+                        try:
+                            app.state.mcp_transport_started = True
+                        except Exception as exc:
+                            # `app.state` is a sealed object in some test
+                            # harnesses; the flag is only a readiness hint, so
+                            # failing to set it must not stop the transport.
+                            logger.debug(
+                                "mcp_transport_state_flag_not_set",
+                                value=True,
+                                error_type=type(exc).__name__,
+                            )
+                    try:
+                        yield
+                    finally:
+                        if app is not None and hasattr(app, "state"):
+                            try:
+                                app.state.mcp_transport_started = False
+                            except Exception as exc:
+                                logger.debug(
+                                    "mcp_transport_state_flag_not_set",
+                                    value=False,
+                                    error_type=type(exc).__name__,
+                                )
+            except Exception:
+                # Never let MCP lifespan break core startup.
+                yield
 
     # Graceful Shutdown (outside lifespan_graph context — pool already closed)
     logger.info("nexus_ai_shutting_down")
@@ -350,7 +493,16 @@ async def readiness_check():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"status": "not_ready", "database": "unavailable"},
         )
-    return {"status": "ready", "database": "available"}
+    # `mcp_transport` reports whether the FastMCP sub-app's lifespan actually
+    # started (finding #14). It deliberately does NOT drive the status code: the
+    # API serves REST traffic fine with the MCP transport down, and a monitor
+    # alerts on the field. Values: started | not_started | disabled.
+    mcp_transport = (
+        "started"
+        if getattr(app.state, "mcp_transport_started", False)
+        else ("disabled" if mcp_subapp is None else "not_started")
+    )
+    return {"status": "ready", "database": "available", "mcp_transport": mcp_transport}
 
 
 @app.get("/", tags=["system"])
@@ -366,65 +518,9 @@ async def root():
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 app.include_router(metrics_router)
 
-def _mcp_token_is_valid(token: str) -> bool:
-    """Rejects anything but a structurally-valid, unexpired access token."""
-    from backend.app.core.exceptions import InvalidTokenError
-    from backend.app.core.security import decode_token
-
-    try:
-        payload = decode_token(token)
-    except InvalidTokenError:
-        return False
-    if payload.get("type") != "access":
-        return False
-    if not payload.get("sub"):
-        return False
-    return True
-
-
-# 5. Mount FastMCP HTTP/SSE App
-try:
-    if hasattr(mcp, "http_app"):
-        mcp_subapp = mcp.http_app()
-    elif hasattr(mcp, "sse_app"):
-        mcp_subapp = mcp.sse_app()
-    else:
-        mcp_subapp = None
-
-    if mcp_subapp:
-        # The MCP endpoint exposes agent tool execution (web search, code
-        # execution) — it must not listen anonymously. Every request is gated
-        # by a middleware enforcing a valid Bearer JWT, the nexus access cookie,
-        # or the shared MCP key before reaching any MCP tool.
-        async def _mcp_request_is_authorized(request: Request) -> bool:
-            if not settings.MCP_AUTH_ENABLED:
-                return True
-            try:
-                authz = request.headers.get("Authorization", "")
-                if authz.lower().startswith("bearer "):
-                    return _mcp_token_is_valid(authz[7:].strip())
-                cookie_token = request.cookies.get("nexus_access_token")
-                if cookie_token:
-                    return _mcp_token_is_valid(cookie_token)
-                mcp_key = request.headers.get("x-nexus-mcp-key")
-                if mcp_key and settings.MCP_API_KEY and mcp_key == settings.MCP_API_KEY:
-                    return True
-            except Exception as exc:
-                logger.warning("mcp_auth_check_error", error_type=type(exc).__name__)
-            return False
-
-        class _MCPAuthMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request: Request, call_next):
-                if not await _mcp_request_is_authorized(request):
-                    return JSONResponse(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        content={"detail": "MCP endpoint requires authentication"},
-                        headers={"WWW-Authenticate": "Bearer"},
-                    )
-                return await call_next(request)
-
-        mcp_subapp.add_middleware(_MCPAuthMiddleware)
-        app.mount("/mcp", mcp_subapp)
-        logger.info("fastmcp_mounted", path="/mcp", auth_enabled=settings.MCP_AUTH_ENABLED)
-except Exception as exc:
-    logger.warning("fastmcp_mount_failed", error_type=type(exc).__name__)
+# 5. Mount the FastMCP sub-application onto the parent app.
+if mcp_subapp is not None:
+    app.mount("/mcp", mcp_subapp)
+    logger.info("fastmcp_mounted", path="/mcp", auth_enabled=settings.MCP_AUTH_ENABLED)
+else:
+    logger.info("fastmcp_not_mounted")

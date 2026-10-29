@@ -19,6 +19,7 @@ from backend.app.core.config import settings
 from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.domain.conversation.schemas import (
     MessageCreate,
+    MessageEdit,
     MessageFeedback,
     MessageResponse,
 )
@@ -404,3 +405,86 @@ async def record_feedback(
         return {"status": "success", "message_id": message_id, "feedback": feedback_in.feedback}
     except ResourceNotFoundError:
         raise HTTPException(status_code=404, detail="Message not found")
+
+
+@router.delete("/{message_id}")
+async def delete_message(
+    conversation_id: UUID,
+    message_id: UUID,
+    current_user: User = Depends(get_current_user),
+    conv_svc: ConversationService = Depends(get_conversation_service),
+):
+    """Delete a turn and everything after it.
+
+    Deleting a user message must also take the assistant reply it produced — an
+    answer left above a question that is gone reads as data loss, not as an edit.
+    The service enforces that ordering cascade (see ``delete_message`` on the
+    repository) rather than the client, because only the server knows how many
+    rows followed.
+    """
+    try:
+        deleted = await conv_svc.delete_message(
+            message_id, conversation_id, user_id=current_user.id
+        )
+    except ResourceNotFoundError:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return {"status": "success", "message_id": message_id, "deleted": deleted}
+
+
+@router.patch("/{message_id}", response_model=MessageResponse)
+async def edit_message(
+    conversation_id: UUID,
+    message_id: UUID,
+    edit_in: MessageEdit,
+    current_user: User = Depends(get_current_user),
+    conv_svc: ConversationService = Depends(get_conversation_service),
+):
+    """Rewrite a user turn, invalidating the turns that followed it.
+
+    Guardrailed on input exactly like ``POST /messages`` — an edit is a second
+    door into the same column, and a path that skipped PII redaction would let
+    the un-sanitised text reach the model on the resend the client performs next.
+    """
+    sanitized = guardrail_service.validate_input(edit_in.content)
+    try:
+        msg = await conv_svc.edit_message(
+            message_id, sanitized, conversation_id, user_id=current_user.id
+        )
+    except ResourceNotFoundError:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return msg
+
+
+@router.post("/{message_id}/regenerate")
+async def regenerate_message(
+    conversation_id: UUID,
+    message_id: UUID,
+    current_user: User = Depends(get_current_user),
+    conv_svc: ConversationService = Depends(get_conversation_service),
+):
+    """Drop an assistant reply and hand back the prompt that produced it.
+
+    The client then re-runs the turn through the normal chat stream. Doing the
+    delete server-side first is what makes the transcript consistent even if the
+    resend never happens: the stale answer is gone, and the prompt it answered is
+    the one the user sees.
+
+    ``user_message_id`` is part of the response on purpose. The resend is the
+    *same* turn, so the client must tell the stream route which row it already
+    has; otherwise the route persists the question a second time and the
+    transcript shows it twice.
+    """
+    try:
+        target = await conv_svc.prepare_regeneration(
+            message_id, conversation_id, user_id=current_user.id
+        )
+    except ResourceNotFoundError:
+        raise HTTPException(status_code=404, detail="Message not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "status": "success",
+        "message_id": message_id,
+        "prompt": target.prompt,
+        "user_message_id": target.user_message_id,
+    }

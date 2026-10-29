@@ -54,6 +54,23 @@ class MessageFeedback(BaseModel):
     feedback_note: str | None = None
 
 
+class MessageEdit(BaseModel):
+    """Body for editing a user turn.
+
+    ``extra="forbid"`` matches ``MessageCreate``: the frontend sends exactly
+    ``content``, so an accidental extra key is a 422 rather than a silently
+    ignored field.
+
+    The same length band as ``MessageCreate`` (1..100000) is deliberate — an edit
+    lands in the same column as the original send, so a value that could never
+    have been *sent* must not be *storable* through the edit path.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=100000)
+
+
 class ConversationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

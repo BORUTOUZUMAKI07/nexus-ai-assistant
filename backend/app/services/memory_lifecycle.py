@@ -21,6 +21,12 @@ Three problems this solves, all verified against the previous behaviour:
    same facts that never exchanged anything. :func:`normalize_for_dedupe`
    and :func:`is_duplicate` are the reconciliation primitive: the table is
    the durable, user-visible record, mem0 is the semantic index over it.
+
+4. Dedupe could not resolve *context drift*. "My timezone is EST" and "my
+   timezone is PST" are not duplicates, so both stayed active and the model was
+   handed two contradictory memories. :func:`partition_new_memories_with_supersede`
+   and :func:`find_superseded` implement latest-wins replacement for possessive
+   attributes -- still entirely LLM-free, as the hot path requires.
 """
 from __future__ import annotations
 
@@ -285,6 +291,121 @@ def is_duplicate(candidate: str, existing_contents: list[str]) -> bool:
     if not target:
         return True
     return any(normalize_for_dedupe(c) == target for c in existing_contents if c)
+
+
+# ── Supersede (context drift) ────────────────────────────────────────────────
+#
+# Dedupe answers "have I seen this exact fact?". It cannot answer "is this a
+# *newer* value for a fact I already hold?". "My timezone is EST" and "my
+# timezone is PST" normalise differently, so both survive -- and the model is
+# then handed two contradictory memories with no way to prefer the newer one.
+# That is context drift, and it is what the long-term-memory lesson is about:
+# mem0's semantic dedupe collapses *similar* facts, not *contradictory* ones.
+#
+# The rule is deliberately restricted to possessive attributes ("my timezone is
+# X", "our stack is Y"). Keying on a verb would be unsafe: "I prefer tabs" and
+# "I prefer dark mode" share the verb "prefer" but are independent facts, so a
+# verb-keyed rule would retire one the moment the other arrived. A possessive
+# attribute names the *slot* the value fills, which is exactly what makes
+# replacement sound -- and, per this module's bias, a missed supersede is a
+# stale memory (recoverable, the user re-states it) while a wrong supersede
+# deletes a fact the user never retracted.
+
+_POSSESSIVE_ATTRIBUTE = re.compile(
+    r"\b(?:my|our)\s+([a-z][a-z0-9 '\-]{0,40}?)\s+(?:is|are|was|were)\s+(.+)",
+    re.IGNORECASE,
+)
+
+
+def fact_slot(content: str) -> tuple[str, str] | None:
+    """Return ``(slot, value)`` for a possessive-attribute fact, else ``None``.
+
+    ``"My timezone is EST"`` -> ``("timezone", "est")``. The slot is what makes
+    replacement sound: two facts fill the same slot only when they describe the
+    same attribute.
+    """
+    match = _POSSESSIVE_ATTRIBUTE.search(content or "")
+    if not match:
+        return None
+    slot = normalize_for_dedupe(match.group(1))
+    value = normalize_for_dedupe(match.group(2))
+    if not slot or not value:
+        return None
+    return slot, value
+
+
+def find_superseded(candidate: str, existing_contents: list[str]) -> str | None:
+    """Return the existing memory ``candidate`` replaces, or ``None``.
+
+    Replacement requires the same slot with a *different* value. Returns the
+    first such stored content; the caller deactivates it. A candidate that
+    matches nothing -- or matches only by exact dedupe -- supersedes nothing.
+    """
+    current = fact_slot(candidate)
+    if current is None:
+        return None
+    slot, value = current
+    for existing in existing_contents:
+        if not existing:
+            continue
+        other = fact_slot(existing)
+        if other is not None and other[0] == slot and other[1] != value:
+            return existing
+    return None
+
+
+def partition_new_memories_with_supersede(
+    candidates: list[dict[str, str]],
+    existing_contents: list[str],
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[str]]:
+    """Like :func:`partition_new_memories`, plus the facts a survivor replaces.
+
+    Returns ``(new, duplicates, superseded_contents)``. ``new`` and
+    ``duplicates`` are exactly what :func:`partition_new_memories` returns, so
+    this is a strict superset rather than a second reconciliation policy.
+    ``superseded_contents`` are existing memory strings a surviving candidate
+    replaces; the caller deactivates them.
+
+    Last-wins within one batch: if the model extracted two values for one slot
+    in a single pass, the later survives and the earlier is reported as
+    superseded. That earlier fact may not exist in the store yet, in which case
+    the caller's deactivation is a harmless no-op.
+    """
+    new, dupes = partition_new_memories(candidates, existing_contents)
+    superseded: list[str] = []
+    survivors: list[dict[str, str]] = []
+    slot_index: dict[str, int] = {}
+
+    for item in new:
+        text = (item.get("memory") or item.get("text") or "").strip()
+        slot = fact_slot(text)
+        if slot is not None and slot[0] in slot_index:
+            previous = survivors[slot_index[slot[0]]]
+            superseded.append((previous.get("memory") or previous.get("text") or "").strip())
+            survivors[slot_index[slot[0]]] = item
+        else:
+            if slot is not None:
+                slot_index[slot[0]] = len(survivors)
+            survivors.append(item)
+
+        replaced = find_superseded(text, existing_contents)
+        if replaced is not None:
+            superseded.append(replaced)
+
+    # Never report a fact as superseded while it still appears among the
+    # survivors, and de-duplicate (two candidates can replace one stored fact).
+    surviving = {
+        normalize_for_dedupe(s.get("memory") or s.get("text") or "") for s in survivors
+    }
+    seen: set[str] = set()
+    unique: list[str] = []
+    for content in superseded:
+        key = normalize_for_dedupe(content)
+        if not key or key in seen or key in surviving:
+            continue
+        seen.add(key)
+        unique.append(content)
+    return survivors, dupes, unique
 
 
 def partition_new_memories(

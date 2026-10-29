@@ -27,6 +27,7 @@ from backend.app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    get_password_hash,
 )
 from backend.app.domain.user.models import User
 from backend.app.domain.user.schemas import TokenResponse
@@ -88,11 +89,12 @@ def cache(monkeypatch):
     return fake
 
 
-def _seeded_service() -> tuple[FakeSession, AuthService, User]:
+def _seeded_service(password: str = "CorrectHorse123!") -> tuple[FakeSession, AuthService, User]:
     fake = FakeSession()
     user = User(
         email=f"refresh-{uuid4().hex[:8]}@nexus.ai",
         username=f"user{uuid4().hex[:6]}",
+        hashed_password=get_password_hash(password),
         is_active=True,
         is_verified=True,
     )
@@ -246,3 +248,76 @@ def test_family_check_fails_open_when_cache_is_unavailable(monkeypatch):
 
     # Still able to refresh: the guard degrades, it does not deny.
     assert _await(svc.refresh(create_refresh_token(subject=user.id)))
+
+
+def test_sign_in_clears_a_standing_user_wide_revocation(cache):
+    """A successful sign-in must lift a revocation the account is under.
+
+    The bug this pins: a *user-wide* ``refresh:revoked:{user_id}`` marker is
+    written by a password reset (``reset_password``) and by a logout whose family
+    cannot be resolved. ``refresh`` honours that marker on every exchange, so
+    without a clear it survived the next sign-in and 401'd every rotation for its
+    full TTL -- the user logs in fine and is then bounced back to the login page
+    on the next refresh, on every device, for REFRESH_TOKEN_EXPIRE_DAYS.
+    """
+    _fake, svc, user = _seeded_service()
+
+    # A reset writes the user-wide marker and cuts existing sessions.
+    reset_token = create_access_token(
+        subject=user.id,
+        expires_delta=timedelta(minutes=30),
+        token_type="reset_password",
+    )
+    _await(svc.reset_password(reset_token, "BrandNewPass123!"))
+    assert f"refresh:revoked:{user.id}" in cache.store
+
+    # The owner signs in again with the new password.
+    pair = _await(svc.login(user.email, "BrandNewPass123!"))
+
+    # The marker is gone, so the freshly minted token actually rotates.
+    assert f"refresh:revoked:{user.id}" not in cache.store
+    rotated = _await(svc.refresh(pair.refresh_token))
+    assert rotated.refresh_token != pair.refresh_token
+
+
+def test_sign_in_after_a_revoked_family_does_not_reuse_the_dead_family(cache):
+    """The clear must not resurrect the *old* family's revoke.
+
+    A login only ever lifts the account-wide marker (and any marker for the new
+    family it just minted). A revocation scoped to a *different* family -- the
+    sign-in whose token was stolen -- must still be honoured, or the theft
+    detection this file exists for would be undone by the next login.
+    """
+    _fake, svc, user = _seeded_service()
+    stolen = create_refresh_token(subject=user.id, family_id="fam-compromised")
+    _await(svc.refresh(stolen))
+    _forget_published_result(cache, stolen)
+    with pytest.raises(AuthenticationError, match="already been used"):
+        _await(svc.refresh(stolen))  # revokes fam-compromised
+
+    pair = _await(svc.login(user.email, "CorrectHorse123!"))
+    new_family = decode_token(pair.refresh_token)["fam"]
+    assert new_family != "fam-compromised"
+
+    # The stolen family stays dead; the fresh one works.
+    assert "refresh:revoked:fam-compromised" in cache.store
+    with pytest.raises(AuthenticationError, match="revoked"):
+        _await(svc.refresh(create_refresh_token(subject=user.id, family_id="fam-compromised")))
+    assert _await(svc.refresh(pair.refresh_token)).refresh_token != pair.refresh_token
+
+
+def test_clearing_the_revocation_fails_open_when_cache_is_unavailable(monkeypatch):
+    """A cache that cannot delete must not turn a valid sign-in into an error."""
+
+    class BrokenDeleteCache(MemoryCache):
+        async def delete(self, key: str) -> None:
+            raise ConnectionError("redis down")
+
+    monkeypatch.setattr(
+        "backend.app.services.auth_service.get_cache_service",
+        lambda: BrokenDeleteCache(),
+    )
+    _fake, svc, user = _seeded_service()
+
+    # Still signs in: the clear degrades, it does not deny.
+    assert _await(svc.login(user.email, "CorrectHorse123!")).access_token

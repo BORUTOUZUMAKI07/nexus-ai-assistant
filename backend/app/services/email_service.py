@@ -5,11 +5,15 @@ Supports three channels, in priority order:
   1. Resend (RESEND_API_KEY) — REST API via httpx (free tier).
   2. SMTP (SMTP_USER/SMTP_PASSWORD) — smtplib over TLS in a worker thread.
   3. Dev sink — when neither is configured the email is logged and the caller
-     receives a ``dev_preview`` (a link/token the local/dev UI can surface),
-     so auth flows stay fully testable without any mail provider.
-Never raises: delivery problems degrade to the dev sink with a logged warning.
+     receives a ``dev`` channel result (no credential is handed back unless the
+     caller separately asks for the dev link).
+Never raises: a provider that is configured but fails returns a distinct
+``failed`` channel (never ``dev``), so a degraded production send cannot be
+confused with a local-development send, and the provider's error text stays in
+the server log rather than the result.
 """
 import asyncio
+import html
 from email.message import EmailMessage
 from smtplib import SMTP, SMTP_SSL, SMTPAuthenticationError, SMTPException
 
@@ -18,6 +22,17 @@ import structlog
 from backend.app.core.config import settings
 
 logger = structlog.get_logger(__name__)
+
+
+def escape_html(value: object) -> str:
+    """Escape a user-supplied value for safe interpolation into an HTML body.
+
+    Centralised on purpose: ``send()`` accepts an already-rendered ``body_html``
+    from several callers, so a new caller that interpolates a raw username (or
+    display name) would reintroduce stored HTML injection. Callers pass
+    user-supplied values through here before building the string.
+    """
+    return html.escape("" if value is None else str(value), quote=True)
 
 
 class EmailService:
@@ -70,12 +85,22 @@ class EmailService:
                 )
             if resp.status_code < 300:
                 logger.info("email_sent", channel="resend", to=to, subject=subject)
-                return {"sent": True, "channel": "resend", "status_code": resp.status_code}
-            logger.warning("email_resend_failed", status_code=resp.status_code, body=resp.text[:500])
-            return {"sent": False, "channel": "dev", "status_code": resp.status_code}
+                return {"sent": True, "channel": "resend"}
+            # Never surface the provider body: SMTP/REST error text names hosts
+            # and internals. Logged above, generic message returned.
+            logger.warning("email_resend_failed", status_code=resp.status_code)
+            return {
+                "sent": False,
+                "channel": "failed",
+                "message": "Email provider rejected the message.",
+            }
         except Exception as exc:
-            logger.warning("email_resend_error", error=str(exc))
-            return {"sent": False, "channel": "dev", "error": str(exc)}
+            logger.warning("email_resend_error", error=type(exc).__name__)
+            return {
+                "sent": False,
+                "channel": "failed",
+                "message": "Email delivery failed.",
+            }
 
     def _send_smtp(
         self, to: str, subject: str, body_html: str, body_text: str | None
@@ -100,8 +125,12 @@ class EmailService:
             logger.info("email_sent", channel="smtp", to=to, subject=subject)
             return {"sent": True, "channel": "smtp"}
         except (SMTPAuthenticationError, SMTPException, OSError) as exc:
-            logger.warning("email_smtp_failed", error=str(exc))
-            return {"sent": False, "channel": "dev", "error": str(exc)}
+            logger.warning("email_smtp_failed", error=type(exc).__name__)
+            return {
+                "sent": False,
+                "channel": "failed",
+                "message": "Email delivery failed.",
+            }
 
 
 email_service = EmailService()

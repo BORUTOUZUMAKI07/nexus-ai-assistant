@@ -98,6 +98,27 @@ class _RecordingArtifacts:
 
 @pytest.mark.asyncio
 async def test_create_artifact_binds_owner_to_the_caller(monkeypatch):
+    _RecordingArtifacts.last = None
+    caller, attacker = uuid4(), uuid4()
+    monkeypatch.setattr(server, "_authenticated_user_id", lambda: caller)
+
+    import backend.app.infrastructure.database.session as sess_mod
+    import backend.app.services.artifact_service as art_mod
+
+    monkeypatch.setattr(art_mod, "ArtifactService", _RecordingArtifacts)
+    monkeypatch.setattr(sess_mod, "async_session_factory", lambda: _Ctx(object()))
+
+    res = await server.create_artifact(user_id=str(caller), title="T", content="hello world")
+
+    assert "Artifact persisted" in res
+    assert _RecordingArtifacts.last.user_id == caller
+    assert _RecordingArtifacts.last.user_id != attacker
+
+
+@pytest.mark.asyncio
+async def test_create_artifact_rejects_a_foreign_user_id(monkeypatch):
+    """A caller-supplied user_id that is not the caller is refused outright."""
+    _RecordingArtifacts.last = None
     caller, attacker = uuid4(), uuid4()
     monkeypatch.setattr(server, "_authenticated_user_id", lambda: caller)
 
@@ -109,14 +130,14 @@ async def test_create_artifact_binds_owner_to_the_caller(monkeypatch):
 
     res = await server.create_artifact(user_id=str(attacker), title="T", content="hello world")
 
-    assert "Artifact persisted" in res
-    assert _RecordingArtifacts.last.user_id == caller
-    assert _RecordingArtifacts.last.user_id != attacker
+    assert "must match the authenticated user" in res
+    assert _RecordingArtifacts.last is None
 
 
 @pytest.mark.asyncio
 async def test_create_artifact_refuses_a_conversation_the_caller_does_not_own(monkeypatch):
-    monkeypatch.setattr(server, "_authenticated_user_id", lambda: uuid4())
+    caller = uuid4()
+    monkeypatch.setattr(server, "_authenticated_user_id", lambda: caller)
 
     import backend.app.domain.conversation.repository as conv_mod
     import backend.app.infrastructure.database.session as sess_mod
@@ -134,7 +155,7 @@ async def test_create_artifact_refuses_a_conversation_the_caller_does_not_own(mo
     monkeypatch.setattr(sess_mod, "async_session_factory", lambda: _Ctx(object()))
 
     res = await server.create_artifact(
-        user_id=str(uuid4()), title="T", content="hello world", conversation_id=str(uuid4())
+        user_id=str(caller), title="T", content="hello world", conversation_id=str(uuid4())
     )
 
     assert "conversation not found" in res
@@ -142,10 +163,10 @@ async def test_create_artifact_refuses_a_conversation_the_caller_does_not_own(mo
 
 
 @pytest.mark.asyncio
-async def test_shared_key_path_may_still_pass_an_explicit_user_id(monkeypatch):
-    """The trusted service credential has no user identity, so it supplies one."""
+async def test_create_artifact_refuses_the_shared_key_path(monkeypatch):
+    """The shared key has no identity, so it may not choose an owner (finding #12)."""
+    _RecordingArtifacts.last = None
     monkeypatch.setattr(server, "_authenticated_user_id", lambda: None)
-    explicit = uuid4()
 
     import backend.app.infrastructure.database.session as sess_mod
     import backend.app.services.artifact_service as art_mod
@@ -153,9 +174,10 @@ async def test_shared_key_path_may_still_pass_an_explicit_user_id(monkeypatch):
     monkeypatch.setattr(art_mod, "ArtifactService", _RecordingArtifacts)
     monkeypatch.setattr(sess_mod, "async_session_factory", lambda: _Ctx(object()))
 
-    res = await server.create_artifact(user_id=str(explicit), title="T", content="hi there")
-    assert "Artifact persisted" in res
-    assert _RecordingArtifacts.last.user_id == explicit
+    res = await server.create_artifact(user_id=str(uuid4()), title="T", content="hi there")
+
+    assert "requires an authenticated user" in res
+    assert _RecordingArtifacts.last is None
 
 
 # ── request_user_input ────────────────────────────────────────────────────────
@@ -188,4 +210,32 @@ async def test_request_user_input_refuses_a_conversation_the_caller_does_not_own
     )
 
     assert "conversation not found" in res
+    assert parked["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_request_user_input_refuses_the_shared_key_path(monkeypatch):
+    """The shared key may not park an elicitation against an arbitrary conversation."""
+    parked = {"n": 0}
+
+    class _ElicitationService:
+        def __init__(self, session):
+            pass
+
+        async def park_elicitation(self, **kwargs):
+            parked["n"] += 1
+            return {"elicitation_id": "x"}
+
+    import backend.app.infrastructure.database.session as sess_mod
+    import backend.app.services.tools.elicitations as elic_mod
+
+    monkeypatch.setattr(server, "_authenticated_user_id", lambda: None)
+    monkeypatch.setattr(elic_mod, "ElicitationService", _ElicitationService)
+    monkeypatch.setattr(sess_mod, "async_session_factory", lambda: _Ctx(object()))
+
+    res = await server.request_user_input(
+        conversation_id=str(uuid4()), message="?", schema_json="{}"
+    )
+
+    assert "requires an authenticated user" in res
     assert parked["n"] == 0

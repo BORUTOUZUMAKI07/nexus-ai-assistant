@@ -1,11 +1,17 @@
 """
 Pydantic Schemas for User Domain (Pydantic V2 Standard).
 """
+import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+# Usernames reach an HTML email body and other rendered surfaces, so the set is
+# an allowlist rather than a denylist: a denylist of `<`/`>` is a race against
+# every encoding, and `stellar`-style lookalikes have no place in a handle.
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9 ._-]{3,50}$")
 
 
 class UserCreate(BaseModel):
@@ -13,6 +19,22 @@ class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=50)
     password: str = Field(min_length=8, max_length=128)
     full_name: str | None = Field(default=None, max_length=100)
+
+    @field_validator("username")
+    @classmethod
+    def _validate_username(cls, value: str) -> str:
+        """Reject anything outside the printable-ASCII handle allowlist.
+
+        The email body escapes the username as a second layer; this keeps
+        control characters, markup and homoglyphs out of the stored value so
+        every other rendering surface inherits the constraint.
+        """
+        if not _USERNAME_RE.match(value):
+            raise ValueError(
+                "Username may contain only letters, digits, spaces, dots, "
+                "underscores and hyphens."
+            )
+        return value
 
 
 class TokenResponse(BaseModel):
@@ -126,6 +148,13 @@ class UserResponse(BaseModel):
     updated_at: datetime
 
 
+# Keys inside ``custom_settings`` that are server-managed. Two-factor state
+# lives here today; a client write that carried either key would be a mass
+# assignment straight past the TOTP gate (disable 2FA by PUTting settings), and
+# a wholesale replace would destroy the single-use counter the next login needs.
+RESERVED_SETTINGS_KEYS = frozenset({"two_factor_enabled", "two_factor_last_counter"})
+
+
 class UserSettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -138,6 +167,25 @@ class UserSettingsUpdate(BaseModel):
     enable_memory: bool | None = True
     enable_tools: bool | None = True
     custom_settings: dict[str, Any] | None = Field(default=None, max_length=100)
+
+    @field_validator("custom_settings")
+    @classmethod
+    def _reject_reserved_keys(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Reject any attempt to write a server-managed key.
+
+        Raised rather than silently dropped so the attempt is visible as a 400
+        and in the logs -- a security-relevant write that is merely ignored
+        teaches an attacker for free and a defender nothing.
+        """
+        if value is None:
+            return value
+        reserved = RESERVED_SETTINGS_KEYS.intersection(value)
+        if reserved:
+            raise ValueError(
+                "custom_settings may not set reserved key(s): "
+                + ", ".join(sorted(reserved))
+            )
+        return value
 
 
 class UserSettingsResponse(BaseModel):

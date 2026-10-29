@@ -2,7 +2,7 @@
 Conversation Application Service.
 Owns all conversation CRUD, forking, and message retrieval use cases (SRP).
 """
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import UUID
 
 import structlog
@@ -20,6 +20,19 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
+
+
+class RegenerationTarget(NamedTuple):
+    """What ``prepare_regeneration`` hands back to its route.
+
+    ``user_message_id`` is the identity of the prompt row the client must reuse
+    when it resends. Without it the resend looks like a brand-new turn and the
+    stream route appends a second copy of the question -- a duplicate row with a
+    different id that no test comparing *text* can distinguish.
+    """
+
+    prompt: str
+    user_message_id: UUID
 
 
 class ConversationService:
@@ -151,6 +164,148 @@ class ConversationService:
         # learns from real outcomes.
         await self._record_bandit_reward(msg, feedback=feedback, user_id=user_id)
         return msg
+
+    async def delete_message(
+        self,
+        message_id: UUID,
+        conversation_id: UUID,
+        user_id: UUID | None = None,
+    ) -> int:
+        """Delete a turn (and, by default, everything after it). See the repo."""
+        deleted = await self._repo.delete_message(
+            message_id, conversation_id, user_id=user_id
+        )
+        if deleted == 0:
+            raise ResourceNotFoundError("Message", str(message_id))
+        logger.info(
+            "message_deleted",
+            conversation_id=str(conversation_id),
+            message_id=str(message_id),
+            deleted=deleted,
+        )
+        return deleted
+
+    async def edit_message(
+        self,
+        message_id: UUID,
+        content: str,
+        conversation_id: UUID,
+        user_id: UUID | None = None,
+    ) -> Message:
+        """Rewrite a user turn and drop the turns it invalidated (time-travel edit)."""
+        msg = await self._repo.update_message_content(
+            message_id, content, conversation_id, user_id=user_id
+        )
+        if msg is None:
+            raise ResourceNotFoundError("Message", str(message_id))
+        logger.info(
+            "message_edited",
+            conversation_id=str(conversation_id),
+            message_id=str(message_id),
+        )
+        return msg
+
+    async def reuse_user_turn(
+        self,
+        conversation_id: UUID,
+        content: str,
+        reuse_message_id: UUID,
+        user_id: UUID | None = None,
+    ) -> Message:
+        """Adopt an existing user row as the turn a resend is asking again.
+
+        The stream route persists the user turn itself, so every resend -- edit
+        and resend, regenerate -- would otherwise store the question a second
+        time: the edit/regenerate endpoints leave one row in place, and the
+        resend appends another. The duplicate is invisible client-side (the hook
+        already truncated its local copy) and indistinguishable from correct
+        behaviour if you compare text, which is why the decision is made by
+        **identity**: the client sends back the id it edited, or the id the
+        regenerate endpoint returned.
+
+        Strict on purpose. A stale id -- one that is no longer the newest row --
+        means the client and the server disagree about the transcript, and
+        silently appending a duplicate is exactly the defect this exists to
+        prevent. The caller turns these into 404/409 rather than swallowing them
+        into the stream route's fail-open persistence guard.
+        """
+        target = await self._repo.get_message_by_id(
+            reuse_message_id, conversation_id=conversation_id, user_id=user_id
+        )
+        if target is None:
+            raise ResourceNotFoundError("Message", str(reuse_message_id))
+        if target.role != "user":
+            raise ValueError("Only a user message can be reused for a resend")
+
+        last = await self._repo.get_last_message(conversation_id)
+        if last is None or last.id != target.id:
+            raise ValueError("Cannot reuse a message that is not the latest turn")
+
+        if target.content != content:
+            updated = await self._repo.update_message_content(
+                reuse_message_id,
+                content,
+                conversation_id,
+                user_id=user_id,
+                truncate_after=False,
+            )
+            if updated is not None:
+                return updated
+        return target
+
+    async def prepare_regeneration(
+        self,
+        message_id: UUID,
+        conversation_id: UUID,
+        user_id: UUID | None = None,
+    ) -> RegenerationTarget:
+        """Drop an assistant reply and return the user prompt that produced it.
+
+        Regenerate is a delete plus a resend, expressed as one server call so the
+        client cannot end up with the reply removed and the prompt lost — which
+        would leave the user with no way to re-ask. The preceding user turn is
+        read *before* the deletion, and the deletion cascades everything after
+        it, so the returned text is the last thing standing.
+
+        The prompt's **id** travels with it: the client resends the same turn,
+        and the stream route must reuse that row rather than append a second
+        copy of the question.
+        """
+        message = await self._repo.get_message_by_id(
+            message_id, conversation_id=conversation_id, user_id=user_id
+        )
+        if message is None:
+            raise ResourceNotFoundError("Message", str(message_id))
+
+        # Only an assistant turn is regenerable: regenerating a user turn would
+        # be "ask again", which is just sending a new message.
+        if message.role != "assistant":
+            raise ValueError("Only an assistant message can be regenerated")
+
+        history = await self._repo.get_messages(conversation_id)
+        prompt = ""
+        prompt_id: UUID | None = None
+        for row in history:
+            if row.id == message.id:
+                break
+            if row.role == "user":
+                prompt = row.content
+                prompt_id = row.id
+        if not prompt or prompt_id is None:
+            raise ValueError("No preceding user message to regenerate from")
+
+        # Delete the reply; cascade is harmless here because an assistant reply is
+        # terminal within its turn, but it keeps one rule for every caller.
+        await self._repo.delete_message(
+            message_id, conversation_id, user_id=user_id, cascade=True
+        )
+        logger.info(
+            "message_regenerated",
+            conversation_id=str(conversation_id),
+            message_id=str(message_id),
+            user_message_id=str(prompt_id),
+        )
+        return RegenerationTarget(prompt=prompt, user_message_id=prompt_id)
 
     async def _record_bandit_reward(
         self, msg: Message, feedback: str, user_id: UUID | None

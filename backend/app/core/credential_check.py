@@ -81,7 +81,6 @@ _CREDENTIALS: tuple[tuple[str, str, bool], ...] = (
     ("GOOGLE_OAUTH_CLIENT_SECRET", "Google OAuth", False),
     ("GITHUB_OAUTH_CLIENT_SECRET", "GitHub OAuth", False),
     ("MCP_API_KEY", "MCP gateway", False),
-    ("SENTRY_DSN", "Sentry", False),
     ("LANGGRAPH_CHECKPOINT_DSN", "LangGraph checkpointer", False),
 )
 

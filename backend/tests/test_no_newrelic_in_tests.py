@@ -1,9 +1,9 @@
 """The test session must not export logs to New Relic.
 
-The third of the three telemetry guards in ``tests/conftest.py`` (after
-``LANGSMITH_TRACING`` and ``SENTRY_DSN``), and the defect it guards has their
-shape exactly: a guard that runs too late to work, on a sink nobody was
-watching.
+The second of the telemetry guards in ``tests/conftest.py`` (after
+``LANGSMITH_TRACING``; a third keeps the generated dev-secrets file out of the
+working tree), and the defect it guards has their shape exactly: a guard that
+runs too late to work, on a sink nobody was watching.
 
 ``backend/.env`` sets ``NEW_RELIC_ENABLED=true`` because the *app* should
 export, and pytest loads that file. conftest's first backend import therefore

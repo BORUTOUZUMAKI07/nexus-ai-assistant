@@ -208,6 +208,13 @@ class StreamChatRequest(BaseModel):
     # Approved-plan preamble: prepended to the agent system prompt when Plan
     # mode approval hands execution back to the streaming agent path.
     plan_preamble: str | None = Field(default=None, max_length=4000)
+    # Identity of a user row this send is *re-asking*, not adding. Edit-and-resend
+    # and regenerate both leave the prompt row in place and then resend it, so a
+    # plain append would store the same question twice. The client sends the id it
+    # edited, or the id the regenerate endpoint returned; the route adopts that
+    # row instead of inserting a new one. Text equality is deliberately not used
+    # -- two genuine turns can be word-for-word identical.
+    reuse_user_message_id: UUID | None = None
 
 
 class HITLFeedbackRequest(BaseModel):
@@ -335,44 +342,64 @@ async def stream_conversation(
     user_msg = None
     user_content = ""
     if user_messages:
-        try:
-            last_in = user_messages[-1]
-            raw_content = last_in.get("content") if isinstance(last_in, dict) else str(last_in)
-            if isinstance(raw_content, list):
-                # Extract text component for guardrailing and text persistence
-                text_parts = [
-                    p.get("text", "")
-                    for p in raw_content
+        last_in = user_messages[-1]
+        raw_content = last_in.get("content") if isinstance(last_in, dict) else str(last_in)
+        persist_content: str
+        if isinstance(raw_content, list):
+            # Extract text component for guardrailing and text persistence
+            text_parts = [
+                p.get("text", "")
+                for p in raw_content
+                if isinstance(p, dict) and p.get("type") == "text"
+            ]
+            text_to_validate = " ".join(text_parts).strip()
+            sanitized_text = guardrail_service.validate_input(text_to_validate) if text_to_validate else ""
+            # In-place rewrite of the text parts so the graph never sees the
+            # original (unsanitized) content — parity with the text branch.
+            if isinstance(user_messages[-1], dict) and isinstance(user_messages[-1].get("content"), list):
+                user_messages[-1]["content"] = [
+                    {**p, "text": sanitized_text}
                     if isinstance(p, dict) and p.get("type") == "text"
+                    else p
+                    for p in user_messages[-1]["content"]
                 ]
-                text_to_validate = " ".join(text_parts).strip()
-                sanitized_text = guardrail_service.validate_input(text_to_validate) if text_to_validate else ""
-                # In-place rewrite of the text parts so the graph never sees the
-                # original (unsanitized) content — parity with the text branch.
-                if isinstance(user_messages[-1], dict) and isinstance(user_messages[-1].get("content"), list):
-                    user_messages[-1]["content"] = [
-                        {**p, "text": sanitized_text}
-                        if isinstance(p, dict) and p.get("type") == "text"
-                        else p
-                        for p in user_messages[-1]["content"]
-                    ]
+            persist_content = sanitized_text or "[Image attached]"
+        else:
+            user_content = str(raw_content)
+            sanitized_content = guardrail_service.validate_input(user_content)
+            persist_content = sanitized_content
+            if isinstance(user_messages[-1], dict):
+                user_messages[-1] = {**user_messages[-1], "content": sanitized_content}
+
+        # A resend (edit-and-resend, regenerate) re-asks a row that is already
+        # stored. Appending here is what stored the question twice; adopting the
+        # row by id is the fix. It is strict -- and deliberately outside the
+        # fail-open append guard below -- because a stale id means the client and
+        # server disagree about the transcript, and falling back to an append
+        # silently recreates the duplicate row this exists to prevent.
+        if body.reuse_user_message_id is not None:
+            try:
+                user_msg = await conv_svc.reuse_user_turn(
+                    convo_uuid,
+                    persist_content,
+                    body.reuse_user_message_id,
+                    user_id=current_user.id,
+                )
+            except ResourceNotFoundError:
+                raise HTTPException(
+                    status_code=404, detail="Message to reuse not found"
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc))
+        else:
+            try:
                 user_msg = await conv_svc.add_message(
                     conversation_id=convo_uuid,
                     role="user",
-                    content=sanitized_text or "[Image attached]",
+                    content=persist_content,
                 )
-            else:
-                user_content = str(raw_content)
-                sanitized_content = guardrail_service.validate_input(user_content)
-                user_msg = await conv_svc.add_message(
-                    conversation_id=convo_uuid,
-                    role="user",
-                    content=sanitized_content,
-                )
-                if isinstance(user_messages[-1], dict):
-                    user_messages[-1] = {**user_messages[-1], "content": sanitized_content}
-        except Exception as exc:
-            logger.warning("agentic_user_message_persist_failed", thread_id=thread_id, error=str(exc))
+            except Exception as exc:
+                logger.warning("agentic_user_message_persist_failed", thread_id=thread_id, error=str(exc))
 
     # Bound the agentic context: only the most recent turns are replayed into the
     # graph every run, preventing unbounded context growth across a conversation.

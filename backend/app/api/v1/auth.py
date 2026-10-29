@@ -2,11 +2,14 @@
 Authentication API Router.
 Pure HTTP transport layer — delegates all auth use cases to AuthService (SRP + DIP).
 """
+import hashlib
 import time
+from collections import deque
 from urllib.parse import quote
 
 import structlog
 from backend.app.api.deps import get_auth_service, get_current_user, get_db, get_oauth_service
+from backend.app.core.client_ip import resolve_client_ip
 from backend.app.core.config import settings
 from backend.app.core.exceptions import AuthenticationError, UserAlreadyExistsError
 from backend.app.core.security import decode_token
@@ -43,26 +46,109 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 logger = structlog.get_logger(__name__)
 
 
-async def _enforce_auth_rate_limit(request: Request, *, action: str, limit: int) -> None:
-    """Apply a per-client-IP window without trusting unvalidated forwarded headers."""
-    client_host = request.client.host if request.client else "unknown"
-    try:
-        allowed, _remaining = await redis_service.check_rate_limit(
-            identifier=f"auth:{action}:{client_host}",
-            limit=limit,
-            window_seconds=60,
-            cost=1,
-        )
-    except Exception as exc:
-        # Keep authentication available during Redis outages; never log credentials.
-        logger.warning("auth_rate_limit_unavailable", action=action, error_type=type(exc).__name__)
-        return
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many authentication attempts. Please try again in a minute.",
-            headers={"Retry-After": "60"},
-        )
+def _account_key(value: str | None) -> str | None:
+    """Hash an account identifier so no raw email/username reaches Redis keys.
+
+    Returns None when there is nothing to key on, so the per-account bucket is
+    skipped rather than collapsing every anonymous request onto one key.
+    """
+    if not value:
+        return None
+    return hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()[:32]
+
+
+# In-process sliding windows used when Redis is unreachable (see
+# ``_enforce_auth_rate_limit``). Authentication must stay available during a
+# Redis outage, but returning early -- as this did -- silently switched brute
+# force protection *off* on login, register and password reset, which is the
+# one moment an attacker needs it. Bounded: a flood of distinct buckets must not
+# become a memory leak, so expired windows are swept and the coldest bucket is
+# evicted before the cap is reached.
+_LOCAL_RATE_WINDOWS: dict[str, deque[float]] = {}
+_LOCAL_RATE_MAX_BUCKETS = 4096
+
+
+def _memory_rate_limit(identifier: str, *, limit: int, window_seconds: int) -> bool:
+    """Sliding-window check against this process's own memory. True = allowed.
+
+    Counts the current attempt when it lets it through, mirroring the Redis
+    path, so a bucket cannot be re-checked to gain an extra allowance.
+    """
+    now = time.monotonic()
+    window = _LOCAL_RATE_WINDOWS.get(identifier)
+    if window is None:
+        if len(_LOCAL_RATE_WINDOWS) >= _LOCAL_RATE_MAX_BUCKETS:
+            cutoff = now - window_seconds
+            for stale in [
+                k for k, w in _LOCAL_RATE_WINDOWS.items() if not w or w[-1] <= cutoff
+            ]:
+                del _LOCAL_RATE_WINDOWS[stale]
+            if len(_LOCAL_RATE_WINDOWS) >= _LOCAL_RATE_MAX_BUCKETS:
+                coldest = min(_LOCAL_RATE_WINDOWS, key=lambda k: _LOCAL_RATE_WINDOWS[k][-1])
+                del _LOCAL_RATE_WINDOWS[coldest]
+        window = deque()
+        _LOCAL_RATE_WINDOWS[identifier] = window
+
+    cutoff = now - window_seconds
+    while window and window[0] <= cutoff:
+        window.popleft()
+    if len(window) >= limit:
+        return False
+    window.append(now)
+    return True
+
+
+async def _enforce_auth_rate_limit(
+    request: Request,
+    *,
+    action: str,
+    limit: int,
+    account: str | None = None,
+) -> None:
+    """Apply per-client-IP and (optionally) per-account windows.
+
+    The client address is resolved through ``resolve_client_ip`` so a forwarded
+    header is honoured only from a configured trusted proxy -- reading
+    ``X-Forwarded-For`` directly let a caller mint a fresh rate-limit key per
+    request with a spoofed hop. The per-account bucket closes the remaining
+    hole: an attacker with many source addresses still hits one cap per target
+    account (finding: credential-stuffing / lockout-avoidance).
+    """
+    client_host = resolve_client_ip(request, settings.TRUSTED_PROXY_IPS)
+    buckets = [f"auth:{action}:{client_host}"]
+    key = _account_key(account)
+    if key:
+        buckets.append(f"auth:{action}:acct:{key}")
+    for identifier in buckets:
+        # The per-account bucket is a second key, not a second cap: both are
+        # checked so neither a single noisy address nor a distributed attempt
+        # on one account slips through.
+        try:
+            allowed, _remaining = await redis_service.check_rate_limit(
+                identifier=identifier,
+                limit=limit,
+                window_seconds=60,
+                cost=1,
+            )
+        except Exception as exc:
+            # Authentication stays available during a Redis outage -- but the
+            # old `return` here meant "no Redis, no limit", so brute-force
+            # protection vanished exactly when it mattered. Fall back to this
+            # process's own window instead: degraded (per-instance, not shared)
+            # but never absent.
+            allowed = _memory_rate_limit(identifier, limit=limit, window_seconds=60)
+            logger.warning(
+                "auth_rate_limit_unavailable",
+                action=action,
+                error_type=type(exc).__name__,
+                fallback="in_process_window",
+            )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many authentication attempts. Please try again in a minute.",
+                headers={"Retry-After": "60"},
+            )
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -71,7 +157,7 @@ async def register_user(
     request: Request,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
-    await _enforce_auth_rate_limit(request, action="register", limit=5)
+    await _enforce_auth_rate_limit(request, action="register", limit=5, account=user_in.email)
     try:
         user = await auth_svc.register(user_in)
         # Best-effort verification email ("notify" leg of email infra).
@@ -97,7 +183,9 @@ async def login(
     ``{"status": "2fa_required", "preauth_token": ..., "expires_in": ...}``
     instead; exchange it via POST /auth/2fa/verify.
     """
-    await _enforce_auth_rate_limit(request, action="login", limit=10)
+    await _enforce_auth_rate_limit(
+        request, action="login", limit=10, account=form_data.username
+    )
     try:
         return await auth_svc.login(form_data.username, form_data.password)
     except AuthenticationError as exc:
@@ -134,16 +222,26 @@ async def logout(
     auth_svc: AuthService = Depends(get_auth_service),
 ):
     """
-    Revoke refresh token in Redis and complete logout.
-    Uses auto_error=False so expired access tokens never block logging out.
+    Revoke the session server-side and complete logout.
+
+    The refresh token is taken from the request body, else the
+    ``nexus_refresh_token`` cookie; if neither is present the server derives
+    the token family from the access token's ``fam`` claim, so a client that
+    sends only an Authorization header still terminates its 30-day session.
+    Uses auto_error=False so an expired access token never blocks logging out.
     """
     await _enforce_auth_rate_limit(request, action="logout", limit=20)
+    access_token = credentials.credentials if credentials and credentials.credentials else None
+    refresh_token = token_in.refresh_token if token_in else None
+    if not refresh_token:
+        refresh_token = request.cookies.get("nexus_refresh_token")
+
     # Blacklist the current access token (by jti) so it dies immediately
     # instead of living out its TTL. Fail-open: a malformed/expired token or
     # an offline Redis must never prevent logout.
-    if credentials and credentials.credentials:
+    if access_token:
         try:
-            payload = decode_token(credentials.credentials)
+            payload = decode_token(access_token)
             jti = payload.get("jti")
             if jti:
                 exp = payload.get("exp")
@@ -152,8 +250,15 @@ async def logout(
         except Exception:  # nosec B110
             # revocation is best-effort; the token's exp still bounds reuse
             pass
-    if token_in and token_in.refresh_token:
-        await auth_svc.revoke_refresh_token(token_in.refresh_token)
+
+    revoked = await auth_svc.logout(access_token=access_token, refresh_token=refresh_token)
+    if not revoked:
+        # Honest response for an unauthenticated/empty logout: previously this
+        # returned "Logged out successfully" while revoking nothing.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No active session was found to revoke.",
+        )
     return {"message": "Logged out successfully"}
 
 
@@ -219,7 +324,9 @@ async def two_factor_verify(
     # few codes are valid at any instant. Without this limit the endpoint is an
     # unthrottled oracle: an attacker holding a stolen preauth token could grind
     # codes until one lands.
-    await _enforce_auth_rate_limit(request, action="2fa_verify", limit=10)
+    await _enforce_auth_rate_limit(
+        request, action="2fa_verify", limit=10, account=body.preauth_token
+    )
     try:
         return await auth_svc.verify_2fa(body.preauth_token, body.code)
     except AuthenticationError as exc:
@@ -266,7 +373,9 @@ async def forgot_password(
     auth_svc: AuthService = Depends(get_auth_service),
 ):
     """Issues + emails a reset token. Returns the same envelope for known/unknown emails."""
-    await _enforce_auth_rate_limit(request, action="forgot_password", limit=5)
+    await _enforce_auth_rate_limit(
+        request, action="forgot_password", limit=5, account=body.email
+    )
     result = await auth_svc.initiate_password_reset(body.email)
     return result
 
@@ -277,7 +386,9 @@ async def reset_password(
     request: Request,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
-    await _enforce_auth_rate_limit(request, action="reset_password", limit=5)
+    await _enforce_auth_rate_limit(
+        request, action="reset_password", limit=5, account=body.token
+    )
     try:
         return await auth_svc.reset_password(body.token, body.new_password)
     except AuthenticationError as exc:

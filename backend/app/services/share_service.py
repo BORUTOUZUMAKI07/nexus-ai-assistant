@@ -17,6 +17,36 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 logger = structlog.get_logger(__name__)
 
 
+# The citation fields an *unauthenticated* reader of a public share may see.
+#
+# An allow-list, not a redaction of the fields we know are sensitive today:
+# `content_snippet` is a verbatim excerpt of a private file and `filename` names
+# it, and a field added to a citation later must not leak by default. The
+# remaining fields keep the answer's source numbering aligned (list position +
+# chunk index) and its relevance (score) without disclosing the source. Web
+# citations keep their public provenance (`source`/`url`); RAG citations have
+# neither, so nothing of the file survives (finding #7).
+_PUBLIC_CITATION_FIELDS = ("type", "chunk_index", "score", "source", "url")
+
+
+def public_safe_citations(citations: object) -> list[dict]:
+    """Project stored citations down to what a public reader may see.
+
+    The citation frame builder is deliberately *not* changed: it feeds the
+    authenticated owner and the citation inspector, which legitimately show the
+    excerpt. This is the one unauthenticated projection, so it lives next to
+    ``read_public`` and any future public projection reuses it rather than
+    re-deriving the rule (finding #7).
+    """
+    if not isinstance(citations, list):
+        return []
+    return [
+        {key: item.get(key) for key in _PUBLIC_CITATION_FIELDS}
+        for item in citations
+        if isinstance(item, dict)
+    ]
+
+
 class ShareService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -78,7 +108,7 @@ class ShareService:
             },
             "messages": [
                 {"role": m.role, "content": m.content, "model": m.model,
-                 "citations": m.citations or [],
+                 "citations": public_safe_citations(m.citations),
                  "created_at": m.created_at.isoformat() if m.created_at else None}
                 for m in messages
             ],

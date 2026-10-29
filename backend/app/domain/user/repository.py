@@ -12,7 +12,8 @@ from backend.app.services.memory_lifecycle import (
     INITIAL_CONFIDENCE,
     apply_reinforcement,
     decayed_confidence,
-    partition_new_memories,
+    normalize_for_dedupe,
+    partition_new_memories_with_supersede,
 )
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -93,7 +94,16 @@ class UserRepository(BaseRepository[User]):
             self.session.add(settings)
         else:
             for key, val in settings_data.items():
-                if val is not None and hasattr(settings, key):
+                if val is None or not hasattr(settings, key):
+                    continue
+                if key == "custom_settings":
+                    # Merge, never replace. A wholesale assignment let any
+                    # settings write carrying an unrelated key erase the
+                    # server-managed 2FA state stored in the same blob.
+                    merged = dict(settings.custom_settings or {})
+                    merged.update(val)
+                    setattr(settings, key, merged)
+                else:
                     setattr(settings, key, val)
             self.session.add(settings)
         await self.session.commit()
@@ -161,9 +171,14 @@ class UserRepository(BaseRepository[User]):
 
         Returns (created, skipped_duplicate) so the caller can log the
         reconciliation rather than guessing at it.
+
+        Superseding is applied here too: a new fact that fills the same
+        possessive slot as an existing one with a different value retires the
+        old row (see :func:`partition_new_memories_with_supersede`). Dedupe
+        alone left both active and handed the model a contradiction.
         """
         existing = [m.content for m in await self.get_memories(user_id, active_only=True)]
-        new, dupes = partition_new_memories(facts, existing)
+        new, dupes, superseded = partition_new_memories_with_supersede(facts, existing)
         created: list[UserMemory] = []
         for fact in new:
             text = (fact.get("memory") or fact.get("text") or "").strip()
@@ -179,7 +194,46 @@ class UserRepository(BaseRepository[User]):
                     mem0_id=fact.get("id"),
                 )
             )
+        # Retire the replaced rows only *after* every replacement is durable.
+        # The reverse order loses the fact when a write fails: the old value is
+        # already deactivated (and committed) while the new one never lands.
+        # This module's stated bias is that a missed supersede leaves a
+        # stale-but-recoverable memory, whereas a lost one is unrecoverable.
+        if superseded:
+            await self.deactivate_memories_by_contents(user_id, superseded)
         return created, len(dupes)
+
+    async def deactivate_memories_by_contents(
+        self, user_id: UUID, contents: list[str]
+    ) -> int:
+        """Retire active memories whose content a newer fact has replaced.
+
+        Part of context-drift resolution: dedupe cannot tell "my timezone is
+        EST" from "my timezone is PST", so both rows survive and the model is
+        handed a contradiction. This deactivates the *older* value after the
+        newer one is written. Matching is on the normalised form, so
+        punctuation/casing differences between mem0 and the table do not slip
+        a stale memory past it. Never raises on a miss: a content with no
+        matching active row is simply skipped.
+        """
+        superseded_keys = {normalize_for_dedupe(c) for c in contents if c}
+        if not superseded_keys:
+            return 0
+        statement = select(UserMemory).where(
+            UserMemory.user_id == user_id, UserMemory.is_active == True  # noqa: E712
+        )
+        result = await self.session.exec(statement)
+        now = datetime.now(UTC).replace(tzinfo=None)
+        deactivated = 0
+        for memory in result.all():
+            if normalize_for_dedupe(memory.content) in superseded_keys:
+                memory.is_active = False
+                memory.updated_at = now
+                self.session.add(memory)
+                deactivated += 1
+        if deactivated:
+            await self.session.commit()
+        return deactivated
 
     async def reinforce_memories(self, memory_ids: list[UUID]) -> int:
         """Record a successful recall: bump usage, raise confidence.

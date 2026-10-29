@@ -58,7 +58,11 @@ async def test_readiness_endpoint_returns_ready_when_database_is_available(monke
         response = await ac.get("/health/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "database": "available"}
+    assert response.json() == {
+        "status": "ready",
+        "database": "available",
+        "mcp_transport": "not_started",
+    }
 
 
 @pytest.mark.asyncio

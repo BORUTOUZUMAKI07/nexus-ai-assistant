@@ -404,15 +404,20 @@ async def request_user_input(conversation_id: str, message: str, schema_json: st
     except Exception as exc:
         return f"Error: schema_json must be valid JSON and conversation_id a UUID — {exc}"
 
-    # IDOR guard: when the caller is an authenticated user (JWT/cookie), the
-    # conversation must belong to them. The shared x-nexus-mcp-key path has no
-    # user identity and is a trusted service credential.
+    # The owning conversation is resolved from the authenticated identity, never
+    # from the argument, and the shared x-nexus-mcp-key credential carries no
+    # user identity at all -- so this tool refuses it rather than parking an
+    # elicitation against an arbitrary conversation (finding #12).
     caller_id = _authenticated_user_id()
+    if caller_id is None:
+        return (
+            "Error: request_user_input requires an authenticated user; the "
+            "shared MCP key has no identity and may not choose a conversation"
+        )
     async with async_session_factory() as session:
-        if caller_id is not None:
-            owned = await ConversationRepository(session).get_by_id(convo_uuid, user_id=caller_id)
-            if owned is None:
-                return "Error: conversation not found for the authenticated user"
+        owned = await ConversationRepository(session).get_by_id(convo_uuid, user_id=caller_id)
+        if owned is None:
+            return "Error: conversation not found for the authenticated user"
         service = ElicitationService(session)
         parked = await service.park_elicitation(
             conversation_id=convo_uuid,
@@ -444,18 +449,20 @@ async def create_artifact(
     from backend.app.infrastructure.database.session import async_session_factory
     from backend.app.services.artifact_service import ArtifactService
 
-    # Bind the owning user to the authenticated caller, never to a
-    # caller-supplied argument -- otherwise any authenticated MCP client could
-    # write artifacts as any user (IDOR). Only the trusted shared-key path
-    # (caller_id is None) may pass an explicit user_id.
+    # The owning user is ALWAYS the authenticated caller. A caller-supplied
+    # `user_id` is never trusted: an authenticated MCP client that passed a
+    # foreign id could otherwise write artifacts as any user (IDOR). The shared
+    # x-nexus-mcp-key credential carries no user identity at all, so this tool
+    # refuses it rather than letting it *choose* an owner (finding #12).
     caller_id = _authenticated_user_id()
-    if caller_id is not None:
-        user_uuid = caller_id
-    else:
-        try:
-            user_uuid = UUID(user_id)
-        except Exception as exc:
-            return f"Error: user_id must be a UUID — {exc}"
+    if caller_id is None:
+        return (
+            "Error: create_artifact requires an authenticated user; the shared "
+            "MCP key has no identity and may not choose an owner"
+        )
+    if user_id and str(user_id).strip() and str(user_id).strip() != str(caller_id):
+        return "Error: user_id must match the authenticated user"
+    user_uuid = caller_id
     if not content.strip():
         return "Error: content must not be empty"
     if len(content) > 200_000:
@@ -472,7 +479,7 @@ async def create_artifact(
         conversation_id=conversation_uuid, message_id=message_uuid,
     )
     async with async_session_factory() as session:
-        if caller_id is not None and conversation_uuid is not None:
+        if conversation_uuid is not None:
             owned = await ConversationRepository(session).get_by_id(
                 conversation_uuid, user_id=caller_id
             )

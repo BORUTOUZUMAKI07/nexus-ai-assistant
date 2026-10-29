@@ -889,7 +889,11 @@ class LiteLLMService:
 
     async def completion(
         self,
-        messages: list[dict[str, str]],
+        # Any, not str: a vision turn sends content blocks
+        # (list[{"type": "text"|"image_url", ...}]) rather than a plain string,
+        # and those are accepted by the same providers. Narrow it to str and
+        # every multimodal caller is a type error for a payload that works.
+        messages: list[dict[str, Any]],
         model: str = "complex_reasoning",
         temperature: float = 0.7,
         max_tokens: int = 4096,

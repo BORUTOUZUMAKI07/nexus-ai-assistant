@@ -23,19 +23,19 @@ sys.path.insert(0, str(root_dir))
 sys.path.insert(0, str(backend_dir))
 sys.path.insert(0, str(tests_dir))
 
-# Tests must not ship telemetry/errors to Sentry, and the production DSN being
-# live here would make sentry_sdk's logging integration write to stdout during
-# interpreter shutdown — after colorama has closed the stream — emitting the
-# familiar ``--- Logging error --- / ValueError: I/O operation on closed file``
-# stack after every run. Env vars override the .env file, so force it off before
-# any backend module constructs the settings singleton.
+# Tests must not ship telemetry out of the machine. backend/.env turns tracing
+# (LangSmith) and log/trace/metric export (New Relic) ON because the *app* should
+# emit them, and pytest loads that file, so the guards below force both off
+# before any backend module constructs the settings singleton — env vars override
+# the file. Both rules matter: a missing guard leaks real traces/logs, and a
+# guard placed after the first backend import is a no-op because the singleton
+# has already read the file.
 import os  # noqa: E402
 import tempfile  # noqa: E402
 
-# Tests must not ship traces to LangSmith either, for the same reason Sentry is
-# switched off below: backend/.env sets LANGSMITH_TRACING=true because the *app*
-# should trace, and pytest loads that file. tests/test_node_policies.py compiles
-# a real StateGraph, so one local suite run uploaded 120 spans into the
+# Guard 1 -- LangSmith. backend/.env sets LANGSMITH_TRACING=true because the
+# *app* should trace, and pytest loads that file. tests/test_node_policies.py
+# compiles a real StateGraph, so one local suite run uploaded 120 spans into the
 # LangSmith project (measured 2026-10-05) and mixed pytest fixtures in with real
 # conversation traces. Nothing failed; the pollution was only visible from the
 # API side.
@@ -49,16 +49,7 @@ import tempfile  # noqa: E402
 # a stale value would fail there rather than silently upload spans.
 os.environ["LANGSMITH_TRACING"] = "false"
 
-# Set BEFORE the backend imports below, not after them: the first one
-# (redis_client) runs `from backend.app.core.config import settings`, which
-# builds the singleton right there. Assigned afterwards, this line is a no-op
-# -- settings has already read backend/.env's live DSN, and main.py:44 then
-# calls sentry_sdk.init() with it during tests. SettingsConfigDict sets no
-# env_ignore_empty, so an empty value is honoured instead of falling back to
-# the file.
-os.environ["SENTRY_DSN"] = ""
-
-# Third telemetry sink: tests must not ship LOGS to New Relic either.
+# Guard 2 -- New Relic. Tests must not ship LOGS to New Relic either.
 # backend/.env:91 sets NEW_RELIC_ENABLED=true because the *app* should export,
 # and pytest loads that file, so conftest's first backend import builds the
 # settings singleton with it true and main.py:40 -> setup_logging() -> the
@@ -69,14 +60,14 @@ os.environ["SENTRY_DSN"] = ""
 # constructs a Faker in EVERY session, emitting 44 DEBUG locale messages, so
 # one measured session left exactly one 47-record batch in the collector
 # (44 faker + 3 app-init; measured 2026-10-07) and every suite run repeated it.
-# Same position rule as the two guards above: an assignment made after the
+# Same position rule as the guards above: an assignment made after the
 # first backend import is a no-op, because the singleton has already read the
 # file. The app itself is unaffected -- nothing sets this outside pytest, so
 # `make backend` still exports (viewer.py's "inactive" status in tests is the
 # honest reading of this).
 os.environ["NEW_RELIC_ENABLED"] = "false"
 
-# Fourth guard: keep the non-production secret store out of the working tree.
+# Guard 3 -- keep the non-production secret store out of the working tree.
 # config.py now *persists* generated SECRET_KEY/ENCRYPTION_KEY (P0 #9) so a
 # restart no longer silently rotates the encryption key and orphans encrypted
 # BYOK keys. Without this, the suite would drop backend/.dev_secrets.json into

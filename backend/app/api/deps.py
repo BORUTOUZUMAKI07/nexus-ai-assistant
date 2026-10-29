@@ -32,6 +32,54 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+async def resolve_access_token_user(token: str, session: AsyncSession) -> User | None:
+    """Resolve an access token to its active user, or ``None`` on any rejection.
+
+    This is the *single* implementation of the access-token rules: the token must
+    decode, be an access (not refresh) token, not be blacklisted on logout, name
+    a parseable UUID subject, and correspond to a user row that still exists and
+    is active. Both the REST dependency (:func:`get_current_user`) and the MCP
+    transport gate (`backend.app.main`) call it, so the two front doors cannot
+    drift apart (finding #11). The caller decides the transport's response.
+
+    The blacklist lookup is fail-open -- an offline Redis must never brick
+    authentication -- but the user-existence check always runs.
+    """
+    try:
+        payload = decode_token(token)
+    except InvalidTokenError:
+        return None
+    if payload.get("type") != "access":
+        return None
+
+    # NOTE: only the cache READ sits in the try -- a blacklist hit must be
+    # reported, not swallowed by the except.
+    jti = payload.get("jti")
+    if jti:
+        is_blacklisted = False
+        try:
+            is_blacklisted = await get_cache_service().is_token_blacklisted(str(jti))
+        except Exception:
+            is_blacklisted = False
+        if is_blacklisted:
+            return None
+
+    user_id_str = payload.get("sub")
+    if not user_id_str:
+        return None
+
+    try:
+        user_id = UUID(str(user_id_str))
+    except ValueError:
+        return None
+
+    user = await UserRepository(session).get_by_id(user_id)
+    if user is None or not user.is_active:
+        return None
+
+    return user
+
+
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     session: AsyncSession = Depends(get_db),
@@ -41,41 +89,9 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    try:
-        payload = decode_token(token)
-    except InvalidTokenError:
+    user = await resolve_access_token_user(token, session)
+    if user is None:
         raise credentials_exception
-    if payload.get("type") != "access":
-        raise credentials_exception
-
-    # Reject access tokens that were blacklisted on logout. Fail-open when the
-    # cache is unavailable so an offline Redis never bricks authentication.
-    # NOTE: only the cache READ sits in the try — the raise must stay outside,
-    # or the except would swallow the 401 it just produced.
-    jti = payload.get("jti")
-    if jti:
-        is_blacklisted = False
-        try:
-            is_blacklisted = await get_cache_service().is_token_blacklisted(str(jti))
-        except Exception:
-            is_blacklisted = False
-        if is_blacklisted:
-            raise credentials_exception
-
-    user_id_str: str = payload.get("sub")
-    if user_id_str is None:
-        raise credentials_exception
-
-    try:
-        user_id = UUID(user_id_str)
-    except ValueError:
-        raise credentials_exception
-
-    user_repo = UserRepository(session)
-    user = await user_repo.get_by_id(user_id)
-    if user is None or not user.is_active:
-        raise credentials_exception
-
     return user
 
 

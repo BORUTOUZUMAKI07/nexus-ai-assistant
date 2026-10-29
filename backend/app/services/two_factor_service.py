@@ -4,12 +4,15 @@ TOTP two-factor authentication service (RFC 6238).
 Uses the existing ``users.user_settings`` row for state — no schema migration:
   * ``totp_secret``              → the TOTP secret (set at setup, cleared at disable)
   * ``custom_settings["two_factor_enabled"]`` → the enabled flag
+  * ``custom_settings["two_factor_last_counter"]`` → the last TOTP step redeemed,
+    which makes every code single-use (replay of an observed code is refused)
 
 Login flow: when a user has 2FA enabled, ``POST /auth/login`` returns a short-lived
 ``preauth`` JWT instead of a token pair; ``POST /auth/2fa/verify`` exchanges that
 preauth token + a valid TOTP code for the real token pair.
 """
-from datetime import UTC, datetime
+import hmac
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import structlog
@@ -37,13 +40,42 @@ class TwoFactorService:
         return await self._repo.get_settings(user_id)
 
     @staticmethod
-    def _verify_code(secret: str, code: str) -> bool:
+    def _matching_counter(secret: str, code: str) -> int | None:
+        """Return the TOTP time-step that ``code`` matches, or None.
+
+        Returning the counter (not just a bool) is what makes single-use
+        possible: the caller records the accepted step and refuses any code for
+        a step it has already accepted, so a code observed on the wire cannot be
+        replayed inside its ~90s validity window.
+        """
         if not PYOTP_AVAILABLE or not secret:
-            return False
+            return None
         totp = pyotp.TOTP(secret)
-        # Read the drift tolerance from settings — it used to be hardcoded to 1
-        # here, which silently ignored TOTP_VALID_WINDOW entirely.
-        return totp.verify(code, valid_window=settings.TOTP_VALID_WINDOW)
+        now = datetime.now(UTC)
+        interval = totp.interval
+        for offset in range(-settings.TOTP_VALID_WINDOW, settings.TOTP_VALID_WINDOW + 1):
+            candidate = now + timedelta(seconds=offset * interval)
+            if hmac.compare_digest(str(totp.at(candidate)), str(code)):
+                return totp.timecode(candidate)
+        return None
+
+    @staticmethod
+    def _accept_counter(settings_row: UserSettings, counter: int) -> bool:
+        """Record ``counter`` as redeemed; False when it was already consumed.
+
+        Shared by enable/disable/verify so a code used to turn 2FA on (or off)
+        cannot be redeemed a second time at the login step, and so a strictly
+        increasing comparison stops any earlier step from being replayed after
+        a later one was accepted.
+        """
+        custom = dict(settings_row.custom_settings or {})
+        last = custom.get("two_factor_last_counter")
+        if isinstance(last, int) and counter <= last:
+            return False
+        custom["two_factor_last_counter"] = counter
+        settings_row.custom_settings = custom
+        settings_row.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        return True
 
     async def is_enabled(self, user_id: UUID) -> bool:
         settings_row = await self._settings(user_id)
@@ -80,12 +112,12 @@ class TwoFactorService:
         settings_row = await self._settings(user_id)
         if not settings_row or not settings_row.totp_secret:
             raise ValueError("No pending two-factor setup. Call POST /auth/2fa/setup first.")
-        if not self._verify_code(settings_row.totp_secret, code):
+        counter = self._matching_counter(settings_row.totp_secret, code)
+        if counter is None or not self._accept_counter(settings_row, counter):
             return False
         custom = dict(settings_row.custom_settings or {})
         custom["two_factor_enabled"] = True
         settings_row.custom_settings = custom
-        settings_row.updated_at = datetime.now(UTC).replace(tzinfo=None)
         self.session.add(settings_row)
         await self.session.commit()
         logger.info("two_factor_enabled", user_id=str(user_id))
@@ -96,13 +128,13 @@ class TwoFactorService:
         settings_row = await self._settings(user_id)
         if not settings_row or not settings_row.totp_secret:
             raise ValueError("Two-factor authentication is not enabled on this account.")
-        if not self._verify_code(settings_row.totp_secret, code):
+        counter = self._matching_counter(settings_row.totp_secret, code)
+        if counter is None or not self._accept_counter(settings_row, counter):
             return False
         settings_row.totp_secret = None
         custom = dict(settings_row.custom_settings or {})
         custom["two_factor_enabled"] = False
         settings_row.custom_settings = custom
-        settings_row.updated_at = datetime.now(UTC).replace(tzinfo=None)
         self.session.add(settings_row)
         await self.session.commit()
         logger.info("two_factor_disabled", user_id=str(user_id))
@@ -112,4 +144,14 @@ class TwoFactorService:
         settings_row = await self._settings(user_id)
         if not settings_row or not settings_row.totp_secret:
             return False
-        return self._verify_code(settings_row.totp_secret, code)
+        counter = self._matching_counter(settings_row.totp_secret, code)
+        if counter is None:
+            return False
+        if not self._accept_counter(settings_row, counter):
+            # The code is valid for its window but this window was already
+            # redeemed: a replay of an observed code, not a fresh login.
+            logger.warning("two_factor_code_replayed", user_id=str(user_id))
+            return False
+        self.session.add(settings_row)
+        await self.session.commit()
+        return True

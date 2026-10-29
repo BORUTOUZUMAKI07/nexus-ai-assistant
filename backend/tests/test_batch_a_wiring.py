@@ -567,6 +567,171 @@ async def test_stream_route_runs_the_executor_through_its_own_session_factory(mo
     assert [e.seq for e in run_store.events] == sorted(e.seq for e in run_store.events)
 
 
+async def test_stream_route_adopts_a_reused_user_turn_instead_of_appending(
+    monkeypatch,
+):
+    """A resend must adopt the stored turn, not store the question twice.
+
+    Regenerate and edit-and-resend both replay a prompt whose row already exists.
+    The route persists the user turn itself on every stream request, so those
+    paths used to append a second copy -- measured live as five rows where four
+    were expected (AGENTS.md §2 shape: a real defect with no red test). The
+    client sends the row id back as ``reuse_user_message_id``; this pins both
+    halves of the branch, because "reuse works" and "a plain send still appends"
+    are separately breakable.
+    """
+    from backend.app.api.deps import get_conversation_service, get_current_user
+    from backend.app.api.v1 import conversations as conv_mod
+    from backend.app.domain.user.models import User
+    from backend.app.main import app
+    from backend.app.services import run_executor as run_exec_mod
+    from httpx import ASGITransport, AsyncClient
+
+    from tests.fakes import FakeRunSession, FakeRunStore
+
+    calls: dict[str, list] = {"reused": [], "added": []}
+
+    class FakeGraph:
+        def astream_events(self, input, config=None, version=None, stream_mode=None):
+            return _aiter([{"event": "on_chain_end", "data": {"output": {"messages": []}}}])
+
+        async def aget_state(self, config):
+            return None
+
+    class FakePromptCompiler:
+        async def compile_system_prompt_cached(self, **kwargs):
+            return "PROMPT"
+
+    class FakeConvSvc:
+        async def get_conversation(self, conv_id, user_id=None):
+            return object()
+
+        async def reuse_user_turn(
+            self, conversation_id, content, message_id, *, user_id=None
+        ):
+            calls["reused"].append((conversation_id, content, message_id))
+            return None
+
+        async def add_message(self, **kwargs):
+            calls["added"].append(kwargs)
+            return None
+
+    user = User(id=uuid4(), email="a@b.c", hashed_password="x")
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_conversation_service] = lambda: FakeConvSvc()
+    monkeypatch.setattr(conv_mod, "orchestrator_graph", FakeGraph())
+    monkeypatch.setattr(conv_mod, "prompt_compiler", FakePromptCompiler())
+    monkeypatch.setattr(conv_mod, "load_active_skills", _aiter_ok)
+    monkeypatch.setattr(run_exec_mod, "trace_span", _null_span)
+    monkeypatch.setattr(conv_mod, "OrganizationService", _NullOrg)
+    run_store = FakeRunStore()
+    monkeypatch.setattr(
+        conv_mod, "async_session_factory", lambda: FakeRunSession(run_store)
+    )
+
+    reuse_id = uuid4()
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            reused_resp = await ac.post(
+                f"/api/v1/conversations/{uuid4()}/stream",
+                json={
+                    "messages": [{"role": "user", "content": "ask again"}],
+                    "mode": "normal",
+                    "reuse_user_message_id": str(reuse_id),
+                },
+            )
+            assert reused_resp.status_code == 200, reused_resp.text
+            # EOF forces the run to a terminal status, which releases the slot.
+            await asyncio.wait_for(reused_resp.aread(), timeout=10.0)
+
+            appended_resp = await ac.post(
+                f"/api/v1/conversations/{uuid4()}/stream",
+                json={"messages": [{"role": "user", "content": "new turn"}], "mode": "normal"},
+            )
+            assert appended_resp.status_code == 200, appended_resp.text
+            await asyncio.wait_for(appended_resp.aread(), timeout=10.0)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_conversation_service, None)
+
+    assert len(calls["reused"]) == 1, "the reuse id never reached the service"
+    assert calls["reused"][0][2] == reuse_id
+    assert calls["reused"][0][1] == "ask again"
+    assert len(calls["added"]) == 1, "the reuse request also appended a duplicate"
+    assert calls["added"][0]["content"] == "new turn"
+
+
+async def test_stream_route_surfaces_a_rejected_reuse_instead_of_appending(
+    monkeypatch,
+):
+    """A stale/foreign id must 404/409 -- never quietly fall back to an append.
+
+    The fail-open guard around the normal append exists so a persistence hiccup
+    cannot cost the user their answer. It must not cover the reuse path: falling
+    back there recreates the exact duplicate row the reuse exists to prevent, and
+    it does so silently.
+    """
+    from backend.app.api.deps import get_conversation_service, get_current_user
+    from backend.app.api.v1 import conversations as conv_mod
+    from backend.app.domain.user.models import User
+    from backend.app.main import app
+    from backend.app.services import run_executor as run_exec_mod
+    from httpx import ASGITransport, AsyncClient
+
+    from tests.fakes import FakeRunSession, FakeRunStore
+
+    class FakeGraph:
+        def astream_events(self, input, config=None, version=None, stream_mode=None):
+            return _aiter([])
+
+        async def aget_state(self, config):
+            return None
+
+    added: list = []
+
+    class FakeConvSvc:
+        async def get_conversation(self, conv_id, user_id=None):
+            return object()
+
+        async def reuse_user_turn(self, *a, **k):
+            raise ValueError("not the latest turn")
+
+        async def add_message(self, **kwargs):
+            added.append(kwargs)
+            return None
+
+    user = User(id=uuid4(), email="a@b.c", hashed_password="x")
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_conversation_service] = lambda: FakeConvSvc()
+    monkeypatch.setattr(conv_mod, "orchestrator_graph", FakeGraph())
+    monkeypatch.setattr(run_exec_mod, "trace_span", _null_span)
+    monkeypatch.setattr(conv_mod, "OrganizationService", _NullOrg)
+    run_store = FakeRunStore()
+    monkeypatch.setattr(
+        conv_mod, "async_session_factory", lambda: FakeRunSession(run_store)
+    )
+
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/api/v1/conversations/{uuid4()}/stream",
+                json={
+                    "messages": [{"role": "user", "content": "q"}],
+                    "mode": "normal",
+                    "reuse_user_message_id": str(uuid4()),
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_conversation_service, None)
+
+    assert resp.status_code == 409, resp.text
+    assert added == [], "a refused reuse must not fall back to appending"
+    assert run_store.runs == [], "no run should start for a refused request"
+
+
 # ── the stream route is actually rate limited ────────────────────────────────
 
 

@@ -6,7 +6,6 @@ Plan Application Service — the plan-then-approve use case.
 approval" contract lives here). ``approve``/``reject`` transition a pending
 plan; only approved plans are surfaced to the agent path as execution guidance.
 """
-import json
 import re
 from typing import Awaitable, Callable
 from uuid import UUID
@@ -17,6 +16,7 @@ from backend.app.domain.conversation.repository import ConversationRepository
 from backend.app.domain.plan.models import Plan
 from backend.app.domain.plan.repository import PlanRepository
 from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.services.structured_parse import extract_json_object
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
@@ -35,20 +35,9 @@ Rules:
 - No markdown, no code fences, no commentary around the JSON."""
 
 
-def _strip_code_fence(raw: str) -> str:
-    text = raw.strip()
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if match:
-        return match.group(1).strip()
-    return text
-
-
 def _parse_plan_json(raw: str) -> tuple[str, str | None, list[str]] | None:
     """Best-effort ``(title, summary, steps)`` extraction from LLM output."""
-    try:
-        payload = json.loads(_strip_code_fence(raw))
-    except (json.JSONDecodeError, ValueError):
-        return None
+    payload = extract_json_object(raw)
     if not isinstance(payload, dict):
         return None
     title = payload.get("title")

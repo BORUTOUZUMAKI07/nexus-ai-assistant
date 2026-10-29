@@ -6,10 +6,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+import jwt
 from backend.app.core.config import settings
 from backend.app.core.exceptions import InvalidTokenError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from jose import JWTError, jwt
+from jwt import PyJWTError as JWTError
 from passlib.context import CryptContext
 
 # Password Hashing with Argon2 and Bcrypt

@@ -10,7 +10,6 @@ entirely offline against fakes; production uses the vanilla LLM judge.
 """
 from __future__ import annotations
 
-import json
 import re
 from statistics import mean
 from typing import Any, Awaitable, Callable
@@ -20,6 +19,11 @@ from backend.app.core.config import settings
 from backend.app.domain.base_repository import BaseRepository
 from backend.app.domain.optimization.models import PromptOptimizationRun
 from backend.app.infrastructure.ai.litellm_client import ai_client
+from backend.app.services.structured_parse import (
+    extract_json_array,
+    extract_json_object,
+    strip_code_fence,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -31,28 +35,18 @@ Proposer = Callable[[str, str, int], Awaitable[list[str]]]
 _REFUSAL_HINTS = re.compile(r"\b(sorry|cannot|can't|unable|not (?:able|allowed)|refus|must not)\b", re.IGNORECASE)
 
 
-def _strip_code_fence(raw: str) -> str:
-    text = raw.strip()
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if match:
-        return match.group(1).strip()
-    return text
-
-
 def _parse_candidates(raw: str) -> list[str]:
     """Best-effort extraction of the candidate list the proposer returns."""
-    try:
-        payload = json.loads(_strip_code_fence(raw))
-    except (json.JSONDecodeError, ValueError):
-        payload = None
+    payload = extract_json_array(raw)
     if isinstance(payload, list):
         return [str(p).strip() for p in payload if str(p).strip()][:6]
-    if isinstance(payload, dict) and isinstance(payload.get("candidates"), list):
-        return [str(p).strip() for p in payload["candidates"] if str(p).strip()][:6]
+    obj = extract_json_object(raw)
+    if isinstance(obj, dict) and isinstance(obj.get("candidates"), list):
+        return [str(p).strip() for p in obj["candidates"] if str(p).strip()][:6]
     # Fallback: numbered/bulleted lines.
     lines = [
         re.sub(r"^[\d.\-*\s]+", "", ln).strip()
-        for ln in _strip_code_fence(raw).splitlines()
+        for ln in strip_code_fence(raw).splitlines()
         if ln.strip()
     ]
     return [ln for ln in lines if len(ln) > 20][:6]

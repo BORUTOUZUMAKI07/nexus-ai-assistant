@@ -31,7 +31,7 @@ from backend.app.domain.user.schemas import (
     UserCreate,
 )
 from backend.app.infrastructure.cache.redis_client import get_cache_service
-from backend.app.services.email_service import build_email_link, email_service
+from backend.app.services.email_service import build_email_link, email_service, escape_html
 from backend.app.services.oauth_service import OAuthIdentity
 from backend.app.services.two_factor_service import TwoFactorService
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -51,6 +51,37 @@ _REFRESH_REVOKED_PREFIX = "refresh:revoked:"
 # still stops a stolen token from parking a request open for the whole window.
 _REPLAY_PUBLISH_WAIT_SECONDS = 3.0
 _REPLAY_POLL_SECONDS = 0.05
+
+# The password-reset route only needs the mail-send to complete synchronously in
+# local dev, where it returns a dev link the UI follows. In production the send
+# is fire-and-forget so the known-address and unknown-address branches take
+# comparable time (a synchronous SMTP round trip is a timing oracle for account
+# existence even when the response body is identical). Tasks are kept alive in a
+# module-level set so the event loop cannot garbage-collect one mid-flight.
+_EMAIL_TASKS: set["asyncio.Task[None]"] = set()
+
+
+def _dispatch_email(coro) -> None:  # type: ignore[no-untyped-def]
+    """Run a mail coroutine in the background without awaiting it."""
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:  # pragma: no cover - no running loop (sync test)
+        coro.close()
+        return
+    _EMAIL_TASKS.add(task)
+    task.add_done_callback(_EMAIL_TASKS.discard)
+
+
+def _optional_user_id(payload: dict) -> UUID | None:
+    """Parse ``sub`` into a UUID, returning None instead of raising.
+
+    Logout must not fail on a malformed token -- it should fall through to the
+    next identity source (or report that nothing was revoked).
+    """
+    try:
+        return UUID(str(payload.get("sub")))
+    except (ValueError, TypeError):
+        return None
 
 
 class AuthService:
@@ -153,11 +184,21 @@ class AuthService:
         # a theft can be traced to the sign-in that leaked rather than to the user
         # as a whole. See refresh() for why that matters.
         family_id = family_id or secrets.token_hex(16)
+        # A successful sign-in proves the owner is present, so it must lift any
+        # standing revocation for this account. Without this, a *user-wide* marker
+        # written by a password reset or a logout-with-no-family would survive the
+        # new sign-in and 401 every subsequent refresh for its full TTL -- the user
+        # logs in fine and is then bounced back to the login page on the next
+        # rotation, on every device, for REFRESH_TOKEN_EXPIRE_DAYS.
+        await self._clear_refresh_family_revocation(user.id, family_id=family_id)
         access_token = create_access_token(
             subject=user.id,
             role=user.role,
             expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-            additional_claims={"email": user.email},
+            # `fam` binds the access token to its refresh family so logout can
+            # terminate the session server-side even when the client presents
+            # only an Authorization header (no body, no refresh cookie).
+            additional_claims={"email": user.email, "fam": family_id},
         )
         refresh_token = create_refresh_token(
             subject=user.id, family_id=family_id
@@ -295,21 +336,46 @@ class AuthService:
             token_type="verify_email",  # nosec B106
         )
         link = build_email_link("/verify-email?token=", token)
+        # ``user.username`` is attacker-controlled at registration, so it is
+        # escaped before it reaches the HTML body (stored HTML injection).
         result = await email_service.send(
             to=user.email,
             subject="Verify your Nexus account",
-            body_html=f"<p>Welcome, {user.username}!</p><p><a href='{link}'>Verify your email</a></p>",
+            body_html=(
+                f"<p>Welcome, {escape_html(user.username)}!</p>"
+                f"<p><a href='{link}'>Verify your email</a></p>"
+            ),
             body_text=f"Verify your email: {link}",
         )
-        result["dev_link"] = link if result.get("channel") == "dev" else None
+        # The token is surfaced to the caller only behind the explicit,
+        # default-off dev-link setting: an HTTP response is not a delivery
+        # channel a deployment should hand credentials through.
+        result["dev_link"] = (
+            link
+            if settings.EMAIL_DEV_LINK_ENABLED and result.get("channel") == "dev"
+            else None
+        )
         return result
 
     async def initiate_password_reset(self, email: str) -> dict:
-        """Issue + email a password reset token (never reveals whether the account exists)."""
+        """Issue + email a password reset token.
+
+        The response is a fixed envelope, identical whether or not the address
+        has an account: the mail-service result is discarded rather than
+        returned, because its ``channel`` used to distinguish the two branches
+        and ``dev_link`` handed the reset credential straight to the caller.
+        When the account exists the token reaches the user only through the
+        configured mail channel.
+        """
+        # The key is present in *every* response (value ``None`` unless the
+        # dev-link setting is on), so its presence is not itself an existence
+        # oracle and no branch can hand a credential through an HTTP response.
+        envelope: dict[str, object] = {"sent": True, "channel": "email", "dev_link": None}
+
         user = await self._repo.get_by_email(email)
         if not user:
-            # Uniform response: don't leak account existence.
-            return {"sent": False, "channel": "noop"}
+            return envelope
+
         token = create_access_token(
             subject=user.id,
             expires_delta=timedelta(minutes=settings.PASSWORD_RESET_TOKEN_MINUTES),
@@ -317,19 +383,34 @@ class AuthService:
             token_type="reset_password",  # nosec B106
         )
         link = build_email_link("/reset-password?token=", token)
-        result = await email_service.send(
+        send_coro = email_service.send(
             to=user.email,
             subject="Reset your Nexus password",
-            body_html=f"<p>Reset your password: <a href='{link}'>link</a></p><p>This link expires in {settings.PASSWORD_RESET_TOKEN_MINUTES} minutes.</p>",
+            body_html=(
+                f"<p>Reset your password: <a href='{link}'>link</a></p>"
+                f"<p>This link expires in {settings.PASSWORD_RESET_TOKEN_MINUTES} minutes.</p>"
+            ),
             body_text=f"Reset your password: {link}",
         )
-        result["dev_link"] = link if result.get("channel") == "dev" else None
-        return result
+        if settings.EMAIL_DEV_LINK_ENABLED:
+            envelope["dev_link"] = link
+            await send_coro
+        else:
+            # Fire-and-forget. Awaiting a synchronous SMTP round trip on the
+            # known-address branch only is a timing oracle for account
+            # existence even when the response body is byte-identical.
+            _dispatch_email(send_coro)
+        return envelope
 
     async def reset_password(self, token: str, new_password: str) -> User:
         payload = decode_token(token)
         if payload.get("type") != "reset_password":
             raise AuthenticationError("Invalid or expired password reset token.")
+        # Single-use: a reset token that leaked (log, proxy, shared link) must
+        # not be replayable within its lifetime.
+        jti = payload.get("jti")
+        if jti and not await self._consume_reset_token(str(jti), payload):
+            raise AuthenticationError("This password reset link has already been used.")
         user_id = self._user_id_from_payload(payload)
         user = await self._repo.get_by_id(user_id)
         if not user:
@@ -442,7 +523,10 @@ class AuthService:
             subject=user.id,
             role=user.role,
             expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-            additional_claims={"email": user.email},
+            additional_claims={
+                "email": user.email,
+                **({"fam": family_id} if family_id else {}),
+            },
         )
         new_refresh = create_refresh_token(
             subject=user.id, family_id=family_id or None
@@ -577,6 +661,35 @@ class AuthService:
                 error=type(exc).__name__,
             )
 
+    async def _clear_refresh_family_revocation(
+        self, user_id: UUID, family_id: str | None = None
+    ) -> None:
+        """Lift a standing refresh-family revocation on a successful sign-in.
+
+        The counterpart to ``_revoke_refresh_family``: a sign-in is proof that the
+        owner is present, so a user-wide marker left by a password reset or by a
+        logout whose family could not be resolved must not survive it. Clearing
+        the freshly minted family key as well is belt-and-braces -- a new hex
+        family cannot collide, but the two keys are always cleared together so a
+        future caller that reuses a family id cannot resurrect a revoked one.
+
+        Best-effort: an unreachable cache logs and returns, because a failed
+        clear must not turn a valid sign-in into an error.
+        """
+        keys = [f"{_REFRESH_REVOKED_PREFIX}{user_id}"]
+        if family_id:
+            keys.append(f"{_REFRESH_REVOKED_PREFIX}{family_id}")
+        try:
+            for key in keys:
+                await get_cache_service().delete(key)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "refresh_family_clear_failed",
+                user_id=str(user_id),
+                family_id=family_id or "user-wide",
+                error=type(exc).__name__,
+            )
+
     async def _is_refresh_family_revoked(
         self, user_id: UUID, family_id: str | None = None
     ) -> bool:
@@ -615,3 +728,97 @@ class AuthService:
         except Exception:  # nosec B110
             # Best-effort revocation: expired or malformed tokens cannot be re-used anyway
             pass
+
+    async def revoke_refresh_family(
+        self, user_id: UUID, family_id: str | None = None
+    ) -> None:
+        """Terminate a sign-in session server-side.
+
+        Used by logout: the client may send no refresh token at all (only an
+        Authorization header), so the server derives the family from the access
+        token's ``fam`` claim and revokes it -- otherwise an explicit sign-out
+        leaves the 30-day refresh token alive.
+        """
+        await self._revoke_refresh_family(user_id, family_id=family_id or None)
+
+    async def revoke_all_sessions(self, user_id: UUID) -> None:
+        """Revoke every refresh family for a user (used when no family is known)."""
+        await self._revoke_refresh_family(user_id, family_id=None)
+
+    async def logout(
+        self, access_token: str | None, refresh_token: str | None
+    ) -> bool:
+        """Terminate the caller's session server-side.
+
+        Resolves the refresh family from the refresh token when one is
+        supplied, otherwise from the access token's ``fam`` claim. Returns
+        ``True`` when a session was actually terminated and ``False`` when
+        nothing resolvable was presented, so the route can tell the caller its
+        logout did nothing rather than reporting a success it cannot honour.
+        """
+        user_id: UUID | None = None
+        family_id: str | None = None
+
+        if refresh_token:
+            try:
+                payload = decode_token(refresh_token)
+                if payload.get("type") == "refresh":
+                    user_id = _optional_user_id(payload)
+                    family_id = str(payload.get("fam") or "") or None
+                    jti = payload.get("jti")
+                    exp = payload.get("exp")
+                    if jti and exp:
+                        ttl = max(1, int(exp) - int(time.time()))
+                        try:
+                            await get_cache_service().set(
+                                f"refresh:used:{jti}", "1", ttl_seconds=ttl
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "logout_refresh_mark_failed",
+                                error=type(exc).__name__,
+                            )
+            except Exception:
+                user_id = None
+
+        if user_id is None and access_token:
+            try:
+                payload = decode_token(access_token)
+                if payload.get("type") == "access":
+                    user_id = _optional_user_id(payload)
+                    family_id = str(payload.get("fam") or "") or None
+            except Exception:
+                user_id = None
+
+        if user_id is None:
+            return False
+        # Family when known (one sign-in); user-wide otherwise, so a session
+        # whose family cannot be determined still dies with the logout.
+        await self._revoke_refresh_family(user_id, family_id=family_id)
+        logger.info(
+            "user_logged_out",
+            user_id=str(user_id),
+            family_id=family_id or "user-wide",
+        )
+        return True
+
+    async def _consume_reset_token(self, jti: str, payload: dict) -> bool:
+        """Mark a password-reset token single-use. False means already consumed.
+
+        Fails open (returns True) when the cache is unavailable: an offline
+        Redis must not make password reset impossible, and the token's ``exp``
+        still bounds its life.
+        """
+        exp = payload.get("exp")
+        ttl_seconds = (
+            max(1, int(exp) - int(time.time())) if exp else 3600
+        )
+        try:
+            return await get_cache_service().set_if_absent(
+                f"reset:used:{jti}", "1", ttl_seconds=ttl_seconds
+            )
+        except Exception as exc:
+            logger.warning(
+                "reset_token_single_use_check_failed", error=type(exc).__name__
+            )
+            return True

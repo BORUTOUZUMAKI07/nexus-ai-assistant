@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import structlog
+from backend.app.core.config import settings
 from backend.app.domain.file.repository import FileRepository
 from backend.app.infrastructure.vector.base import IVectorStore
 from backend.app.infrastructure.vector.qdrant_client import (
@@ -18,6 +19,7 @@ from backend.app.services.rag.chunking import chunking_service
 from backend.app.services.rag.retrieval import (
     retrieval_service as _default_retrieval_service,
 )
+from backend.app.services.tools import pdf_vision
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
@@ -104,6 +106,45 @@ class IngestionService:
         # Sanitize control bytes that would fail a UTF-8 DB column / JSONB.
         return text.replace("\x00", "")
 
+    async def extract_text_with_vision(
+        self, file_path: Path, mime_type: str | None = None
+    ) -> str:
+        """Text extraction, with a vision fallback for image-only PDFs.
+
+        ``extract_text`` reads a PDF's text layer; a scanned/image-only PDF has
+        none, so it comes back empty and the document is rejected as
+        contentless even though it is perfectly readable. When the text layer is
+        thinner than ``PDF_VISION_MIN_TEXT_CHARS`` and the fallback is enabled,
+        the pages are rendered and transcribed by the vision model (see
+        :mod:`backend.app.services.tools.pdf_vision`).
+
+        Fail-open throughout: a disabled setting, a non-PDF, an already-rich text
+        layer, or any failure inside the fallback all return the text-layer
+        result unchanged. The vision path is only *preferred* when it produced
+        strictly more text, so it can never make an extraction worse.
+        """
+        text = self.extract_text(file_path, mime_type)
+        if file_path.suffix.lower() != ".pdf" or not settings.PDF_VISION_ENABLED:
+            return text
+        if len(text.strip()) >= settings.PDF_VISION_MIN_TEXT_CHARS:
+            return text
+        try:
+            vision_text = await pdf_vision.extract_text_from_pdf(file_path)
+        except Exception as exc:
+            logger.warning(
+                "pdf_vision_fallback_failed", path=str(file_path), error=str(exc)
+            )
+            return text
+        if len(vision_text.strip()) > len(text.strip()):
+            logger.info(
+                "pdf_vision_fallback_used",
+                path=str(file_path),
+                text_layer_chars=len(text.strip()),
+                vision_chars=len(vision_text.strip()),
+            )
+            return vision_text
+        return text
+
     async def _purge_prior_state(self, file_id: UUID, repo: FileRepository) -> None:
         """
         Idempotent re-ingest support: wipes any previously-written chunk rows and
@@ -137,7 +178,7 @@ class IngestionService:
         logger.info("ingestion_started", file_id=str(file_id), filename=filename, user_id=str(user_id))
 
         try:
-            text_content = self.extract_text(file_path)
+            text_content = await self.extract_text_with_vision(file_path)
             if not text_content.strip():
                 await repo.update_status(file_id, status="failed", error_message="Empty file or no readable text extracted")
                 return {"status": "failed", "reason": "empty_content", "chunks": 0}
@@ -251,7 +292,7 @@ class IngestionService:
         logger.info("parent_child_ingestion_started", file_id=str(file_id), filename=filename, user_id=str(user_id))
 
         try:
-            text_content = self.extract_text(file_path)
+            text_content = await self.extract_text_with_vision(file_path)
             if not text_content.strip():
                 await repo.update_status(file_id, status="failed", error_message="Empty file or no readable text extracted")
                 return {"status": "failed", "reason": "empty_content", "chunks": 0}

@@ -175,6 +175,15 @@ class Settings(BaseSettings):
         default=["http://localhost:3000", "http://127.0.0.1:3000"]
     )
 
+    # ── Trusted proxies ────────────────────────────────────────────────────────
+    # Comma-separated IPs/CIDRs of reverse proxies whose ``X-Forwarded-For`` is
+    # trusted. A forwarded header is honoured only when the direct peer is in
+    # this list; otherwise the header is ignored and the peer address is used.
+    # An empty list means "trust no forwarded header" -- the safe default. A
+    # wildcard here (or a deployment that forwards XFF without stripping it)
+    # is what makes a client-chosen rate-limit key possible.
+    TRUSTED_PROXY_IPS: list[str] = Field(default_factory=list)
+
     # ── Database ───────────────────────────────────────────────────────────────
     DATABASE_URL: str = Field(
         default="postgresql+asyncpg://nexus:nexus@localhost:5432/nexus_dev"
@@ -313,7 +322,7 @@ class Settings(BaseSettings):
         description="Directory containing prompt template .txt files",
     )
 
-    # ── Observability (LangSmith & Sentry Free Tiers) ──────────────────────────
+    # ── Observability (LangSmith Free Tier) ────────────────────────────────────
     # Read from the process environment by the LangSmith SDK itself, not by this
     # codebase — core.config calls load_dotenv() at import, so the variables are
     # present in os.environ. Declared here so they are documented, defaulted and
@@ -336,7 +345,6 @@ class Settings(BaseSettings):
     LANGSMITH_ENDPOINT: str | None = None
     LANGSMITH_PROJECT: str = Field(default="nexus-ai-assistant")
     LANGSMITH_TRACING: bool = Field(default=False)
-    SENTRY_DSN: str | None = None
     # Verbosity for the whole app. None means "work it out from ENVIRONMENT":
     # INFO in production, DEBUG elsewhere. Set it to override that explicitly
     # (e.g. LOG_LEVEL=DEBUG on a production box to debug one incident).
@@ -787,6 +795,14 @@ class Settings(BaseSettings):
     EMAIL_VERIFY_TOKEN_MINUTES: int = Field(default=1440, description="24h default for verification links")
     PASSWORD_RESET_TOKEN_MINUTES: int = Field(default=30)
     APP_PUBLIC_URL: str = Field(default="http://localhost:3000", description="Public origin used to build magic links")
+    # Dev-only escape hatch. When True, auth endpoints attach the raw magic
+    # link (which contains a reset/verify token) to their HTTP response so a
+    # local UI can follow it without a mail provider. It must be OFF anywhere
+    # a request can come from someone other than the account owner: the token
+    # is a full credential for that account. Default-off is the security
+    # boundary -- without it, POST /auth/forgot-password hands any caller the
+    # reset link for any address (unauthenticated account takeover).
+    EMAIL_DEV_LINK_ENABLED: bool = Field(default=False, description="DEV ONLY: include raw reset/verify links in HTTP responses (default off)")
 
     # ── Outbound webhooks ─────────────────────────────────────────────────────
     WEBHOOK_MAX_ATTEMPTS: int = Field(default=3, description="Delivery attempts before a webhook delivery is terminal")
@@ -832,6 +848,39 @@ class Settings(BaseSettings):
     STT_FALLBACK_ENABLED: bool = Field(default=True)
     STT_FALLBACK_MODEL: str = Field(default="gemini/gemini-3.5-flash-lite")
     STT_FALLBACK_TIMEOUT_SECONDS: float = Field(default=60.0)
+
+    # ── Visual PDF fallback ───────────────────────────────────────────────────
+    # A scanned or image-only PDF has no text layer, so `extract_text` returns
+    # nothing and the whole file is rejected as "empty content" -- even though
+    # it is a perfectly readable document that only a human eye (or a vision
+    # model) can read. When the text layer yields less than
+    # PDF_VISION_MIN_TEXT_CHARS we render the pages with PyMuPDF (already a
+    # declared dependency) and transcribe them with the vision model, reusing
+    # the multimodal path the STT fallback and image analysis already use. No
+    # new dependency, no new provider key. Set PDF_VISION_ENABLED=false to make
+    # ingestion text-layer-only again.
+    PDF_VISION_ENABLED: bool = Field(
+        default=True,
+        description="Fall back to rendering + vision transcription when a PDF's text layer is too thin",
+    )
+    PDF_VISION_MIN_TEXT_CHARS: int = Field(
+        default=200,
+        description="A PDF text layer below this many characters triggers the vision fallback",
+    )
+    PDF_VISION_MAX_PAGES: int = Field(
+        default=20,
+        description="Hard ceiling on pages rendered for one PDF (cost/resource bound)",
+    )
+    PDF_VISION_DPI: int = Field(
+        default=120,
+        description="Render resolution for vision OCR; higher is more accurate and much larger",
+    )
+    PDF_VISION_MODEL: str = Field(
+        default="vision_analysis",
+        description="Model group used to read the rendered pages",
+    )
+    PDF_VISION_MAX_TOKENS: int = Field(default=2048)
+    PDF_VISION_TIMEOUT_SECONDS: float = Field(default=90.0)
 
     # ── Email (Free Gmail SMTP or Resend) ──────────────────────────────────────
     SMTP_HOST: str = Field(default="smtp.gmail.com")

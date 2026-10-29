@@ -283,6 +283,21 @@ class ConversationRepository(BaseRepository[Conversation]):
         result = await self.session.exec(statement)
         return list(result.all())
 
+    async def get_last_message(self, conversation_id: UUID) -> Message | None:
+        """The newest row in a conversation, or ``None`` when it is empty.
+
+        Needed by the resend path: reusing a stored user turn is only sound when
+        that turn is still the *last* thing in the conversation. A client that
+        sends a stale id after another turn landed must be refused rather than
+        allowed to rewrite history in the middle of a thread.
+
+        Delegates to ``get_messages`` rather than hand-rolling an ``ORDER BY``:
+        the newest-window query already exists there, and two orderings for the
+        same question is two places to drift.
+        """
+        rows = await self.get_messages(conversation_id, limit=1)
+        return rows[-1] if rows else None
+
     async def add_message(
         self,
         conversation_id: UUID,
@@ -344,6 +359,175 @@ class ConversationRepository(BaseRepository[Conversation]):
             message.user_feedback = feedback
             message.feedback_note = note
             self.session.add(message)
+            await self.session.commit()
+            await self.session.refresh(message)
+        return message
+
+    async def delete_message(
+        self,
+        message_id: UUID,
+        conversation_id: UUID,
+        user_id: UUID | None = None,
+        *,
+        cascade: bool = True,
+        commit: bool = True,
+    ) -> int:
+        """Delete one message and — by default — everything that came after it.
+
+        ## Why the cascade, and why it is keyed on order and not on the chain
+
+        Messages are appended in order, so "everything after this row in
+        ``created_at`` order" is exactly "the turns this message produced".
+        Deleting the last assistant reply leaves the user turn intact; deleting
+        the user turn must also take its reply, or the transcript is left with an
+        orphaned answer to a question no longer on screen — which reads as the
+        app having lost the question, not as the user having removed a turn.
+
+        The cascade deliberately does **not** walk ``parent_message_id``: that
+        column is nullable, is ``None`` on the vast majority of rows (the chat
+        path only sets it when the client sends one), and a chain walk would
+        therefore silently drop rows that are unambiguously part of the same
+        run. ``created_at`` is the ordering the transcript already renders in.
+
+        Returns the number of rows deleted. Scoped to ``conversation_id`` (and
+        ``user_id`` when given) so a message id from another conversation cannot
+        truncate this one — the IDOR guard mirrors ``record_feedback``.
+        """
+        # Resolve the target first, under the same ownership scope, so a foreign
+        # id is a 404 rather than a silent zero-row delete.
+        target = await self.get_message_by_id(
+            message_id, conversation_id=conversation_id, user_id=user_id
+        )
+        if target is None:
+            return 0
+
+        victim_ids: list[UUID] = []
+        if cascade:
+            # Tie-break on id so two rows sharing a ``created_at`` (a user turn
+            # and its reply written in the same millisecond is realistic) cannot
+            # be split by the comparison, which would delete one and keep the
+            # other.
+            victims_stmt = select(Message).where(
+                Message.conversation_id == conversation_id,
+                (Message.created_at > target.created_at)
+                | (
+                    (Message.created_at == target.created_at)
+                    & (Message.id != target.id)
+                ),
+            )
+            victims = (await self.session.exec(victims_stmt)).all()
+            victim_ids = [row.id for row in victims]
+
+        await self._purge_message_rows([target.id, *victim_ids])
+        if commit:
+            await self.session.commit()
+        return len(victim_ids) + 1 if cascade else 1
+
+    async def _purge_message_rows(self, message_ids: list[UUID]) -> None:
+        """Delete message rows and everything that references them, in FK order.
+
+        Every FK into ``messages`` is NO ACTION -- there is no cascade at the
+        database level -- and ``messages.parent_message_id`` is
+        self-referencing. The row-wise ORM deletes this used to issue therefore
+        500'd on the real database: SQLAlchemy flushes a batch of ORM deletes as
+        one ``executemany`` in arbitrary order, so a parent went before its
+        linked child and Postgres raised ``ForeignKeyViolation`` on
+        ``messages_parent_message_id_fkey``. The unit tests could not see it
+        because ``FakeSession`` enforces no constraints -- the Delete button was
+        verified live and failed with a 500 before this fix.
+
+        Two properties make the bulk form safe, and both are pinned in
+        ``test_message_edit_delete.py``:
+
+        * children (attachments, tool calls, branch links, artifacts +
+          versions) are removed by their own statements **before** the messages;
+        * the messages themselves go in **one** ``DELETE ... WHERE id IN
+          (...)``. A single statement is self-consistent for a self-referencing
+          FK -- the constraint is checked when the statement completes, at
+          which point parent and child are both gone. This mirrors
+          ``delete(conversation)``, which already relied on the same property.
+        """
+        if not message_ids:
+            return
+
+        await self.session.exec(
+            delete(MessageAttachment).where(MessageAttachment.message_id.in_(message_ids))
+        )
+        await self.session.exec(
+            delete(ToolCall).where(ToolCall.message_id.in_(message_ids))
+        )
+        # Branch links point at a fork message; the forked conversation itself
+        # survives, only the link row references the deleted message.
+        await self.session.exec(
+            delete(ConversationBranch).where(
+                ConversationBranch.fork_message_id.in_(message_ids)
+            )
+        )
+        artifact_sub = select(Artifact.id).where(Artifact.message_id.in_(message_ids))
+        await self.session.exec(
+            delete(ArtifactVersion).where(ArtifactVersion.artifact_id.in_(artifact_sub))
+        )
+        await self.session.exec(
+            delete(Artifact).where(Artifact.message_id.in_(message_ids))
+        )
+        await self.session.exec(
+            delete(Message).where(Message.id.in_(message_ids))
+        )
+
+    async def update_message_content(
+        self,
+        message_id: UUID,
+        content: str,
+        conversation_id: UUID,
+        user_id: UUID | None = None,
+        *,
+        truncate_after: bool = True,
+        commit: bool = True,
+    ) -> Message | None:
+        """Rewrite a message's content, and drop every turn that followed it.
+
+        Edit-and-resend is a *time-travel* edit: the user is saying "this is what
+        I meant", which invalidates the answer the old text produced and every
+        turn after it. Keeping them would leave the transcript claiming the model
+        answered the new question when it answered the old one. Truncation is
+        therefore the default and is the reason this is a PATCH on a *user*
+        message rather than a general content editor.
+
+        Only ``content`` is written; the row's id, ordering and parent link are
+        untouched, so the message keeps its place in the transcript.
+        """
+        message = await self.get_message_by_id(
+            message_id, conversation_id=conversation_id, user_id=user_id
+        )
+        if message is None:
+            return None
+
+        # ``messages`` has no ``updated_at`` column (only ``created_at``), and
+        # adding one would need a migration for a field nothing renders. The edit
+        # is therefore content-only, which also keeps the row's ordering — the
+        # cascade below compares ``created_at``, and bumping it would move the
+        # edited turn to the end of the transcript.
+        message.content = content
+        self.session.add(message)
+
+        if truncate_after:
+            victims_stmt = select(Message).where(
+                Message.conversation_id == conversation_id,
+                (Message.created_at > message.created_at)
+                | (
+                    (Message.created_at == message.created_at)
+                    & (Message.id != message.id)
+                ),
+            )
+            victims = (await self.session.exec(victims_stmt)).all()
+            # The same FK-ordering rules as ``delete_message`` apply here: a
+            # discarded answer routinely owns tool_calls/attachment rows, and
+            # the row-wise form hit the identical ``ForeignKeyViolation`` on
+            # the live database (the edit path merely had no children in the
+            # one conversation exercised before the fix).
+            await self._purge_message_rows([row.id for row in victims])
+
+        if commit:
             await self.session.commit()
             await self.session.refresh(message)
         return message

@@ -1,9 +1,11 @@
 """
 Unit tests for the rate-limit seam — RFC 6585 429 + Retry-After + standard
-X-RateLimit-* headers, fail-open on Redis outage.
+X-RateLimit-* headers, and the auth-path behaviour when Redis is unreachable.
 
-These test the small HTTP-transport pieces only; they do not need Redis (the
-seam fails open when the store is unreachable).
+These test the small HTTP-transport pieces only; they do not need Redis. The
+auth path deliberately does *not* fail open any more: an unreachable store now
+falls back to this process's own sliding window (``_memory_rate_limit``), so
+brute-force protection degrades to per-instance instead of switching off.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from backend.app.infrastructure.resilience.rate_limit import (
     _build_header_payload,
     rate_limit_error_handler,
 )
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 
 def test_server_side_header_payload_is_standard():
@@ -126,3 +128,123 @@ async def test_app_login_allowed_sets_headers(monkeypatch, client):
     assert resp.headers.get(RATE_LIMIT_HEADER_LIMIT) == "60"
     assert resp.headers.get(RATE_LIMIT_HEADER_REMAINING) == "59"
     assert RETRY_AFTER_HEADER not in resp.headers
+
+
+# ─── Auth path: an unreachable Redis must degrade, not switch off ─────────────
+
+
+def _auth_request(peer: str = "203.0.113.9") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/auth/login",
+            "headers": [],
+            "client": (peer, 44444),
+            "query_string": b"",
+        }
+    )
+
+
+def test_memory_rate_limit_allows_the_limit_then_refuses():
+    from backend.app.api.v1 import auth as auth_mod
+
+    key = "unit:test:mem"
+    auth_mod._LOCAL_RATE_WINDOWS.pop(key, None)
+    try:
+        assert [auth_mod._memory_rate_limit(key, limit=3, window_seconds=60) for _ in range(4)] == [
+            True,
+            True,
+            True,
+            False,
+        ]
+    finally:
+        auth_mod._LOCAL_RATE_WINDOWS.pop(key, None)
+
+
+def test_memory_rate_limit_counts_stale_attempts_as_expired():
+    """A bucket whose entries are older than the window must not block."""
+    import time as _time
+    from collections import deque
+
+    from backend.app.api.v1 import auth as auth_mod
+
+    key = "unit:test:stale"
+    auth_mod._LOCAL_RATE_WINDOWS[key] = deque([_time.monotonic() - 120])
+    try:
+        # Without the sweep this would be 1 >= limit and refuse forever.
+        assert auth_mod._memory_rate_limit(key, limit=1, window_seconds=60) is True
+    finally:
+        auth_mod._LOCAL_RATE_WINDOWS.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_auth_rate_limit_still_throttles_when_redis_is_unreachable(monkeypatch):
+    """The finding: `auth_rate_limit_unavailable` returned early, so an
+    unreachable Upstash silently removed the cap on login/register/reset."""
+    from backend.app.api.v1 import auth as auth_mod
+
+    async def unreachable_redis(**_kwargs):
+        raise ConnectionError("upstash unreachable")
+
+    monkeypatch.setattr(auth_mod.redis_service, "check_rate_limit", unreachable_redis)
+    auth_mod._LOCAL_RATE_WINDOWS.clear()
+    request = _auth_request()
+
+    try:
+        # Within the limit the request must still pass: degraded, not fail-closed.
+        for _ in range(5):
+            await auth_mod._enforce_auth_rate_limit(
+                request, action="login", limit=5, account="victim@example.com"
+            )
+
+        with pytest.raises(HTTPException) as exc:
+            await auth_mod._enforce_auth_rate_limit(
+                request, action="login", limit=5, account="victim@example.com"
+            )
+        assert exc.value.status_code == 429
+        assert exc.value.headers.get("Retry-After") == "60"
+    finally:
+        auth_mod._LOCAL_RATE_WINDOWS.clear()
+
+
+@pytest.mark.asyncio
+async def test_auth_rate_limit_keeps_a_per_account_bucket_on_the_fallback(monkeypatch):
+    """Many source addresses must not outrun one target account when Redis is down."""
+    from backend.app.api.v1 import auth as auth_mod
+
+    async def unreachable_redis(**_kwargs):
+        raise TimeoutError("upstash unreachable")
+
+    monkeypatch.setattr(auth_mod.redis_service, "check_rate_limit", unreachable_redis)
+    auth_mod._LOCAL_RATE_WINDOWS.clear()
+
+    try:
+        # One attempt each from four different peers, limit 3. Every *per-IP*
+        # bucket is still under its cap, so a 429 here can only come from the
+        # per-account bucket — the one that has to survive a Redis outage.
+        peers = (
+            "198.51.100.1",
+            "198.51.100.2",
+            "198.51.100.3",
+            "198.51.100.4",
+        )
+        raised_at: int | None = None
+        for i, peer in enumerate(peers):
+            try:
+                await auth_mod._enforce_auth_rate_limit(
+                    _auth_request(peer),
+                    action="login",
+                    limit=3,
+                    account="victim@example.com",
+                )
+            except HTTPException as exc:
+                assert exc.status_code == 429
+                raised_at = i
+                break
+        assert raised_at == 3, (
+            f"expected the account bucket to fire on the 4th distinct peer, "
+            f"got {raised_at}"
+        )
+    finally:
+        auth_mod._LOCAL_RATE_WINDOWS.clear()
