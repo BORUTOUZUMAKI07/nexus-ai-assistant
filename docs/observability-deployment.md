@@ -59,10 +59,14 @@ docker compose up -d --build otel-collector
   unmarshals; it never builds the component graph). Always boot the real
   container — that is what `tests/test_otel_collector_config.py` does.
 
-**(b) Render (free tier):** deploy the blueprint in `render.yaml`
-(rootDir `docker`, `otel-collector.Dockerfile`, `PORT=4318`). Render forwards
-public HTTPS :443 → :4318. No Render health check is configured (the agent's
-`/healthz` is on :13133, unreachable through the single public port).
+**(b) Render (free tier):** deploy the blueprint in `render.yaml`. It defines
+**two** web services — `nexus-otel-collector` (rootDir `docker`,
+`otel-collector.Dockerfile`, `PORT=4318`) and `nexus-backend`
+(`rootDir: backend`, `backend/Dockerfile`) — so applying it deploys both. Set
+the collector up first, then give the backend its URL (step 3). Render forwards
+public HTTPS :443 → :4318. No Render health check is configured on the
+collector (the agent's `/healthz` is on :13133, unreachable through the single
+public port); the backend's health check is `/health`.
 
 ## 2. Set the collector secrets (Render: `sync: false`, prompt at deploy)
 

@@ -16,9 +16,22 @@ dependencies = [
     # Database & ORM
     "sqlmodel>=0.0.21",
     "alembic>=1.13.0",
+    # Mako is alembic's template engine, reached transitively. Declared
+    # directly because CVE-2026-102991 (a Windows drive-letter path traversal
+    # in TemplateLookup) is patched in 1.4.2 and the lock was resolving 1.4.1;
+    # an unpinned transitive dependency silently steps back onto the vulnerable
+    # one on the next lock. The module is not imported at app runtime.
+    "mako>=1.4.2",
     "asyncpg>=0.29.0",
     "psycopg2-binary>=2.9.9",
     "psycopg[binary,pool]>=3.1.0",
+    # greenlet powers the SQLAlchemy async bridge (AsyncSession) that sqlmodel's
+    # asyncio extension relies on. It reaches the dev venv transitively, so a
+    # local run never notices — but the Docker builder installs from pyproject
+    # metadata only, the transitive edge is dev-scoped, and sqlmodel declares no
+    # `[asyncio]` extra to borrow. Without this the production image dies at
+    # first import with `ModuleNotFoundError: No module named 'greenlet'`.
+    "greenlet>=3.0.0",
     
     # Caching & Background Queues
     "redis>=5.0.0",
@@ -26,13 +39,15 @@ dependencies = [
     "flower>=2.0.0",
     
     # Authentication & Security
-    # python-jose[cryptography] pulls ecdsa, which carries PYSEC-2026-1325
-    # (Minerva timing attack on P-256) with NO patched release — ecdsa 0.19.x
-    # is the terminal version. The app only ever signs HS256 (JWT_ALGORITHM in
-    # config.py); ecdsa's ES* signing surface is never exercised. pip-audit in
-    # CI ignores exactly this advisory (see .github/workflows/ci.yml). If ES*
-    # algorithms are ever added, re-review ecdsa before enabling them.
-    "python-jose[cryptography]>=3.3.0",
+    # PyJWT, not python-jose. python-jose 3.5.0 is the terminal release and
+    # carries PYSEC-2026-4298 (algorithm confusion via DER-encoded keys) with
+    # no patched version to move to, and it drags in ecdsa, which carries
+    # PYSEC-2026-1325 (Minerva timing attack on P-256) with no patched release
+    # either. PyJWT is the maintained equivalent and is already in the tree via
+    # the MCP stack; it is declared directly here so the security-critical
+    # import has a direct home. The app only ever signs HS256 (JWT_ALGORITHM in
+    # config.py); PyJWT's ES* surface is never exercised.
+    "pyjwt>=2.10.0",
     "passlib[bcrypt,argon2]>=1.7.4",
     "pyotp>=2.9.0",
     "cryptography>=42.0.0",
@@ -91,7 +106,6 @@ dependencies = [
     # 403 on the WSS upgrade (verified: 7.2.8 -> 403, 7.3.1 -> audio bytes).
     "edge-tts>=7.3.0",
     "structlog>=24.0.0",
-    "sentry-sdk>=2.7.0",
     
     # Memory Management
     "mem0ai>=0.1.0",

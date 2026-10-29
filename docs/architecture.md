@@ -182,7 +182,8 @@ Checkpointing uses `AsyncPostgresSaver` + `InMemoryStore`, with full
   `docker/otel-collector.Dockerfile`, compose service + Render blueprint in
   `render.yaml`) tail-samples, batches, buffers to disk, and forwards to
   **New Relic** (Layer 3), which owns the ingest key. LangSmith covers the
-  AI/agent traces; Sentry covers errors.
+  AI/agent traces; unhandled backend errors surface in New Relic as span
+  exception events and structured error logs.
 - SLOs, alerting rules, and runbooks are kept in sync across
   [`docs/slo.md`](slo.md), [`docs/alerting/alert-rules.yml`](alerting/alert-rules.yml),
   and [`docs/runbooks/`](runbooks/README.md).

@@ -1,6 +1,21 @@
 # Local-only override (untracked). A native postgres.exe holds host :5432 on
-# this machine, so publish the container on :55432 to match backend/.env.
+# this machine, so publish the container on :55600 to match backend/.env.
+# (55432 worked until a reboot shifted Windows' dynamic port-exclusion ranges
+# to cover 55335-55434; 55600 sits outside them.)
+#
+# The OTHER project's (CivicPulse) otel collector holds host 4317/4318/8888/
+# 13133, which blocks nexus_otel_collector from starting ("Bind for 0.0.0.0:4317
+# failed: port is already allocated"). Publish ours on 14317/14318/18888/23133
+# instead and point backend/.env's NEW_RELIC_OTLP_ENDPOINT at :14318, so the
+# app exports telemetry to OUR collector and never to the other project's.
+# Bound to loopback: the backend runs on this host, nothing external scrapes it.
 services:
   postgres:
     ports: !override
-      - "55432:5432"
+      - "55600:5432"
+  otel-collector:
+    ports: !override
+      - "127.0.0.1:14317:4317"   # OTLP/gRPC
+      - "127.0.0.1:14318:4318"   # OTLP/HTTP — what the app pushes to
+      - "127.0.0.1:18888:8888"   # collector self-metrics
+      - "127.0.0.1:23133:13133"  # /healthz

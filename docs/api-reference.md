@@ -183,6 +183,13 @@ file IO, elicitations). Every request is gated — a Bearer JWT, the
 (`MCP_API_KEY` setting) must validate (`MCP_AUTH_ENABLED=True`).
 
 - Transport: HTTP + SSE via `mcp.http_app()` (falls back to `sse_app()`).
+- **JSON-RPC endpoint: `/mcp/mcp`.** The sub-application is mounted at `/mcp`
+  and FastMCP registers its own route at `/mcp` *inside* that mount, so the
+  path a client actually posts to is doubled. `POST /mcp` answers `307` →
+  `/mcp/` → `404`; the working call (what `tests/test_mcp_transport.py` uses)
+  is `POST /mcp/mcp` with `Accept: application/json, text/event-stream`,
+  then `Mcp-Session-Id` from the initialize response on every later call.
+  Auth applies first: no key/JWT → `401` before routing is even consulted.
 - Resources: `nexus://conversations/{id}`, `nexus://files/{id}`,
   `nexus://prompts/{name}`
 - Capabilities: **Elicitations** supported (structured human input via the

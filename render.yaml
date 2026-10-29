@@ -1,18 +1,24 @@
-# Render Blueprint — Layer-2 OpenTelemetry Collector (free tier).
+# Render Blueprint — Nexus AI Assistant.
 #
-# One free web service that receives the app's OTLP logs, metrics and traces
-# and forwards them to New Relic (Layer-3 sink). The app itself stays where it
-# deploys today (backend service / Docker) — only the collector goes here.
+# Two free web services:
+#   1. nexus-backend       — the FastAPI API (backend/Dockerfile)
+#   2. nexus-otel-collector — Layer-2 OpenTelemetry Collector → New Relic
 #
-# Render forwards public HTTPS :443 to $PORT, so the OTLP/HTTP receiver must
-# listen on 4318 (see docker/otel-collector-config.yaml). Because that endpoint
-# is public, it is protected by HTTP basic auth — set OTLP_AUTH_USER /
-# OTLP_AUTH_PASSWORD here and match them on the app (OTLP_AUTH_* in the backend
-# environment).
+# The frontend deploys separately to Vercel (see docs/deployment-guide.md).
+# Data services are hosted: Postgres+pgvector on Supabase, Redis on Upstash,
+# vectors on Qdrant Cloud, object storage on Supabase Storage. Nothing here is
+# a render.yaml service except the two above.
 #
-# No Render health check: the agent's /healthz lives on :13133, which Render
-# can't reach through the single public port.
+# Secrets are `sync: false`, so Render prompts for them at first deploy and keeps
+# them out of git. Read them from backend/.env (which is gitignored).
 services:
+  # ── Layer-2 OpenTelemetry Collector → New Relic ──────────────────────────────
+  # Render forwards public HTTPS :443 to $PORT, so the OTLP/HTTP receiver must
+  # listen on 4318 (see docker/otel-collector-config.yaml). Because that endpoint
+  # is public, it is protected by HTTP basic auth — set OTLP_AUTH_USER /
+  # OTLP_AUTH_PASSWORD here and match them on the backend (OTLP_AUTH_*).
+  # No Render health check: the agent's /healthz lives on :13133, which Render
+  # can't reach through the single public port.
   - type: web
     name: nexus-otel-collector
     runtime: docker
@@ -35,3 +41,117 @@ services:
         sync: false
       - key: PORT
         value: "4318"
+
+  # ── Backend API ──────────────────────────────────────────────────────────────
+  # `rootDir: backend` + `backend/Dockerfile`, which binds to $PORT (Render
+  # injects it). Health check hits the liveness route. The free plan spins a
+  # service down after ~15 min idle and cold-starts on the next request; move to
+  # `plan: starter` if the first request must be fast.
+  - type: web
+    name: nexus-backend
+    runtime: docker
+    region: oregon
+    plan: free
+    rootDir: backend
+    dockerfilePath: Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: API_V1_PREFIX
+        value: /api/v1
+      - key: SERVICE_VERSION
+        value: "1.0.0"
+      # Database / cache / vector / storage (all hosted).
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: STORAGE_BUCKET
+        sync: false
+      # Auth secrets — startup aborts in production if blank or example text.
+      - key: SECRET_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      # Model / tool providers.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: MEM0_API_KEY
+        sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      # OAuth (redirect URIs must be the public backend origin + callback path).
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        sync: false
+      - key: GITHUB_OAUTH_CLIENT_ID
+        sync: false
+      - key: GITHUB_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_OAUTH_REDIRECT_URI
+        sync: false
+      # Browser allow-list and public app URL — the Vercel origin(s) once the
+      # frontend is deployed, e.g. https://nexus.vercel.app.
+      - key: CORS_ORIGINS
+        sync: false
+      - key: APP_PUBLIC_URL
+        sync: false
+      # Email (verification, invites, shares).
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_TLS
+        value: "true"
+      - key: EMAIL_FROM
+        sync: false
+      # MCP mount.
+      - key: MCP_AUTH_ENABLED
+        value: "true"
+      - key: MCP_API_KEY
+        sync: false
+      # Prometheus /metrics bearer guard (the OTLP push below does not need it).
+      - key: METRICS_TOKEN
+        sync: false
+      # Observability: forward logs/metrics/traces to the collector above.
+      # Render internal network: use the service name `nexus-otel-collector`.
+      - key: NEW_RELIC_ENABLED
+        value: "true"
+      - key: NEW_RELIC_OTLP_ENDPOINT
+        value: http://nexus-otel-collector:4318
+      - key: OTLP_AUTH_USER
+        sync: false
+      - key: OTLP_AUTH_PASSWORD
+        sync: false
+      - key: LANGSMITH_API_KEY
+        sync: false
+      - key: LANGSMITH_ENDPOINT
+        value: https://aws.api.smith.langchain.com
+      - key: LANGSMITH_TRACING
+        value: "true"
+      - key: LANGSMITH_PROJECT
+        value: nexus-ai-assistant

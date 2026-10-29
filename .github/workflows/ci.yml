@@ -91,23 +91,14 @@ jobs:
 
       - name: mypy over allowlist
         shell: bash
-        run: |
-          # mypy_targets.txt is repo-root-relative (backend/app/...) with '#'
-          # comment lines and possible trailing whitespace/CR from editors.
-          # Strip comments, blank lines, \r, then the backend/ prefix so paths
-          # resolve from ./backend. Guard the empty case so a mis-edited
-          # allowlist fails loudly instead of passing because nothing ran.
-          mapfile -t TARGETS < <( \
-            grep -v '^[[:space:]]*#' scripts/mypy_targets.txt \
-            | sed 's/\r$//' \
-            | grep -v '^[[:space:]]*$' \
-            | sed 's|^backend/||' \
-          )
-          if [ ${#TARGETS[@]} -eq 0 ]; then
-            echo "::error::mypy_targets.txt yielded no targets -- the allowlist is empty or unreadable"
-            exit 1
-          fi
-          uv run mypy --follow-imports=silent "${TARGETS[@]}"
+        # Run from the repository root: scripts/typecheck.sh resolves both
+        # invocation roots itself (most modules import `app.…` and are checked
+        # from ./backend; a few import `backend.app.…` and must be checked from
+        # the root or mypy aborts with "found twice under different module
+        # names"). Keeping one entry point means a green local `make type-check`
+        # and this job cannot disagree about what is enforced.
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/typecheck.sh
 
   frontend:
     name: Frontend typecheck + lint + tests + build
@@ -177,17 +168,13 @@ jobs:
         run: uv run bandit -c pyproject.toml -r app -q
 
       - name: pip-audit (locked venv)
-        # Two advisories are ignored, each because no patched release exists in
-        # our pinned set AND the affected code path is unreachable here:
-        #   * PYSEC-2026-1325 (ecdsa Minerva timing attack on P-256) — python-jose
-        #     ships ecdsa for the ES* algorithms the app never uses
-        #     (JWT_ALGORITHM=HS256, see the pyproject comment near python-jose).
-        #   * PYSEC-2026-4298 (python-jose algorithm-confusion via DER-encoded
-        #     public keys) — the advisory fires only when the verifier does not
-        #     pin the accepted algorithm, and our single decode call site does:
-        #     core/security.py `jwt.decode(token, key, algorithms=[_algorithm()])`.
-        # New advisories with published fixes fail this job on purpose.
-        run: uv run pip-audit -l --skip-editable --ignore-vuln PYSEC-2026-1325 --ignore-vuln PYSEC-2026-4298
+        # No ignores. The two advisories this job used to document are gone from
+        # the tree entirely: python-jose (PYSEC-2026-4298, algorithm confusion
+        # via DER-encoded keys) and the ecdsa it dragged in (PYSEC-2026-1325,
+        # Minerva timing attack on P-256) were both replaced by PyJWT, which
+        # covers the HS256 surface the app actually uses. New advisories with
+        # published fixes fail this job on purpose.
+        run: uv run pip-audit -l --skip-editable
 
       - uses: actions/setup-node@v4
         with:

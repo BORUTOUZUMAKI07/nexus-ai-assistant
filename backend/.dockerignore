@@ -1,0 +1,48 @@
+# Backend Docker build-context exclusions.
+#
+# backend/Dockerfile copies the whole context with `COPY . /app/backend/`, and
+# Docker does not read .gitignore. Without this file a local `docker build`
+# bakes backend/.env — the live Supabase service-role key, the Upstash password,
+# the Qdrant API key, the JWT/encryption secrets and every provider key — into
+# an image layer, and copies the entire .venv on top of it. CI and Render build
+# from a clean checkout, but the documented "build from source" path and
+# release.yml's `docker buildx` run against a working tree that does have
+# backend/.env, so this exclusion is load-bearing. Mirrors frontend/.dockerignore.
+
+# Secrets and local runtime state — never ship these.
+.env
+.env.*
+!.env.example
+.dev_secrets.json
+*.db
+mem0_history.db
+
+# Virtualenv: the image installs its own dependencies into site-packages.
+.venv
+venv
+__pycache__
+*.py[cod]
+
+# Tooling and test caches / artifacts
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.bandit
+htmlcov
+.coverage
+coverage.xml
+*.log
+
+# Not needed at runtime
+tests
+
+# VCS and editor noise
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Docker's own files (avoids a redundant context scan)
+Dockerfile
+.dockerignore

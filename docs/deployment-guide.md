@@ -3,8 +3,9 @@
 > Verified against the source at `1f43c89` (main). Supersedes the earlier
 > guide (which claimed Next.js 14, "22 SQLModel tables", `pip install -e .`,
 > and Upstash Redis — all outdated). **Next.js is 16.4.2, the schema has 38
-> tables, deps are managed with `uv sync`, Redis/Qdrant run locally via
-> docker-compose, and object storage is Supabase Storage (hosted).**
+> tables, deps are managed with `uv sync`, Redis/Qdrant can run locally via
+> docker-compose or hosted (Upstash / Qdrant Cloud), and object storage is
+> Supabase Storage (hosted).**
 
 > Note (2026-10-16): the frontend moved to **Next.js 16.4.2** (a security
 > release: the 16.3.x line carried a critical `next/og` RCE) and the schema to
@@ -21,7 +22,7 @@
 | **Redis** | Cache, rate-limiting, and Celery broker. Local `redis:7-alpine` in compose. `REDIS_URL=redis://localhost:6379/0` locally. |
 | **Object storage** | Supabase Storage over its REST API (`SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` + `STORAGE_BUCKET`). No S3/R2/MinIO server — the boto3 layer was removed. |
 | **Async tasks** | Celery worker + beat (file indexing, eval dispatch). |
-| **Observability** | In-process `MetricsCollector` exported over **OTLP (logs + metrics + traces)** to the Layer-2 collector → New Relic (`docker-compose` / `render.yaml`); `/metrics` kept as a local Prometheus debug surface; LangSmith agent traces; Sentry errors. |
+| **Observability** | In-process `MetricsCollector` exported over **OTLP (logs + metrics + traces)** to the Layer-2 collector → New Relic (`docker-compose` / `render.yaml`); `/metrics` kept as a local Prometheus debug surface; LangSmith agent traces. |
 
 CI/CD artifacts:
 - `.github/workflows/release.yml` — on git tags: `docker buildx` builds and
@@ -67,7 +68,7 @@ useful deployment:
   the `nexus_access_token` cookie (`MCP_AUTH_ENABLED=true` by default)
 - Provider keys: `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`
   (BYOK users can supply their own too)
-- Optional: `SENTRY_DSN`, `NEW_RELIC_ENABLED=true` +
+- Optional: `NEW_RELIC_ENABLED=true` +
   `NEW_RELIC_OTLP_ENDPOINT` (OTLP log export to the Layer-2 collector; requires
   `uv sync --extra observability` for the OTLP extras), `MEM0_API_KEY`
 - New Relic ingestion (free tier): deploy the collector from this repo's
@@ -151,10 +152,11 @@ uv run celery -A backend.app.worker.celery_app beat --loglevel=info
 ```
 
 Health checks: `GET /health` (liveness), `GET /health/ready` (readiness).
-Metrics: `GET /metrics` (Prometheus text; bearer-guarded when `METRICS_TOKEN`
-is set — the Layer-2 collector sends it when scraping).
-Logs: exported over OTLP/HTTP to `NEW_RELIC_OTLP_ENDPOINT` when
-`NEW_RELIC_ENABLED=true`.
+Metrics: `GET /metrics` (Prometheus text) is a **local debug surface**. The app
+exports logs, metrics and traces over OTLP/HTTP to `NEW_RELIC_OTLP_ENDPOINT`
+when `NEW_RELIC_ENABLED=true`; the Layer-2 collector does **not** scrape
+`/metrics`. Set `METRICS_TOKEN` anyway so a host that exposes the port cannot be
+scraped unauthenticated.
 
 ## 5. Frontend
 
@@ -214,7 +216,7 @@ Validate rules: `promtool check rules docs/alerting/alert-rules.yml`.
 cd backend
 uv run bandit -c pyproject.toml -r app -q        # static scan (targets=app)
 uv run pip-audit                                  # advisory scan on locked venv
-cd ../frontend && npm audit                       # npm advisory scan
+cd ../frontend && npm run audit:gate               # npm advisory scan + allowlist
 ```
 
 Notable advisories and how they're handled (see `backend/pyproject.toml`
@@ -234,3 +236,79 @@ comments):
 - **Prompt regression gate** blocks prompt changes that regress guardrail
   behaviors (headless in CI; live LLM-judge variant behind
   `vars.RUN_LLM_EVAL_GATES`).
+
+## 11. Reference production topology (Render + Vercel)
+
+The data services are hosted — Supabase Postgres (pgvector) + Supabase Storage,
+Upstash Redis (`rediss://`), Qdrant Cloud — so only two things are deployed:
+
+| Piece | Host | Source |
+|---|---|---|
+| Backend API | **Render** (web service, Docker) | `render.yaml` → `nexus-backend`, `backend/Dockerfile` |
+| OTel collector (Layer 2) | **Render** (web service, Docker) | `render.yaml` → `nexus-otel-collector`, `docker/otel-collector.Dockerfile` |
+| Frontend | **Vercel** | `frontend/`, server-side `BACKEND_URL` → the Render backend URL |
+
+Steps:
+
+1. **Collector first.** Connect the repo on Render and apply `render.yaml`; it
+   prompts for every `sync: false` value. Set the collector's
+   `NEW_RELIC_LICENSE_KEY` and generate an `OTLP_AUTH_USER` /
+   `OTLP_AUTH_PASSWORD` pair (HTTP basic auth — the OTLP receiver is public).
+2. **Backend.** Render prompts for the rest; copy values from `backend/.env`
+   (gitignored). Set `NEW_RELIC_OTLP_ENDPOINT` to the collector's public URL
+   (`https://nexus-otel-collector.onrender.com`) and make the backend's
+   `OTLP_AUTH_*` match step 1. `ENVIRONMENT=production` aborts startup if
+   `SECRET_KEY` / `ENCRYPTION_KEY` are blank or still example text — that is the
+   guard working, not a bug.
+3. **Frontend.** On Vercel set **server-side** `BACKEND_URL` to the Render
+   backend URL. The BFF route handlers proxy to it and the browser never calls
+   the backend directly, so this value must **not** be `NEXT_PUBLIC_*`.
+4. **Close the loop.** Once the Vercel URL exists, set the backend's
+   `CORS_ORIGINS` and `APP_PUBLIC_URL` to it, and update
+   `GOOGLE_OAUTH_REDIRECT_URI` / `GITHUB_OAUTH_REDIRECT_URI` to
+   `https://<frontend>/api/auth/oauth/<provider>/callback` (the same URI is
+   registered in each provider's console). Also set `METRICS_TOKEN`.
+
+5. **No free background worker.** Render's free instances cover web services
+   (and Postgres/Key-Value), **not** background workers, so the Celery
+   worker/beat pair from §"Async tasks" cannot run there on the free plan.
+   Deploy with `ASYNC_INDEXING=false`: the app then indexes uploads inline on
+   the request path, which is the supported no-worker mode. The periodic
+   Celery jobs (failed-webhook retry, eval dispatch) simply do not run on free
+   — webhook redelivery stays available manually via
+   `POST /webhooks/{id}/redeliver/{delivery_id}`.
+   Also expect the ~15-minute idle spin-down: the first request after idle
+   cold-starts, and any in-flight SSE answer is bounded by Vercel Hobby's
+   300-second function cap end-to-end (your runs are 10–90s; long Deep runs
+   are the ones to watch).
+
+Notes that are easy to get wrong:
+
+- The backend image binds to `$PORT` (`backend/Dockerfile`), which Render
+  injects. `backend/.dockerignore` is **load-bearing**: without it
+  `COPY . /app/backend/` bakes `backend/.env` (Supabase service-role key, Upstash
+  password, Qdrant key, JWT/encryption secrets) and the whole `.venv` into the
+  image. Do not delete it.
+- **A Dockerfile that builds is not a Dockerfile that runs.** `backend/Dockerfile`
+  sets `PYTHONPATH=/app:/app/backend` because the code imports under two
+  namespaces (`backend.app.*` plus a bare `app.*` in five `services/` files), and
+  `greenlet` is a declared dependency because SQLModel's asyncio bridge needs it
+  and it is otherwise only a dev-transitive package. `release.yml` only builds
+  and pushes the image, so it will not catch an unbootable one. Check with
+  `docker run --rm --entrypoint python <image> -c "from backend.app.main import
+  app; print(len(app.openapi()['paths']))"` (expect **103**) and a
+  `GET /health/ready` against a booted container.
+- A container started with no env logs `env: development` and silently falls back
+  to localhost services and `InMemorySaver`. An `--env-file` path that does not
+  resolve yields an empty file with no error, so a wrong relative path looks like
+  a broken image when it is the invocation. (CRLF line endings are fine — Docker
+  handles them.)
+- Render's free web services cold-start after idle; use `plan: starter` if the
+  first request must be fast.
+- `next.config.ts` sets `output: 'standalone'` for `frontend/Dockerfile`
+  (the self-host path). Vercel runs its own build pipeline and does not consume
+  that output, so a default Vercel framework preset needs no `next.config.ts`
+  change.
+- The hosted database is already at Alembic head. Do not run
+  `alembic upgrade` against it from here — the deployment guard refuses a
+  non-local host unless `ALLOW_REMOTE_MIGRATIONS=1` (see §3).
