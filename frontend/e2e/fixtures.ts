@@ -99,6 +99,18 @@ export function mockApi(page: Page) {
       if (url.includes("/api/chat")) {
         return route.fulfill(buildChatStream(CHAT_STREAM))
       }
+      // Loading the active conversation's history is part of the app shell, not
+      // of what an individual spec asserts — every hydrate fetches it. Falling
+      // through to the 404 below made specs that never cared about history print
+      // "Failed to load conversation history: 404" in the console. That noise is
+      // worse than silence: it trains a reader to ignore the console, which is
+      // precisely where a genuine 404 would then be missed.
+      // Anchored to the exact detail path: a prefix match also swallows nested
+      // resources (`/plans`, `/messages`), and answering `{}` where the app expects
+      // an array breaks rendering in a way that looks like a broken sidebar.
+      if (route.request().method() === "GET" && /\/api\/conversations\/[^/?#]+$/.test(new URL(url).pathname)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: "{}" })
+      }
       route.fulfill({
         status: 404,
         contentType: "application/json",
