@@ -3,7 +3,7 @@
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 # Usage: make <target>  (e.g. make dev)
 
-.PHONY: help infra dev backend frontend worker migrate test lint clean
+.PHONY: help infra dev backend frontend worker migrate test lint clean check e2e check-arch clean-check verify-feature vcr harness-audit init
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 PYTHON     := python
@@ -106,6 +106,48 @@ test-integration: ## Run integration tests (requires running infra)
 test-cov: ## Run tests with coverage report
 	cd backend && $(PYTEST) --cov=app --cov-report=term-missing --cov-report=html
 
+frontend-test: ## Run the frontend Vitest suite (Windows: the vitest bin shim is broken)
+	cd frontend && node node_modules/vitest/vitest.mjs run
+
+e2e: ## Run the Playwright end-to-end specs (requires infra + a built frontend)
+	cd frontend && npx playwright test
+
+# ─── Harness gates ────────────────────────────────────────────────────────────
+# These are the repository's agent-facing verification surface. They exist so
+# there is exactly ONE command that means "this repo is green", and one that
+# means "this session is safe to hand off" — see AGENTS.md §0.
+
+check: lint type-check test-unit frontend-test ## Full local verification pipeline (lint + types + backend unit + frontend unit)
+
+# Two halves, both required: the declarative registry (fast, static, prints
+# WHAT/WHY/FIX for each violation) and the behavioural invariant suites (which
+# need the app graph). `make arch-rules` alone is the quick pre-commit check.
+check-arch: arch-rules ## Run the architectural rule registry + invariant suites
+	cd backend && $(PYTEST) tests/test_behavioral_invariants.py tests/test_rag_architecture.py \
+		tests/test_effect_scan.py tests/test_wiring.py tests/test_arch_rules.py -q
+
+arch-rules: ## Run .harness/arch-rules.json (static layering/observability rules)
+	bash scripts/check-arch.sh
+
+clean-check: ## Clean-state gate: run before committing or ending a session
+	bash scripts/clean-state-check.sh
+
+verify-feature: ## Verify ONE feature: make verify-feature F=F-CHAT-001
+	@test -n "$(F)" || (echo "usage: make verify-feature F=<feature id>  (see: make features)" && exit 1)
+	@bash scripts/verify-feature.sh "$(F)"
+
+features: ## List features and their state
+	@bash scripts/verify-feature.sh --list
+
+vcr: ## Verified-completion ratio: passing features / all features
+	@$(UV) run --project backend python -c "import json; d=json.load(open('feature_list.json',encoding='utf-8')); f=d['features']; p=sum(1 for x in f if x['state']=='passing'); print(f'VCR: {p}/{len(f)} passing ({p*100//max(len(f),1)}%)')"
+
+harness-audit: ## Audit the repo against the harness-engineering checklist (needs the course script)
+	@bash tools/audit-harness.sh . 2>/dev/null || echo "tools/audit-harness.sh not present; fetch it from walkinglabs/learn-harness-engineering"
+
+init: ## Standard startup path for an agent session (infra + deps + migrate + health)
+	bash init.sh
+
 # ─── Code Quality ─────────────────────────────────────────────────────────────
 lint: ## Run Ruff linter
 	cd backend && $(RUFF) check .
@@ -123,8 +165,10 @@ format: ## Format code with Ruff formatter
 # and a CI run cannot disagree about what is enforced.
 MYPY_TARGETS = $(shell grep -v '^\s*\#' scripts/mypy_targets.txt | sed 's/\r$$//;s|^backend/||')
 
-type-check: ## Run mypy over the CI allowlist (scripts/mypy_targets.txt)
-	cd backend && $(UV) run mypy --follow-imports=silent $(MYPY_TARGETS)
+type-check: ## Run mypy over the CI allowlist (scripts/typecheck.sh -> backend/scripts/mypy_targets.txt)
+	# The allowlist has two invocation roots (see the script); --follow-imports=silent
+	# keeps mypy from following the pre-existing debt the allowlist exists to exclude.
+	bash scripts/typecheck.sh
 
 # ─── Setup ────────────────────────────────────────────────────────────────────
 setup: ## First-time project setup
