@@ -12,7 +12,10 @@ contain this one. Anything that only exists in chat is lost at handoff.
 ## Current State
 
 - **Last updated:** 2026-10-29
-- **Last commit:** `8756a4c` (see *Uncommitted work* below — the backlog is now committed in coherent units)
+- **Last commit:** `f309068`. The whole backlog is committed in seven coherent
+  units on top of `8756a4c` (harness docs, rule registry, verification gates,
+  chat/research fixes, auth/API, frontend surface, infra+docs).
+- **Working tree:** clean (`git status` empty) as of this entry.
 - **Standard startup path:** `./init.sh` (or `make init`) — infra up, deps checked, migrations applied, health reported
 - **Standard verification path:** `make check` — ruff + mypy allowlist + backend unit suite + frontend Vitest
 - **Clean-state gate:** `make clean-check` — run before every commit / handoff
@@ -48,21 +51,21 @@ Everything below ran, in this order, with Docker up and the stack on the
 
 ## In Progress
 
-Nothing is `active`. The tree still carries a large uncommitted backlog from
-earlier sessions **plus** this session's work — review and commit it as coherent
-units before starting new feature work, otherwise the next diff review cannot
-tell one change from another.
+Nothing is `active`. The backlog that used to sit in the working tree is now
+committed in seven reviewable units (`f9ef1a2` … `f309068`), so the next diff has
+a baseline it can be read against.
 
 ## Next Steps
 
-1. Start Docker, run `./init.sh`, then `make test` to re-establish a green
-   baseline before touching anything.
-2. Verify the uncommitted work is intentional, then commit it in reviewable
-   slices (the `2 D` deletions especially — confirm which files were removed on
-   purpose).
-3. Pick the next feature from `feature_list.json` with `state: not_started`,
-   set it to `active`, and work only on it.
-4. Record the outcome with `make verify-feature F=<id>` — not by editing JSON.
+1. `bash init.sh`, then `bash scripts/verify-feature.sh --list` to see the
+   current state before touching anything.
+2. Get Render + Vercel credentials (`VERCEL_TOKEN`, `RENDER_API_KEY`), run
+   `bash scripts/deploy-preflight.sh` to see exactly which values are missing,
+   and supply them — that is the whole of `F-DEPLOY-001`.
+3. Bring `F-DEPLOY-001` to `passing` only through
+   `bash scripts/verify-feature.sh F-DEPLOY-001` once the deployed /health and a
+   real sign-in on the deployed origin both answer.
+4. Then pick the next feature with `state: not_started` and keep WIP=1.
 
 ## Blockers
 
@@ -207,6 +210,8 @@ tell one change from another.
     separate, small change (they may surface pre-existing strict errors).
   - The e2e run needs `next dev` on exactly port 3000: Next 16 auto-shifts to a
     random port when 3000 is busy, and Playwright then waits on 3000 until it
-    times out. Start it with `npx next dev -p 3000` if a stray dev server exists.
+    times out. **Resolved in session 003** — the config pins `-p 3000` and sets
+    `reuseExistingServer: false`, so a busy port now fails fast instead of
+    driving another project's UI.
 - **Next best step:** commit the backlog in coherent units; then either add the
   two changed modules to the mypy allowlist or start `F-DEPLOY-001`.
