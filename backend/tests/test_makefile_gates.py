@@ -157,14 +157,24 @@ def test_type_check_uses_the_mypy_allowlist():
     """
     recipe = _recipe_for("type-check")
     assert recipe, "no `type-check:` target in the Makefile"
-    assert "mypy_targets.txt" in _text(), (
-        "the Makefile never reads scripts/mypy_targets.txt"
+    # The recipe delegates to scripts/typecheck.sh so the local gate and the CI
+    # job run the same thing; the assertions below therefore check the SCRIPT,
+    # not just the Makefile line. An allowlist that only the Makefile knew about
+    # is what let local and CI disagree.
+    assert "scripts/typecheck.sh" in recipe, (
+        "type-check must run scripts/typecheck.sh (the same entry point CI uses)"
     )
-    assert "--follow-imports=silent" in recipe, (
+    runner = Path(__file__).resolve().parents[2] / "scripts" / "typecheck.sh"
+    assert runner.exists(), f"typecheck runner is missing: {runner}"
+    runner_text = runner.read_text(encoding="utf-8")
+    assert "mypy_targets.txt" in runner_text, (
+        "the runner never reads backend/scripts/mypy_targets.txt"
+    )
+    assert "--follow-imports=silent" in runner_text, (
         "without it mypy follows the whole import graph out of the allowlist and "
         "reports the pre-existing debt the allowlist exists to exclude"
     )
-    assert " mypy app" not in recipe, (
+    assert " mypy app" not in recipe + runner_text, (
         "`mypy app` is the old target: it never passes, so it has trained "
         "everyone to ignore it"
     )
@@ -186,9 +196,13 @@ def test_the_allowlist_file_still_lists_real_modules():
     # `s|^backend/||` substitution assumes. Check them against the root, and
     # also accept the backend-relative form so a future reformat is a visible
     # diff rather than a silently empty gate.
+    # `root:` marks an entry checked from the repository root rather than
+    # ./backend (modules that import `backend.app.*`). Strip the marker before
+    # resolving the path, or the check itself would report a missing file.
     for entry in listed:
-        at_root = (BACKEND.parent / entry).exists()
-        at_backend = (BACKEND / entry).exists()
+        path = entry[len("root:"):] if entry.startswith("root:") else entry
+        at_root = (BACKEND.parent / path).exists()
+        at_backend = (BACKEND / path).exists()
         assert at_root or at_backend, f"allowlist entry does not exist: {entry}"
 
 

@@ -10,6 +10,13 @@
 # here. See .github/workflows/ci.yml → typecheck job.
 #
 # One entry per path, relative to the repository root.
+# `root:` prefix = checked from the repository ROOT instead of ./backend.
+# Those modules import `backend.app....`, and checking them from ./backend
+# makes mypy report the same file under two module names and abort. See
+# scripts/typecheck.sh for the two invocations.
+root:backend/app/services/context_compiler.py
+root:backend/app/agents/orchestrator/nodes.py
+
 backend/app/core/config.py
 backend/app/core/exceptions.py
 backend/app/domain/org/models.py
@@ -40,3 +47,6 @@ backend/app/domain/run/service.py
 backend/app/services/run_log.py
 backend/app/services/run_executor.py
 backend/app/services/llm_text_cleanup.py
+backend/app/services/structured_parse.py
+backend/app/services/tools/pdf_vision.py
+backend/app/services/tools/effect_scan.py
