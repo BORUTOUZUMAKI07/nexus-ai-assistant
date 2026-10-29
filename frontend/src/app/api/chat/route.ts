@@ -310,12 +310,14 @@ export async function POST(req: NextRequest) {
     mode = "normal",
     model,
     planPreamble,
+    reuseUserMessageId,
   } = body as {
     messages?: unknown;
     conversationId?: unknown;
     mode?: unknown;
     model?: unknown;
     planPreamble?: unknown;
+    reuseUserMessageId?: unknown;
   };
 
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -334,6 +336,16 @@ export async function POST(req: NextRequest) {
   ) {
     return NextResponse.json(
       { detail: "invalid_conversation_id" },
+      { status: 400 }
+    );
+  }
+  if (
+    reuseUserMessageId != null &&
+    (typeof reuseUserMessageId !== "string" ||
+      !UUID_RE.test(reuseUserMessageId))
+  ) {
+    return NextResponse.json(
+      { detail: "invalid_reuse_user_message_id" },
       { status: 400 }
     );
   }
@@ -384,6 +396,13 @@ export async function POST(req: NextRequest) {
         // never executed.
         ...(typeof planPreamble === "string" && planPreamble
           ? { plan_preamble: planPreamble }
+          : {}),
+        // The hook speaks camelCase here and the backend's StreamChatRequest is
+        // `extra="forbid"`, so the field must be translated. It is the stored
+        // user row a resend is re-asking: without it the route appends a second
+        // copy of the question (the duplicate-turn defect).
+        ...(typeof reuseUserMessageId === "string" && reuseUserMessageId
+          ? { reuse_user_message_id: reuseUserMessageId }
           : {}),
       }),
       signal: upstreamSignal,

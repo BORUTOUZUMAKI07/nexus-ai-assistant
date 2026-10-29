@@ -14,7 +14,11 @@
 /coverage
 
 # next.js
-/.next/
+# `/.next*` (not just `/.next/`) so a moved-aside build cache such as
+# `.next.bak-<ts>` stays ignored. Tailwind v4's source scanner honours
+# .gitignore, and a stale cache tree holds binary blobs whose stray bytes can
+# be misread as class candidates -- this produced a real CSS parse error.
+/.next*
 /out/
 
 # production

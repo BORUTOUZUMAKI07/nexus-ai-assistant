@@ -18,6 +18,7 @@ import {
   Check,
   X,
   Search,
+  Share2,
 } from "lucide-react";
 import { MODELS } from "@/lib/models";
 
@@ -36,6 +37,11 @@ interface SidebarProps {
   onNewChat: () => void;
   onDeleteConversation: (id: string, e: React.MouseEvent) => void;
   onForkConversation?: (id: string, e: React.MouseEvent) => void;
+  /**
+   * Mint + copy a read-only share link for one conversation. Optional so a
+   * caller without sharing enabled simply omits the button.
+   */
+  onShareConversation?: (id: string, e: React.MouseEvent) => void;
   /**
    * Persists a new title. Optional so a caller that does not allow renaming can
    * omit it and the pencil button is not rendered.
@@ -67,6 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNewChat,
   onDeleteConversation,
   onForkConversation,
+  onShareConversation,
   onRenameConversation,
   onPinConversation,
   activeTab,
@@ -246,6 +253,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity"
           >
             <GitFork className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {onShareConversation && (
+          <button
+            onClick={(e) => onShareConversation(c.id, e)}
+            title="Share conversation (read-only link)"
+            aria-label={`Share ${c.title}`}
+            className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity"
+          >
+            <Share2 className="w-3.5 h-3.5" />
           </button>
         )}
         <button

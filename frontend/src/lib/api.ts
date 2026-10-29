@@ -769,6 +769,65 @@ export async function forkConversation(
   return res.json();
 }
 
+/**
+ * Delete a turn. Returns how many rows the server removed.
+ *
+ * The count is returned rather than discarded because the client's optimistic
+ * update cannot know it: deleting a user turn also removes the assistant reply
+ * the server found after it. The caller trims its own list to match.
+ */
+export async function deleteMessage(
+  conversationId: string,
+  messageId: string
+): Promise<{ deleted: number }> {
+  const res = await nexusFetch(
+    `${API_BASE}/conversations/${conversationId}/messages/${messageId}`,
+    { method: "DELETE", headers: authHeaders() }
+  );
+  if (!res.ok) throw new Error(`Delete message failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Edit a user turn. The backend truncates every message after it (a time-travel
+ * edit) and returns the updated row.
+ */
+export async function editMessage(
+  conversationId: string,
+  messageId: string,
+  content: string
+): Promise<ConversationMessage> {
+  const res = await nexusFetch(
+    `${API_BASE}/conversations/${conversationId}/messages/${messageId}`,
+    {
+      method: "PATCH",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      // `MessageEdit` is `extra="forbid"`, so this must carry `content` and
+      // nothing else — a stray key is a 422 in production, not a type error.
+      body: JSON.stringify({ content }),
+    }
+  );
+  if (!res.ok) throw new Error(`Edit message failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Drop an assistant reply and return the prompt that produced it, so the caller
+ * can re-run the turn. The server deletes first, which keeps the transcript
+ * consistent even if the resend never completes.
+ */
+export async function regenerateMessage(
+  conversationId: string,
+  messageId: string
+): Promise<{ prompt: string; user_message_id: string }> {
+  const res = await nexusFetch(
+    `${API_BASE}/conversations/${conversationId}/messages/${messageId}/regenerate`,
+    { method: "POST", headers: authHeaders() }
+  );
+  if (!res.ok) throw new Error(`Regenerate failed: ${res.status}`);
+  return res.json();
+}
+
 // ─── Knowledge / Files ───────────────────────────────────────────────────────
 
 export async function fetchKnowledgeFiles(
@@ -1579,4 +1638,183 @@ export async function fetchRedTeamRuns(retry: FetchRetryOptions = {}): Promise<R
   if (!res.ok) throw new Error(`Red-team runs failed: ${res.status}`);
   const data = (await res.json()) as { runs: RedTeamRunItem[] };
   return data.runs;
+}
+
+// ─── Organizations ─────────────────────────────────────────────────────────
+
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string | null;
+  role: string;
+  description?: string | null;
+}
+
+export interface OrgInvite {
+  id?: string;
+  email?: string;
+  role?: string;
+  status?: string;
+  /** Built by the backend from APP_PUBLIC_URL; null outside development. */
+  dev_accept_url?: string | null;
+}
+
+export async function fetchOrganizations(): Promise<Organization[]> {
+  const res = await nexusFetch(`${API_BASE}/orgs`, { headers: authHeaders() });
+  if (!res.ok) throw await parseError(res, "Could not load organizations");
+  return res.json();
+}
+
+export async function createOrganization(name: string): Promise<Organization> {
+  const res = await nexusFetch(`${API_BASE}/orgs`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw await parseError(res, "Could not create organization");
+  return res.json();
+}
+
+export async function leaveOrganization(orgId: string): Promise<void> {
+  const res = await nexusFetch(`${API_BASE}/orgs/${orgId}/leave`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  // The backend refuses when the caller is the owner (an org cannot be left
+  // leaderless); that message is the one worth surfacing verbatim.
+  if (!res.ok) throw await parseError(res, "Could not leave organization");
+}
+
+export async function inviteOrganizationMember(
+  orgId: string,
+  email: string,
+  role = "member",
+): Promise<OrgInvite> {
+  const res = await nexusFetch(`${API_BASE}/orgs/${orgId}/invites`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ email, role }),
+  });
+  if (!res.ok) throw await parseError(res, "Could not create invite");
+  return res.json();
+}
+
+export async function acceptOrganizationInvite(token: string): Promise<void> {
+  const res = await nexusFetch(`${API_BASE}/orgs/invites/accept`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) throw await parseError(res, "Invite could not be accepted");
+}
+
+// ─── Outbound webhooks ─────────────────────────────────────────────────────
+
+export interface WebhookEndpoint {
+  id: string;
+  url: string;
+  events: string[];
+  is_active: boolean;
+  has_secret: boolean;
+  created_at?: string | null;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  event: string;
+  status: string;
+  http_status: number | null;
+  attempts: number;
+  error: string | null;
+  created_at: string | null;
+  delivered_at?: string | null;
+}
+
+export async function fetchWebhooks(): Promise<WebhookEndpoint[]> {
+  const res = await nexusFetch(`${API_BASE}/webhooks`, { headers: authHeaders() });
+  if (!res.ok) throw await parseError(res, "Could not load webhooks");
+  return res.json();
+}
+
+export async function createWebhook(
+  url: string,
+  events: string[] = ["message.completed"],
+): Promise<WebhookEndpoint & { secret?: string | null }> {
+  const res = await nexusFetch(`${API_BASE}/webhooks`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ url, events }),
+  });
+  if (!res.ok) throw await parseError(res, "Could not register webhook");
+  return res.json();
+}
+
+export async function setWebhookActive(
+  endpointId: string,
+  isActive: boolean,
+): Promise<void> {
+  const res = await nexusFetch(`${API_BASE}/webhooks/${endpointId}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ is_active: isActive }),
+  });
+  if (!res.ok) throw await parseError(res, "Could not update webhook");
+}
+
+export async function deleteWebhook(endpointId: string): Promise<void> {
+  const res = await nexusFetch(`${API_BASE}/webhooks/${endpointId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 204) {
+    throw await parseError(res, "Could not remove webhook");
+  }
+}
+
+export async function fetchWebhookDeliveries(
+  endpointId: string,
+  limit?: number,
+): Promise<WebhookDelivery[]> {
+  const qs = limit ? `?limit=${limit}` : "";
+  const res = await nexusFetch(`${API_BASE}/webhooks/${endpointId}/deliveries${qs}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw await parseError(res, "Could not load deliveries");
+  return res.json();
+}
+
+// ─── Conversation share links ──────────────────────────────────────────────
+
+export interface ShareLink {
+  token: string;
+  url: string;
+  expires_at: string | null;
+}
+
+export async function listShareLinks(conversationId: string): Promise<ShareLink[]> {
+  const res = await nexusFetch(`${API_BASE}/conversations/${conversationId}/share`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw await parseError(res, "Could not load share links");
+  return res.json();
+}
+
+/** Mint a read-only link; the returned `url` is ready to hand out. */
+export async function createShareLink(conversationId: string): Promise<ShareLink> {
+  const res = await nexusFetch(`${API_BASE}/conversations/${conversationId}/share`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw await parseError(res, "Could not share conversation");
+  return res.json();
+}
+
+/** Revoke every link minted for this conversation. */
+export async function revokeShareLinks(conversationId: string): Promise<void> {
+  const res = await nexusFetch(`${API_BASE}/conversations/${conversationId}/share`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw await parseError(res, "Could not revoke the link");
 }

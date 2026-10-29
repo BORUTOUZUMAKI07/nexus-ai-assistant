@@ -288,6 +288,36 @@ export function chatStreamBody(
   return `${lines.join("\n")}\n`
 }
 
+export const mockOrganizations = [
+  {
+    id: "org-1",
+    name: "Verify Org",
+    slug: "verify-org",
+    role: "owner",
+    created_at: "2026-10-28T04:15:58Z",
+  },
+]
+
+export const mockWebhookEndpoints = [
+  {
+    id: "wh-1",
+    url: "https://example.com/nexus-hook",
+    events: ["message.completed"],
+    is_active: true,
+    has_secret: true,
+    created_at: "2026-10-28T04:15:59Z",
+  },
+]
+
+/** The public share read: conversation title + messages, no owner data. */
+export const mockPublicShare = {
+  conversation: { id: "conv-100", title: "Project kickoff", created_at: "2026-09-01T10:00:00Z" },
+  messages: [
+    { role: "user", content: "Kick this off", model: null, citations: [], created_at: "2026-09-01T10:00:01Z" },
+    { role: "assistant", content: "Here is the plan.", model: "groq/llama-3.3-70b-versatile", citations: [], created_at: "2026-09-01T10:00:09Z" },
+  ],
+}
+
 export const handlers = [
   // ── Auth ────────────────────────────────────────────────────────────────
   http.post("/api/auth/login", async ({ request }) => {
@@ -436,10 +466,20 @@ export const handlers = [
       fork_message_id?: string;
       branch_name?: string;
     };
+    // The backend titles a fork `"<parent title> (Branch: <name>)"` — not the
+    // bare branch name. The mock said `branch_name` for a while, and that
+    // difference is exactly what hid a real defect: the page's auto-titler
+    // renamed any conversation it could not find in its list, and the fork
+    // never got inserted, so the real `(Branch: …)` title was replaced by the
+    // first user message. With the mock supplying a title that *was* the
+    // branch name, "the title survived" and "the title was clobbered" looked
+    // identical. Match the server's shape so the mock can catch it.
+    const branchName = body.branch_name ?? "Forked Branch";
+    const parent = mockConversations.find((c) => c.id === params.id);
     return HttpResponse.json({
       ...mockConversations[0],
       id: `conv-forked-${params.id}`,
-      title: body.branch_name ?? "Forked Branch",
+      title: `${parent?.title ?? mockConversations[0].title} (Branch: ${branchName})`,
       is_pinned: false,
       // The fork starts at the branch point, so it carries less history.
       token_count: 0,
@@ -463,6 +503,35 @@ export const handlers = [
 
   http.delete("/api/conversations/:id", () =>
     HttpResponse.json(null, { status: 204 })
+  ),
+
+  // ── Per-message actions (delete / edit / regenerate) ────────────────────
+  // These were unmocked, so the three chat actions had no way to be exercised
+  // in the hook tests: MSW let the request fall through to a jsdom origin with
+  // no server. Registering them here is what makes the delete/edit/regenerate
+  // tests below meaningful rather than passing on a swallowed network error.
+  http.delete("/api/conversations/:id/messages/:messageId", () =>
+    // The cascade count is intentionally a plain number: the hook must *not*
+    // use it to slice the list, it re-hydrates instead.
+    HttpResponse.json({ deleted: 2 })
+  ),
+
+  http.patch("/api/conversations/:id/messages/:messageId", async ({ request, params }) => {
+    const body = (await request.json()) as { content?: string };
+    return HttpResponse.json({
+      id: params.messageId,
+      role: "user",
+      content: body.content,
+      created_at: "2026-09-02T10:00:00Z",
+    });
+  }),
+
+  http.post(
+    "/api/conversations/:id/messages/:messageId/regenerate",
+    () =>
+      // The *stored* prompt, as the backend returns it after deleting the
+      // stale reply. The hook resends this text rather than its own copy.
+      HttpResponse.json({ prompt: "Tell me about RAG" })
   ),
 
   // ── Knowledge / Files ───────────────────────────────────────────────────
@@ -783,4 +852,78 @@ export const handlers = [
   http.get("/api/admin/audit/redteam", () =>
     HttpResponse.json({ runs: mockRedTeamRuns })
   ),
+
+  // ── Organizations / share links / outbound webhooks ───────────────────
+  // These surfaces gained their first UI, so every route they rely on needs a
+  // mock or their component tests fall through to nothing (see api-parity).
+  http.get("/api/orgs", () => HttpResponse.json(mockOrganizations)),
+  http.post("/api/orgs", async ({ request }) => {
+    const body = (await request.json()) as { name?: string }
+    return HttpResponse.json(
+      {
+        id: "org-new",
+        name: body.name ?? "New Org",
+        slug: (body.name ?? "new-org").toLowerCase().replace(/\s+/g, "-"),
+        role: "owner",
+        created_at: new Date().toISOString(),
+      },
+      { status: 201 }
+    )
+  }),
+  http.post("/api/orgs/invites/accept", () =>
+    HttpResponse.json({ status: "joined", organization_id: "org-1", name: "Verify Org" })
+  ),
+  http.post("/api/orgs/:id/invites", async ({ request }) => {
+    const body = (await request.json()) as { email?: string }
+    return HttpResponse.json(
+      {
+        id: "inv-1",
+        email: body.email ?? "colleague@example.com",
+        role: "member",
+        status: "pending",
+        dev_accept_url: "http://localhost:3001/invite?token=dev-token",
+      },
+      { status: 201 }
+    )
+  }),
+  http.post("/api/orgs/:id/leave", () => HttpResponse.json({ status: "left" })),
+
+  http.get("/api/conversations/:id/share", () => HttpResponse.json([])),
+  http.post("/api/conversations/:id/share", () =>
+    HttpResponse.json(
+      {
+        token: "share-token-1",
+        url: "http://localhost:3001/share/share-token-1",
+        expires_at: null,
+      },
+      { status: 201 }
+    )
+  ),
+  http.delete("/api/conversations/:id/share", () =>
+    HttpResponse.json({ status: "revoked" })
+  ),
+  http.get("/api/public/shares/:token", () => HttpResponse.json(mockPublicShare)),
+
+  http.get("/api/webhooks", () => HttpResponse.json(mockWebhookEndpoints)),
+  http.post("/api/webhooks", async ({ request }) => {
+    const body = (await request.json()) as { url?: string; events?: string[] }
+    return HttpResponse.json(
+      {
+        id: "wh-new",
+        url: body.url ?? "https://example.com/hook",
+        events: body.events ?? ["message.completed"],
+        is_active: true,
+        has_secret: true,
+        secret: "mock-signing-secret",
+        created_at: new Date().toISOString(),
+      },
+      { status: 201 }
+    )
+  }),
+  http.patch("/api/webhooks/:id", async ({ request }) => {
+    const body = (await request.json()) as { is_active?: boolean }
+    return HttpResponse.json({ id: "wh-1", is_active: body.is_active ?? true })
+  }),
+  http.delete("/api/webhooks/:id", () => HttpResponse.json(null, { status: 204 })),
+  http.get("/api/webhooks/:id/deliveries", () => HttpResponse.json([])),
 ]

@@ -273,4 +273,132 @@ describe("ChatArea", () => {
     expect(onSaveArtifact).toHaveBeenCalledTimes(1)
     expect(onSaveArtifact.mock.calls[0][0]).toMatchObject({ language: "python" })
   })
+
+  // ── per-message action toolbars ─────────────────────────────────────────
+
+  it("shows Regenerate and Branch on an assistant turn and wires both", async () => {
+    const onRegenerate = vi.fn()
+    const onBranch = vi.fn()
+    render(
+      <ChatArea
+        messages={[assistant]}
+        isLoading={false}
+        onRegenerate={onRegenerate}
+        onBranch={onBranch}
+      />
+    )
+
+    fireEvent.click(screen.getByTitle("Regenerate answer"))
+    expect(onRegenerate).toHaveBeenCalledWith("a1")
+    // `runAction` disables the whole toolbar while an action is in flight, so
+    // the re-enable lands a microtask later. Clicking Branch before that would
+    // land on a disabled button and silently do nothing -- wait for it.
+    await waitFor(() =>
+      expect(screen.getByTitle("Branch conversation from here")).not.toBeDisabled()
+    )
+
+    fireEvent.click(screen.getByTitle("Branch conversation from here"))
+    expect(onBranch).toHaveBeenCalledWith("a1")
+  })
+
+  it("shows Edit / Branch / Delete on a user turn and wires delete and branch", async () => {
+    const onDeleteMessage = vi.fn()
+    const onBranch = vi.fn()
+    render(
+      <ChatArea
+        messages={[{ id: "u1", role: "user", content: "Tell me about RAG" }]}
+        isLoading={false}
+        onEditMessage={vi.fn()}
+        onDeleteMessage={onDeleteMessage}
+        onBranch={onBranch}
+      />
+    )
+
+    fireEvent.click(screen.getByTitle("Delete message (and the turns after it)"))
+    expect(onDeleteMessage).toHaveBeenCalledWith("u1")
+    // Same in-flight disable as the assistant toolbar: wait for the re-enable
+    // before the next click or it lands on a disabled button.
+    await waitFor(() =>
+      expect(screen.getByTitle("Branch conversation from here")).not.toBeDisabled()
+    )
+
+    fireEvent.click(screen.getByTitle("Branch conversation from here"))
+    expect(onBranch).toHaveBeenCalledWith("u1")
+  })
+
+  it("opens an inline editor pre-filled, then submits with Save & resend", async () => {
+    const onEditMessage = vi.fn()
+    render(
+      <ChatArea
+        messages={[{ id: "u1", role: "user", content: "Tell me about RAG" }]}
+        isLoading={false}
+        onEditMessage={onEditMessage}
+      />
+    )
+
+    fireEvent.click(screen.getByTitle("Edit & resend (discards later turns)"))
+    const editor = screen.getByLabelText("Edit message") as HTMLTextAreaElement
+    // Pre-filled with the existing text so the edit is a correction, not a
+    // retype. This is the whole point of an inline editor over a prompt.
+    expect(editor.value).toBe("Tell me about RAG")
+
+    fireEvent.change(editor, { target: { value: "Tell me about hybrid RAG" } })
+    fireEvent.click(screen.getByText("Save & resend"))
+
+    await waitFor(() =>
+      expect(onEditMessage).toHaveBeenCalledWith("u1", "Tell me about hybrid RAG")
+    )
+  })
+
+  it("submits the inline editor on Enter and abandons it on Escape", async () => {
+    const onEditMessage = vi.fn()
+    render(
+      <ChatArea
+        messages={[{ id: "u1", role: "user", content: "original" }]}
+        isLoading={false}
+        onEditMessage={onEditMessage}
+      />
+    )
+
+    fireEvent.click(screen.getByTitle("Edit & resend (discards later turns)"))
+    const editor = screen.getByLabelText("Edit message")
+    fireEvent.change(editor, { target: { value: "edited via Enter" } })
+    fireEvent.keyDown(editor, { key: "Enter", shiftKey: false })
+    await waitFor(() =>
+      expect(onEditMessage).toHaveBeenCalledWith("u1", "edited via Enter")
+    )
+
+    // Escape abandons without calling the callback again.
+    fireEvent.click(screen.getByTitle("Edit & resend (discards later turns)"))
+    const editor2 = screen.getByLabelText("Edit message")
+    fireEvent.keyDown(editor2, { key: "Escape" })
+    expect(screen.queryByLabelText("Edit message")).not.toBeInTheDocument()
+    expect(onEditMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it("disables the submit button when the edited text is only whitespace", () => {
+    render(
+      <ChatArea
+        messages={[{ id: "u1", role: "user", content: "original" }]}
+        isLoading={false}
+        onEditMessage={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByTitle("Edit & resend (discards later turns)"))
+    const editor = screen.getByLabelText("Edit message")
+    fireEvent.change(editor, { target: { value: "   " } })
+    // An empty resend would be a delete wearing an edit's clothes, so it is
+    // refused at the button rather than in the handler.
+    expect(screen.getByText("Save & resend")).toBeDisabled()
+  })
+
+  it("omits a message action when its callback is not supplied", () => {
+    render(<ChatArea messages={[assistant]} isLoading={false} />)
+    // No onRegenerate / onBranch means no buttons -- the toolbar is built from
+    // the callbacks, so a read-only view does not offer an action it cannot run.
+    expect(screen.queryByTitle("Regenerate answer")).not.toBeInTheDocument()
+    expect(
+      screen.queryByTitle("Branch conversation from here")
+    ).not.toBeInTheDocument()
+  })
 })

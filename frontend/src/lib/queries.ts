@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchAPIKeys,
   fetchArtifacts,
+  fetchOrganizations,
+  fetchWebhooks,
   fetchAuditReport,
   fetchBanditStatus,
   fetchConversations,
@@ -81,6 +83,14 @@ export const projectKeys = {
 
 export const usageKeys = {
   all: ["usage", "summary"] as const,
+};
+
+export const orgKeys = {
+  all: ["orgs"] as const,
+};
+
+export const webhookKeys = {
+  all: ["webhooks"] as const,
 };
 
 export const settingsKeys = {
@@ -200,6 +210,18 @@ export function useKnowledgeFiles() {
 
 export function useUsage() {
   return useQuery({ queryKey: usageKeys.all, queryFn: fetchUsage });
+}
+
+// ─── Organizations & webhooks ───────────────────────────────────────────────
+
+/** The caller's organizations (owner/member roles as the API reports them). */
+export function useOrganizations() {
+  return useQuery({ queryKey: orgKeys.all, queryFn: fetchOrganizations });
+}
+
+/** Registered outbound webhook endpoints. */
+export function useWebhooks() {
+  return useQuery({ queryKey: webhookKeys.all, queryFn: fetchWebhooks });
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────

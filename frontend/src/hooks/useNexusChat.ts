@@ -12,6 +12,10 @@ import {
   fetchWithSessionRecovery,
   fetchConversation,
   sendHITLFeedback,
+  forkConversation,
+  deleteMessage as apiDeleteMessage,
+  editMessage as apiEditMessage,
+  regenerateMessage as apiRegenerateMessage,
   type ConversationMode,
 } from "@/lib/api";
 import { consumeChatStream, readMessageId, readRunId } from "@/lib/chatStream";
@@ -146,6 +150,12 @@ export interface SendMessageOptions {
    * plan's approved steps (Plan mode execution reuses the agent stream).
    */
   planPreamble?: string;
+  /**
+   * The stored user row a resend is re-asking, so the server adopts it instead
+   * of appending a second copy of the question. Set by edit-and-resend (the
+   * edited row's id) and by regenerate (the id the endpoint returns).
+   */
+  reuseUserMessageId?: string;
 }
 
 /**
@@ -225,6 +235,24 @@ function readRun(conversationId: string): string | null {
   }
 }
 
+/**
+ * Whether an id names a persisted backend row.
+ *
+ * Live turns carry client-generated ids (`msg-<timestamp>`); anything loaded
+ * from history or recovered by a rejoin carries the server's UUID. Only the
+ * second kind can be addressed by the message endpoints, and the two are
+ * otherwise indistinguishable at the call site, so the shape is tested here
+ * rather than guessed from position in the list — a live turn sitting above a
+ * hydrated one is the normal state after an edit-and-resend.
+ *
+ * Module scope because it is pure: delete, edit, regenerate and id adoption
+ * all ask the same question, and a helper declared inside any one of them
+ * would be a forward reference (or a dependency) for all the others.
+ */
+function isServerId(id: string): boolean {
+  return UUID_RE.test(id);
+}
+
 export function useNexusChat(options: UseNexusChatOptions = {}) {
   const [messages, setMessages] = useState<NexusMessage[]>([]);
   const [input, setInput] = useState("");
@@ -272,6 +300,13 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   const sendMessageRef = useRef<
     (content: string, sendOptions?: SendMessageOptions) => Promise<void>
   >(async () => {});
+  // Assigned after `hydrateThenRejoin` is defined, below. The delete action
+  // re-reads the transcript through it, but that callback is declared later in
+  // this hook, and referencing it directly from an earlier useCallback initialiser
+  // would be a temporal-dead-zone read.
+  const hydrateThenRejoinRef = useRef<
+    ((conversationId: string) => Promise<void>) | null
+  >(null);
 
   useEffect(() => {
     optionsRef.current = options;
@@ -375,6 +410,54 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     void sendMessageRef.current(next.content, next.options);
   }, [setQueue]);
 
+  /**
+   * Adopt the server UUIDs of the turn that just finished — ids only, never
+   * content.
+   *
+   * A freshly-sent turn is persisted by the backend (both rows: the question
+   * and the answer), but the POST stream reports only the run id, so the client
+   * keeps its own `msg-…` ids unless some later hydrate replaces the list. Every
+   * per-message action keys off a server UUID, so without adoption the *first*
+   * edit or delete on a fresh turn is silently a no-op: `isServerId` fails, the
+   * server call is skipped, and the delete's own re-hydrate then re-adds the
+   * rows it was meant to remove. Edit is the damaging version — the resend runs,
+   * the browser discards the old turn, and the database keeps it, so "later
+   * turns will be discarded" holds only in the UI (observed live: four rows
+   * where the transcript showed two).
+   *
+   * Why ids only. A full re-hydrate here would replace the just-streamed
+   * answer with whatever the history endpoint returns, which would drop a
+   * partial answer on a lagging read and take an unsaved image bubble with it
+   * (images are not persisted). So the tails of the two lists are aligned on
+   * this turn — its rows are the last ones written — and each live bubble takes
+   * the id of the row that matches it by role *and* exact text.
+   *
+   * Any mismatch stops the walk rather than continuing: a wrong adoption would
+   * aim an action at someone else's row, while a missed one merely leaves the
+   * id live, which is the pre-adoption behaviour. `isServerId` rows are skipped,
+   * not re-adopted — one that is already a UUID is not this turn's to relabel.
+   */
+  const adoptPersistedIds = useCallback((rows: NexusMessage[]) => {
+    const current = messagesRef.current;
+    if (!current.length || !rows.length) return;
+    const swaps: Array<[string, string]> = [];
+    for (let i = 1; i <= current.length; i += 1) {
+      const live = current[current.length - i];
+      const row = rows[rows.length - i];
+      if (!live || !row) break;
+      if (isServerId(live.id)) continue;
+      if (live.role !== row.role || live.content !== row.content) break;
+      swaps.push([live.id, row.id]);
+    }
+    if (!swaps.length) return;
+    updateMessages((prev) =>
+      prev.map((m) => {
+        const swap = swaps.find(([oldId]) => oldId === m.id);
+        return swap ? { ...m, id: swap[1] } : m;
+      })
+    );
+  }, [updateMessages]);
+
   const sendMessage = useCallback(
     async (content: string, sendOptions?: SendMessageOptions) => {
       const trimmed = content.trim();
@@ -404,6 +487,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       const mode = sendOptions?.mode ?? optionsRef.current.mode ?? "normal";
       const model = optionsRef.current.model;
       const planPreamble = sendOptions?.planPreamble;
+      const reuseUserMessageId = sendOptions?.reuseUserMessageId;
 
       const userMsgId = `msg-${Date.now()}`;
       const assistantMsgId = `msg-${Date.now() + 1}`;
@@ -422,7 +506,26 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       };
 
       const history = messagesRef.current;
-      updateMessages((prev) => [...prev, userMsg, assistantMsg]);
+      // A resend that carries `reuseUserMessageId` is re-asking a row that is
+      // already the last turn in the list (edit-and-resend keeps the edited
+      // row). Appending another optimistic user bubble on top renders the
+      // question twice beside the new answer and puts it in the resend payload
+      // twice -- the client-side half of the duplicate-turn defect the
+      // server's row adoption prevents in the database (measured live
+      // 2026-10-24: one persisted row, two bubbles). Regenerate removes the
+      // user row before resending, so its reuse id is not found here and it
+      // keeps the normal append path.
+      const reuseIdx = reuseUserMessageId
+        ? history.findIndex((m) => m.id === reuseUserMessageId)
+        : -1;
+      const turnAlreadyPresent = reuseIdx !== -1 && reuseIdx === history.length - 1;
+      if (turnAlreadyPresent) {
+        // The row is already in the list with the edited text; only the
+        // assistant placeholder is new.
+        updateMessages((prev) => [...prev, assistantMsg]);
+      } else {
+        updateMessages((prev) => [...prev, userMsg, assistantMsg]);
+      }
       setIsLoading(true);
       // Cleared per turn, not per mount: a verdict left over from the previous
       // run would be displayed against this run's answer.
@@ -443,6 +546,12 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
        * that silently loses the ability to recover.
        */
       let rememberedUnder: string | null = null;
+      /**
+       * Whether this turn asked for human approval. Until it is resolved the
+       * answer has not been persisted, so there are no row ids to adopt and a
+       * history read would show a transcript missing the text on screen.
+       */
+      let hitlRequested = false;
 
       /**
        * Write a streamed message back into the list.
@@ -471,8 +580,10 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         patchMessage(assistantMsgId, content, annos);
 
       try {
-        // Build multimodal message list — user message may carry an image
-        const backendMessages = [...history, userMsg].map((m) => {
+        // Build multimodal message list — user message may carry an image.
+        // When the turn is already the last row (reuse case), `history` ends
+        // with it, so appending `userMsg` again would send the question twice.
+        const backendMessages = (turnAlreadyPresent ? history : [...history, userMsg]).map((m) => {
           if (m.imageDataUrl) {
             // Multimodal content array for vision
             return {
@@ -510,6 +621,9 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
             // never carried one.
             ...(model ? { model } : {}),
             ...(planPreamble ? { planPreamble } : {}),
+            ...(reuseUserMessageId
+              ? { reuseUserMessageId }
+              : {}),
           }),
         });
 
@@ -523,10 +637,13 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           rememberedUnder = conversationId;
         }
 
-        await consumeChatStream(response.body, {
+        const streamResult = await consumeChatStream(response.body, {
           patch: patchAssistant,
           onError: (message) => setError(new Error(message)),
-          onHitlRequest: (data) => setPendingHITL(data),
+          onHitlRequest: (data) => {
+            hitlRequested = true;
+            setPendingHITL(data);
+          },
           onArtifactSaved: (artifact) =>
             onArtifactSavedRef.current?.(artifact),
           onTurnVerdict: setTurnVerdict,
@@ -562,6 +679,37 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         // browser stopped watching for its own reasons is still going, and
         // forgetting its id is precisely the case rejoin exists to cover.
         forgetRun(rememberedUnder);
+
+        // Adopt the row ids this run just persisted (see adoptPersistedIds).
+        // Gated three ways, each for a case where the history read would not
+        // contain this turn's rows: a `3:` error means no answer row was ever
+        // written, a pending approval means the run is paused before writing
+        // one, and an image turn's picture does not survive a history read.
+        // `targetId` falls back to the id the backend just resolved for a
+        // brand-new conversation; the on-screen check (repeated after the
+        // read) keeps a mid-stream conversation switch from adopting one
+        // conversation's rows into another's transcript.
+        // Not awaited on purpose: the turn is already correct on screen, and
+        // holding the send's completion — and therefore `isLoading`, and the
+        // `finally` below that releases any queued follow-up — hostage to a
+        // history read deadlocks whenever that endpoint is slow or parked,
+        // which is exactly the situation the one-writer tests stage.
+        if (!streamResult.error && !hitlRequested && !imageDataUrl) {
+          const targetId = conversationId || rememberedUnder;
+          if (targetId && optionsRef.current.conversationId === targetId) {
+            void (async () => {
+              try {
+                const detail = await fetchConversation(targetId);
+                if (optionsRef.current.conversationId === targetId) {
+                  adoptPersistedIds(messagesFromHistory(detail.messages));
+                }
+              } catch {
+                // Best-effort by design: a failed read leaves the ids live,
+                // which is exactly how every turn behaved before adoption.
+              }
+            })();
+          }
+        }
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") return;
         setError(err instanceof Error ? err : new Error("Chat stream failed"));
@@ -575,7 +723,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         drainQueue();
       }
     },
-    [updateMessages, enqueue, drainQueue]
+    [updateMessages, enqueue, drainQueue, adoptPersistedIds]
   );
 
   // The drain calls back into `sendMessage`; publish the stable instance so it
@@ -622,6 +770,186 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     updateMessages(() => msgs.slice(0, idx + 1));
     await sendMessage(lastUser.content);
   }, [sendMessage, updateMessages, clearQueued]);
+
+  // ── Message actions (delete / edit / regenerate / branch) ────────────────
+  /**
+   * Delete a turn. Server-side first, then the list is rebuilt from the
+   * authoritative rows.
+   *
+   * The cascade count the backend returns is deliberately not used to trim the
+   * list by arithmetic: the server deletes by ``created_at`` order and the
+   * client's list may have been edited, so slicing by a count can cut the wrong
+   * rows. Re-hydrating is exact, and it is the transcript's single writer
+   * (§9.28) rather than a second one.
+   */
+  const removeMessage = useCallback(
+    async (messageId: string) => {
+      const conversationId = optionsRef.current.conversationId;
+      if (isServerId(messageId) && conversationId) {
+        setError(null);
+        try {
+          await apiDeleteMessage(conversationId, messageId);
+        } catch (err) {
+          setError(err instanceof Error ? err : new Error("Delete failed"));
+          throw err;
+        }
+      }
+      // The verdict has no message id of its own (the backend emits it after
+      // the row exists), so nothing else ties its lifetime to this list. The
+      // cascade can remove the very answer it describes, so it is cleared here
+      // or it floats over whatever the transcript shows next -- down to the
+      // empty welcome screen.
+      setTurnVerdict(null);
+      // A client-only id was never persisted, so removing it locally is the
+      // whole job. For a server id, re-read so the reply the cascade removed
+      // disappears too.
+      if (conversationId) {
+        await hydrateThenRejoinRef.current?.(conversationId);
+      } else {
+        updateMessages((prev) => prev.filter((m) => m.id !== messageId));
+      }
+    },
+    [updateMessages]
+  );
+
+  /**
+   * Edit a user turn and resend it (time-travel).
+   *
+   * The backend truncates everything after the edited message, so the client
+   * does the same *before* resending: the resend is built from
+   * ``messagesRef.current``, and a stale assistant reply left in the list would
+   * be sent back to the model as context for a question it never answered.
+   */
+  const editAndResend = useCallback(
+    async (messageId: string, content: string) => {
+      const conversationId = optionsRef.current.conversationId;
+      const trimmed = content.trim();
+      if (!trimmed) return;
+
+      const msgs = messagesRef.current;
+      const idx = msgs.findIndex((m) => m.id === messageId);
+      if (idx === -1) return;
+
+      if (isServerId(messageId) && conversationId) {
+        setError(null);
+        try {
+          await apiEditMessage(conversationId, messageId, trimmed);
+        } catch (err) {
+          setError(err instanceof Error ? err : new Error("Edit failed"));
+          throw err;
+        }
+      }
+      // Truncate locally to the edited turn. The backend already did this
+      // server-side; doing it here keeps the resend's context identical to what
+      // the transcript shows.
+      //
+      // A persisted row stays in the list (with the new text) and the resend
+      // re-asks it by id -- `sendMessage` detects that the reuse id is the last
+      // turn and does not append a second bubble. A live (client-id) row is
+      // dropped instead, because it was never persisted: the resend's own
+      // optimistic bubble becomes the single copy of the edited question.
+      updateMessages(() =>
+        isServerId(messageId)
+          ? [...msgs.slice(0, idx), { ...msgs[idx], content: trimmed }]
+          : msgs.slice(0, idx)
+      );
+      // Resend through the normal send path, which appends a fresh user turn and
+      // its answer. `messagesRef.current` is now the truncated list, so the
+      // request context is exactly the edited conversation. The server already
+      // holds this turn -- it was edited in place, not deleted -- so its id goes
+      // back with the resend and the row is adopted instead of stored twice.
+      await sendMessageRef.current?.(trimmed, {
+        ...(isServerId(messageId) ? { reuseUserMessageId: messageId } : {}),
+      });
+    },
+    [updateMessages]
+  );
+
+  /**
+   * Regenerate an assistant reply.
+   *
+   * The backend deletes the stale reply and returns the user prompt that
+   * produced it, so the re-run is driven by the *stored* text rather than the
+   * client's copy of it — which is what makes a regenerate after a reload work
+   * at all. The prompt is removed from the list before resending so the resend
+   * does not duplicate the user bubble.
+   */
+  const regenerateMessage = useCallback(
+    async (messageId: string) => {
+      const conversationId = optionsRef.current.conversationId;
+      if (!conversationId) return;
+      if (!isServerId(messageId)) {
+        // A live (unpersisted) reply: fall back to the local-only reload, which
+        // re-asks the last user turn.
+        await reload();
+        return;
+      }
+      setError(null);
+      let prompt = "";
+      let promptId: string | undefined;
+      try {
+        const result = await apiRegenerateMessage(conversationId, messageId);
+        prompt = result.prompt;
+        // The endpoint returns the stored prompt's id along with its text, so
+        // the resend can adopt that row. Without it the route appended a second
+        // copy of the question -- the duplicate measured live.
+        promptId = result.user_message_id || undefined;
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error("Regenerate failed"));
+        throw err;
+      }
+      if (!prompt) return;
+      // Drop the ask *and* the stale reply it produced. The backend removed the
+      // reply; removing the preceding user turn here lets `sendMessage` append a
+      // clean one, so the transcript ends with exactly one prompt and one answer.
+      const msgs = messagesRef.current;
+      const idx = msgs.findIndex((m) => m.id === messageId);
+      updateMessages(() => {
+        if (idx === -1) return msgs;
+        let cut = idx;
+        // Walk back to the user turn that prompted this reply.
+        while (cut > 0 && msgs[cut - 1].role !== "user") cut -= 1;
+        const userIdx = msgs[cut - 1]?.role === "user" ? cut - 1 : idx;
+        return msgs.slice(0, userIdx);
+      });
+      await sendMessageRef.current?.(prompt, {
+        ...(promptId ? { reuseUserMessageId: promptId } : {}),
+      });
+    },
+    [updateMessages, reload]
+  );
+
+  /**
+   * Branch from a message: fork the conversation up to and including it.
+   *
+   * The fork is a *new* conversation; the callback hands its id back so the page
+   * can select it. Returns the new conversation id, or null if there was nothing
+   * to branch.
+   */
+  /**
+   * Branch from a specific message.
+   *
+   * Returns the whole forked `Conversation`, not just its id, because the
+   * caller has to seed the conversation list with it. Setting only the active
+   * id left the fork *absent* from the list the auto-titler reads, and absence
+   * looked identical to "untitled" — so the title the backend built
+   * (`"<parent> (Branch: …)"`) was immediately overwritten with the first user
+   * message, and every branch came out mis-named.
+   */
+  const branchFromMessage = useCallback(async (messageId: string) => {
+    const conversationId = optionsRef.current.conversationId;
+    if (!conversationId) return null;
+    setError(null);
+    try {
+      return await forkConversation(
+        conversationId,
+        isServerId(messageId) ? messageId : null
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error("Branch failed"));
+      throw err;
+    }
+  }, []);
 
   // Extract typed annotations from messages
   const getAnnotations = useCallback(
@@ -926,6 +1254,12 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     [updateMessages, rejoinRun]
   );
 
+  // Publish the stable instance for the earlier-declared message actions, which
+  // cannot close over it directly (see `hydrateThenRejoinRef`).
+  useEffect(() => {
+    hydrateThenRejoinRef.current = hydrateThenRejoin;
+  }, [hydrateThenRejoin]);
+
   useEffect(() => {
     const conversationId = optionsRef.current.conversationId;
     if (!conversationId) return;
@@ -1098,6 +1432,10 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     clearMessages,
     stop,
     reload,
+    removeMessage,
+    editAndResend,
+    regenerateMessage,
+    branchFromMessage,
     pendingHITL,
     resolveHITL,
     turnVerdict,

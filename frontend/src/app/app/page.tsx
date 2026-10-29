@@ -18,6 +18,7 @@ import PlanHistory from "@/components/PlanHistory";
 import SavedArtifacts from "@/components/SavedArtifacts";
 import { CitationInspector } from "@/components/CitationInspector";
 import { AuthModal } from "@/components/AuthModal";
+import { toast } from "sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import {
   createConversation,
@@ -33,6 +34,8 @@ import {
   deleteArtifact,
   fetchArtifact,
   addArtifactVersion,
+  createShareLink,
+  revokeShareLinks,
   PlanItem as APIPlanItem,
   Conversation,
   CurrentUser,
@@ -186,6 +189,11 @@ function AppPageInner() {
 
   // Plan mode state (draft → review → approved execution)
   const [pendingPlan, setPendingPlan] = useState<PlanReviewItem | null>(null);
+  // Bumped on "New conversation" and passed as ChatInput's `key`: the composer's
+  // mode toggles (Web/Code/Plan) live in its own state, so without a remount a
+  // toggle lit for the previous conversation stayed lit here while quietly
+  // shaping -- or being overridden in -- the next one.
+  const [composerEpoch, setComposerEpoch] = useState(0);
   const [pendingPlanTask, setPendingPlanTask] = useState("");
   const [planBusy, setPlanBusy] = useState(false);
   // Every plan drafted for the active conversation, newest first. Distinct from
@@ -334,6 +342,9 @@ function AppPageInner() {
   }, [activeConversationId]);
 
   const handleNewChat = useCallback(() => {
+    // Fresh conversation = fresh composer intent; never carry Web/Code/Plan
+    // toggles over from the conversation the user just left.
+    setComposerEpoch((n) => n + 1);
     createConversation({
       title: "New Chat",
       model: currentModel,
@@ -434,6 +445,41 @@ function AppPageInner() {
 
   const autoTitleDoneRef = useRef<Set<string>>(new Set());
 
+  const handleShareConversation = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      // Create a fresh read-only link and put it on the clipboard in one click;
+      // revocation lives on the same toast so a link handed out by mistake can
+      // be pulled back without leaving the conversation.
+      const link = await createShareLink(id);
+      try {
+        await navigator.clipboard.writeText(link.url);
+      } catch {
+        // Clipboard access can be denied; the link still exists, so the toast
+        // below still tells the user where it is.
+      }
+      toast.success("Share link copied", {
+        description: link.expires_at
+          ? `Read-only, expires ${new Date(link.expires_at).toLocaleString()}`
+          : "Read-only — anyone with the link can view this conversation",
+        action: {
+          label: "Revoke",
+          onClick: () => {
+            void revokeShareLinks(id)
+              .then(() => toast.success("Share link revoked"))
+              .catch((err) =>
+                toast.error(
+                  err instanceof Error ? err.message : "Could not revoke the link",
+                ),
+              );
+          },
+        },
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not share conversation");
+    }
+  };
+
   const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -478,9 +524,17 @@ function AppPageInner() {
   useEffect(() => {
     if (!activeConversationId || chat.isLoading || !chat.messages || chat.messages.length < 2) return;
     if (autoTitleDoneRef.current.has(activeConversationId)) return;
-    const currentTitle = conversations.find((c) => c.id === activeConversationId)?.title;
+    const known = conversations.find((c) => c.id === activeConversationId);
+    // A conversation we cannot find is *unknown*, not untitled. Treating the
+    // two the same renamed anything whose row had not reached this list yet —
+    // a freshly branched fork, whose server-assigned `"(Branch: …)"` title was
+    // replaced by its first user message. Every path that creates a
+    // conversation for the first time (`handleNewChat`, `onConversationCreated`,
+    // `handleBranchMessage`) inserts it into this list before selecting it, so
+    // a miss here means "not loaded yet" and the correct action is to wait.
+    if (!known) return;
     const looksDefault =
-      !currentTitle || currentTitle === "New Chat" || currentTitle === "New Conversation" || currentTitle === "Untitled";
+      !known.title || known.title === "New Chat" || known.title === "New Conversation" || known.title === "Untitled";
     if (!looksDefault) {
       autoTitleDoneRef.current.add(activeConversationId);
       return;
@@ -516,6 +570,70 @@ function AppPageInner() {
 
   const handleStop = () => {
     chat.stop();
+  };
+
+  /**
+   * Branch from a specific message.
+   *
+   * Distinct from `handleForkConversation` (which forks at the transcript's
+   * *end*, from the overflow menu): here the user points at the turn they want
+   * to branch from, so the id is passed through explicitly. Branching is a
+   * non-destructive action — it creates a new conversation and leaves this one
+   * untouched — so there is nothing to confirm.
+   *
+   * The fork is inserted into the list *before* it becomes active, exactly like
+   * `handleNewChat` and `onConversationCreated`. That is not cosmetic: the
+   * auto-titler renames the active conversation when it cannot find a title for
+   * it, and a fork the list has never heard of was therefore renamed to its
+   * first user message — replacing the backend's `"(Branch: …)"` title. Only
+   * invalidating the query is too late; the refetch has not landed when the
+   * titler runs.
+   */
+  const handleBranchMessage = async (messageId: string) => {
+    try {
+      const forked = await chat.branchFromMessage(messageId);
+      if (!forked) return;
+      queryClient.setQueryData<Conversation[]>(conversationKeys.all, (prev) => {
+        if (prev?.some((c) => c.id === forked.id)) return prev;
+        return [forked, ...(prev ?? [])];
+      });
+      setActiveConversationId(forked.id);
+      void queryClient.invalidateQueries({ queryKey: conversationKeys.all });
+    } catch {
+      // `branchFromMessage` already recorded the error on the hook, which the
+      // composer surfaces; swallowing here avoids an unhandled rejection.
+    }
+  };
+
+  const handleDeleteMessage = async (messageId: string) => {
+    try {
+      await chat.removeMessage(messageId);
+      // Deleting a turn rewrites the persisted transcript, so any cached
+      // history for this conversation is stale; the hook has already re-read it
+      // into the live list, and this keeps the sidebar's preview/last-message
+      // in step too.
+      void queryClient.invalidateQueries({ queryKey: conversationKeys.all });
+    } catch {
+      // Error already surfaced by the hook.
+    }
+  };
+
+  const handleEditMessage = async (messageId: string, content: string) => {
+    try {
+      await chat.editAndResend(messageId, content);
+      void queryClient.invalidateQueries({ queryKey: conversationKeys.all });
+    } catch {
+      // Error already surfaced by the hook.
+    }
+  };
+
+  const handleRegenerateMessage = async (messageId: string) => {
+    try {
+      await chat.regenerateMessage(messageId);
+      void queryClient.invalidateQueries({ queryKey: conversationKeys.all });
+    } catch {
+      // Error already surfaced by the hook.
+    }
   };
 
   const handleDraftPlan = async (convId: string, content: string) => {
@@ -794,6 +912,7 @@ function AppPageInner() {
         onNewChat={handleNewChat}
         onDeleteConversation={handleDeleteConversation}
         onForkConversation={handleForkConversation}
+        onShareConversation={handleShareConversation}
         onRenameConversation={handleRenameConversation}
         onPinConversation={handlePinConversation}
         activeTab={effectiveTab}
@@ -863,6 +982,10 @@ function AppPageInner() {
                   onFeedback={handleFeedback}
                   onOpenArtifact={handleOpenArtifact}
                   onSelectCitation={setActiveCitation}
+                  onDeleteMessage={handleDeleteMessage}
+                  onEditMessage={handleEditMessage}
+                  onRegenerate={handleRegenerateMessage}
+                  onBranch={handleBranchMessage}
                   onSaveArtifact={handleSaveArtifact}
                   pendingPlan={pendingPlan}
                   onApprovePlan={handleApprovePlan}
@@ -874,6 +997,7 @@ function AppPageInner() {
               <SavedArtifacts artifacts={allArtifacts} onOpen={handleOpenArtifact} />
               <PlanHistory plans={planHistory} />
               <ChatInput
+                key={composerEpoch}
                 onSendMessage={handleSendMessage}
                 isLoading={chat.isLoading}
                 onStop={handleStop}

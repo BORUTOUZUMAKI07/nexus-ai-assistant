@@ -55,26 +55,43 @@ describe("ChatInput", () => {
     })
   })
 
-  it("includes enabled web/code toggles in the options", () => {
+  it("keeps Web, Code and Plan mutually exclusive in the sent options", () => {
+    // The composer used to light both Web and Code, while
+    // `resolveConversationMode` silently picked one (Code). The user saw "Web"
+    // on a run the backend recorded as `code`. Exclusivity is the contract now:
+    // turning one on clears the others, and that is what travels in `options`.
     render(<ChatInput onSendMessage={onSendMessage} isLoading={false} />)
-    fireEvent.click(screen.getByTitle("Live web search"))
-    fireEvent.click(screen.getByTitle("Code interpreter sandbox"))
-
     const textarea = screen.getByPlaceholderText(
       "Ask Nexus anything, write code, search live web..."
     )
-    fireEvent.change(textarea, { target: { value: "Research this" } })
-    fireEvent.click(screen.getByTitle("Send message (Enter)"))
+    const send = (value: string) => {
+      fireEvent.change(textarea, { target: { value } })
+      fireEvent.click(screen.getByTitle("Send message (Enter)"))
+    }
 
-    expect(onSendMessage).toHaveBeenCalledWith("Research this", {
-      enableWeb: true,
-      enableCode: true,
-      attachments: [],
-      agentMode: "deep",
-      imageDataUrl: undefined,
-      planMode: false,
-      generateImage: false,
-    })
+    fireEvent.click(screen.getByTitle("Live web search"))
+    send("Research this")
+    expect(onSendMessage).toHaveBeenLastCalledWith(
+      "Research this",
+      expect.objectContaining({ enableWeb: true, enableCode: false, planMode: false })
+    )
+
+    // Turning Code on clears Web rather than joining it.
+    fireEvent.click(screen.getByTitle("Code interpreter sandbox"))
+    send("Write a function")
+    expect(onSendMessage).toHaveBeenLastCalledWith(
+      "Write a function",
+      expect.objectContaining({ enableWeb: false, enableCode: true, planMode: false })
+    )
+
+    // Plan clears both: page.tsx short-circuits to plan drafting before the
+    // mode is even resolved, so a lit Web/Code would have been a lie.
+    fireEvent.click(screen.getByTitle("Plan mode OFF: respond directly"))
+    send("Draft a rollout plan")
+    expect(onSendMessage).toHaveBeenLastCalledWith(
+      "Draft a rollout plan",
+      expect.objectContaining({ enableWeb: false, enableCode: false, planMode: true })
+    )
   })
 
   it("passes planMode true when the Plan toggle is enabled", () => {

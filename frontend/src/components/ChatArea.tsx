@@ -28,6 +28,8 @@ import {
   ListChecks,
   Save,
   Scale,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { ArtifactItem } from "./ArtifactCanvas";
 import { NexusMark } from "./NexusMark";
@@ -109,6 +111,14 @@ export interface ChatAreaProps {
   onOpenArtifact?: (artifact: ArtifactItem) => void;
   onSaveArtifact?: (artifact: ArtifactItem) => void | Promise<void>;
   onSelectCitation?: (citation: CitationItem) => void;
+  /** Delete a turn (its descendants go with it, server-side). */
+  onDeleteMessage?: (messageId: string) => void | Promise<void>;
+  /** Edit and resend a user turn (time-travel: later turns are discarded). */
+  onEditMessage?: (messageId: string, content: string) => void | Promise<void>;
+  /** Ask for a fresh answer to the same prompt. */
+  onRegenerate?: (messageId: string) => void | Promise<void>;
+  /** Fork the conversation up to and including this message. */
+  onBranch?: (messageId: string) => void | Promise<unknown>;
   /** Pending Plan mode draft awaiting human approval */
   pendingPlan?: PlanReviewItem | null;
   onApprovePlan?: (plan: PlanReviewItem) => void | Promise<void>;
@@ -460,7 +470,11 @@ const TableBlock: React.FC<{ rows: string[][] }> = ({ rows }) => {
   );
 };
 
-const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
+/**
+ * Shared with `app/share/[token]` so a public share link renders the same way
+ * the app does instead of as raw markdown.
+ */
+export const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
   // Regex to split on code fences
   const parts = content.split(/(```[\w-]*\n[\s\S]*?```)/g);
 
@@ -681,6 +695,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onOpenArtifact,
   onSaveArtifact,
   onSelectCitation,
+  onDeleteMessage,
+  onEditMessage,
+  onRegenerate,
+  onBranch,
   pendingPlan,
   onApprovePlan,
   onRejectPlan,
@@ -703,6 +721,55 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   // with the reply the user actually asked for. It is there for the case where
   // the evidence gate failed and nothing else in the UI says so.
   const [verdictOpen, setVerdictOpen] = useState(false);
+
+  // ── Message actions ──────────────────────────────────────────────────────
+  /** Id of the user message currently being edited inline, or null. */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  /** Working copy of the text being edited. Separate from the message list so
+   *  an in-flight stream patch cannot overwrite what the user is typing. */
+  const [editingText, setEditingText] = useState("");
+  /** Id of a message whose action (delete/regenerate) is in flight, so its
+   *  buttons disable and read as busy instead of the click appearing to do
+   *  nothing. */
+  const [actingId, setActingId] = useState<string | null>(null);
+
+  const beginEdit = (msg: MessageItem) => {
+    setEditingId(msg.id);
+    setEditingText(msg.content);
+  };
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditingText("");
+  };
+  const submitEdit = async () => {
+    if (!editingId || !onEditMessage) return;
+    const text = editingText.trim();
+    if (!text) return;
+    const id = editingId;
+    // Close the editor *before* the await: the resend replaces this turn's
+    // message list, and leaving the editor open against a row that is about to
+    // be swapped out would edit a detached node.
+    cancelEdit();
+    setActingId(id);
+    try {
+      await onEditMessage(id, text);
+    } finally {
+      setActingId(null);
+    }
+  };
+
+  const runAction = async (
+    id: string,
+    fn?: (id: string) => void | Promise<unknown>
+  ) => {
+    if (!fn) return;
+    setActingId(id);
+    try {
+      await fn(id);
+    } finally {
+      setActingId(null);
+    }
+  };
 
   // Auto-scroll. Without this the transcript never follows a streamed answer:
   // tokens arrive one delta at a time, so the user had to scroll manually to
@@ -1058,7 +1125,50 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   />
                 )}
                 {isUser ? (
-                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                  editingId === msg.id ? (
+                    // Inline editor. Enter submits, Shift+Enter breaks the line,
+                    // Escape abandons — the same feel as the composer, so the
+                    // edit does not require a second interaction model.
+                    <div className="space-y-2">
+                      <textarea
+                        value={editingText}
+                        autoFocus
+                        onChange={(e) => setEditingText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            void submitEdit();
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            cancelEdit();
+                          }
+                        }}
+                        aria-label="Edit message"
+                        className="w-full resize-none rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                        rows={Math.min(8, editingText.split("\n").length + 1)}
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => void submitEdit()}
+                          disabled={!editingText.trim() || actingId === msg.id}
+                          className="text-xs font-semibold px-2.5 py-1 rounded-md bg-[var(--accent-soft)] text-[var(--accent-ink)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)] transition-all disabled:opacity-50"
+                        >
+                          {actingId === msg.id ? "Sending…" : "Save & resend"}
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          className="text-xs px-2.5 py-1 rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <span className="text-[10px] text-[var(--text-faint)]">
+                          Later turns will be discarded
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                  )
                 ) : (
                   <>
                     <MarkdownRenderer content={msg.content} />
@@ -1251,6 +1361,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </button>
                     </>
                   )}
+                  {onRegenerate && (
+                    <button
+                      onClick={() => void runAction(msg.id, onRegenerate)}
+                      disabled={actingId === msg.id}
+                      className="hover:text-[var(--accent-ink)] p-1 rounded transition-colors disabled:opacity-50"
+                      title="Regenerate answer"
+                    >
+                      <RotateCw
+                        className={`w-3.5 h-3.5 ${actingId === msg.id ? "animate-spin" : ""}`}
+                      />
+                    </button>
+                  )}
+                  {onBranch && (
+                    <button
+                      onClick={() => void runAction(msg.id, onBranch)}
+                      disabled={actingId === msg.id}
+                      className="hover:text-[var(--accent-ink)] p-1 rounded transition-colors disabled:opacity-50"
+                      title="Branch conversation from here"
+                    >
+                      <GitBranch className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   {msg.model && (
                     <span
                       className="text-[10px] text-[var(--text-faint)] font-mono ml-auto"
@@ -1259,6 +1391,51 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       {modelDisplayName(msg.model)}
                     </span>
                   )}
+                </div>
+              )}
+              {/* User message toolbar — Edit / Branch / Delete. Mirrors the
+                  assistant footer: hover-only, so it never competes with the
+                  message text. Editing a user turn is a *time-travel* action
+                  (the turns it produced are discarded), which is why it is
+                  labelled "edit & resend" rather than presented as a plain
+                  typo fix. */}
+              {isUser && (onEditMessage || onDeleteMessage || onBranch) && (
+                <div className="flex items-center gap-1.5 text-[var(--text-muted)] text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-150 px-0.5">
+                  {onEditMessage && editingId !== msg.id && (
+                    <button
+                      onClick={() => beginEdit(msg)}
+                      className="hover:text-[var(--text-primary)] p-1 rounded transition-colors"
+                      title="Edit & resend (discards later turns)"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {onBranch && (
+                    <button
+                      onClick={() => void runAction(msg.id, onBranch)}
+                      disabled={actingId === msg.id}
+                      className="hover:text-[var(--accent-ink)] p-1 rounded transition-colors disabled:opacity-50"
+                      title="Branch conversation from here"
+                    >
+                      <GitBranch className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {onDeleteMessage && (
+                    <button
+                      onClick={() => void runAction(msg.id, onDeleteMessage)}
+                      disabled={actingId === msg.id}
+                      className="hover:text-[var(--status-danger)] p-1 rounded transition-colors disabled:opacity-50"
+                      title="Delete message (and the turns after it)"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <span
+                    className="text-[10px] text-[var(--text-faint)] font-mono"
+                    title="Sent by you"
+                  >
+                    you
+                  </span>
                 </div>
               )}
             </div>
@@ -1272,7 +1449,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         );
       })}
-
       {/* Critic verdict / evidence score — below the transcript, because it is
           metadata *about* the answer, not a header that precedes it. It used to
           render above every message, which read as if it introduced the user's
@@ -1295,19 +1471,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 : "Answer passed review on first draft"}
             </span>
             <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wide">
-              <ScorePill score={turnVerdict.evidence_score} />
               {/* Three states, not two. `null` is the backend not reporting the
                   gate at all, which is not the same as it passing, and
                   rendering it as a green "passed" would be a claim nobody made. */}
-              {turnVerdict.evidence_gate_passed === false ? (
-                <span className="px-2 py-0.5 rounded bg-[var(--status-warning)]/10 text-[var(--status-warning)] border border-[var(--status-warning)]/30">
-                  Low evidence
-                </span>
-              ) : turnVerdict.evidence_gate_passed === true ? (
-                <span className="px-2 py-0.5 rounded bg-[var(--status-success)]/10 text-[var(--status-success)] border border-[var(--status-success)]/30">
-                  Evidence gate passed
-                </span>
-              ) : null}
+              {turnVerdict.evidence_gate_passed !== null && (
+                <>
+                  <ScorePill score={turnVerdict.evidence_score} />
+                  {turnVerdict.evidence_gate_passed === false ? (
+                    <span className="px-2 py-0.5 rounded bg-[var(--status-warning)]/10 text-[var(--status-warning)] border border-[var(--status-warning)]/30">
+                      Low evidence
+                    </span>
+                  ) : turnVerdict.evidence_gate_passed === true ? (
+                    <span className="px-2 py-0.5 rounded bg-[var(--status-success)]/10 text-[var(--status-success)] border border-[var(--status-success)]/30">
+                      Evidence gate passed
+                    </span>
+                  ) : null}
+                </>
+              )}
               <ChevronDown
                 className={`w-3.5 h-3.5 text-[var(--text-muted)] transition-transform ${verdictOpen ? "rotate-180" : ""}`}
               />

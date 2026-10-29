@@ -243,14 +243,17 @@ describe("previously unmocked endpoints", () => {
     const forked = await forkConversation("conv-100", "msg-2", "Branch A")
 
     expect(forked.id).not.toBe("conv-100")
-    // The backend names the branch from the request, not a fixed fixture, so a
-    // test can tell a real response from a canned one.
-    expect(forked.title).toBe("Branch A")
+    // The backend titles a fork `"<parent> (Branch: <name>)"`, so the name from
+    // the request appears inside a derived title — not on its own. The mock
+    // used to return the bare name, which let a page-level defect hide: the
+    // auto-titler would have replaced the real title with the first message,
+    // and a bare-name assertion could not tell the two apart.
+    expect(forked.title).toBe("Project kickoff (Branch: Branch A)")
   })
 
   it("forks with a default branch name when none is given", async () => {
     const forked = await forkConversation("conv-100", "msg-2")
-    expect(forked.title).toBe("Forked Branch")
+    expect(forked.title).toBe("Project kickoff (Branch: Forked Branch)")
   })
 
   it("omits a client-side fork point so the backend forks at the latest message", async () => {

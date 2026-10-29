@@ -31,6 +31,7 @@ import {
   mergeAPIKey,
 } from "@/lib/queries";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
+import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 import { MODELS, modelDisplayName } from "@/lib/models";
 
 export const SettingsView: React.FC = () => {
@@ -427,6 +428,9 @@ export const SettingsView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Organizations + webhooks — the API surface with a UI at last */}
+      <IntegrationsSettings />
 
       {/* Persistent memories */}
       <div className="glass-panel p-6 space-y-4">

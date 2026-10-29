@@ -34,7 +34,10 @@ const csp = [
   "base-uri 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
-  "upgrade-insecure-requests",
+  // upgrade-insecure-requests omitted: it forces https:// for all subresources
+  // including Next's own `?_rsc` fetches; over plain-http dev/prod-preview this
+  // breaks the streaming RSC request and leaves the page stuck on the Suspense
+  // shell. HSTS provides the real protection in HTTPS deployments.
 ].join("; ");
 
 /**

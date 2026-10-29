@@ -638,7 +638,18 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
 
             {/* Web Search Toggle */}
             <button
-              onClick={() => setEnableWeb(!enableWeb)}
+              onClick={() => {
+                const next = !enableWeb;
+                setEnableWeb(next);
+                // Exclusive modes. Two lit toggles where only one can win left
+                // "Web" looking active on a run the backend recorded as `code` --
+                // the user cannot see resolveConversationMode's priority, so the
+                // composer must not offer a combination it will silently override.
+                if (next) {
+                  setEnableCode(false);
+                  setPlanMode(false);
+                }
+              }}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                 enableWeb
                   ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
@@ -652,7 +663,14 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
 
             {/* Python Sandbox Toggle */}
             <button
-              onClick={() => setEnableCode(!enableCode)}
+              onClick={() => {
+                const next = !enableCode;
+                setEnableCode(next);
+                if (next) {
+                  setEnableWeb(false);
+                  setPlanMode(false);
+                }
+              }}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                 enableCode
                   ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
@@ -666,7 +684,14 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
 
             {/* Plan Mode Toggle */}
             <button
-              onClick={() => setPlanMode(!planMode)}
+              onClick={() => {
+                const next = !planMode;
+                setPlanMode(next);
+                if (next) {
+                  setEnableWeb(false);
+                  setEnableCode(false);
+                }
+              }}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                 planMode
                   ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"

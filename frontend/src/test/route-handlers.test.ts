@@ -216,6 +216,10 @@ const EXCEPTIONS: Record<string, { backendPath?: string; directFetch?: boolean }
   // Image generation can outrun the shared helper's 30s JSON ceiling (the
   // backend's own provider timeout is 60s), so it fetches directly.
   "/api/images/generate": { directFetch: true },
+  // Share links are keyed by conversation on the backend (POST /shares/{id})
+  // while the BFF path reads like the resource it belongs to. The backend
+  // path is the truth here, not the derived one.
+  "/api/conversations/[id]/share": { backendPath: "/shares/test-id" },
 }
 
 /** True when the route is expected to bypass the proxy helpers. */
@@ -666,6 +670,64 @@ describe("the chat relay speaks the backend's field names, not the hook's", () =
     expect(body.plan_preamble).toBe("APPROVED PLAN - execute: 1. Do X")
     // The exact key the backend rejects must not be sent.
     expect(body).not.toHaveProperty("planPreamble")
+  })
+
+  it("forwards the reused user-row id as reuse_user_message_id", async () => {
+    // Same seam, different field, and the same consequence if it is dropped: the
+    // stream route would append a second copy of the question the client is
+    // re-asking (regenerate / edit-and-resend stored the turn twice).
+    const file = ROUTES.find((r) => r.route === "/api/chat")?.file
+    const mod = await loadRoute(file!)
+
+    const direct = captureDirectFetch()
+    try {
+      await mod.POST!(
+        nextRequest("/api/chat", "", {
+          messages: [{ role: "user", content: "ask again" }],
+          conversationId: "80604eba-a54f-498c-838a-a3e624816e5f",
+          reuseUserMessageId: "22222222-2222-4222-8222-222222222222",
+        }),
+        routeContext("/api/chat"),
+      )
+    } finally {
+      direct.restore()
+    }
+
+    expect(direct.seen).toHaveLength(1)
+    const body = JSON.parse(String(direct.seen[0].init.body)) as Record<string, unknown>
+    expect(body.reuse_user_message_id).toBe(
+      "22222222-2222-4222-8222-222222222222"
+    )
+    expect(body).not.toHaveProperty("reuseUserMessageId")
+  })
+
+  it("rejects a malformed reuse id before it reaches the backend", async () => {
+    // StreamChatRequest is `extra="forbid"` with a UUID field, so a bad value
+    // would be a 422 from the backend. Failing here names the culprit and keeps
+    // the request off the wire.
+    const file = ROUTES.find((r) => r.route === "/api/chat")?.file
+    const mod = await loadRoute(file!)
+
+    const direct = captureDirectFetch()
+    let res: Response;
+    try {
+      res = await mod.POST!(
+        nextRequest("/api/chat", "", {
+          messages: [{ role: "user", content: "ask again" }],
+          conversationId: "80604eba-a54f-498c-838a-a3e624816e5f",
+          reuseUserMessageId: "not-a-uuid",
+        }),
+        routeContext("/api/chat"),
+      )
+    } finally {
+      direct.restore()
+    }
+
+    expect(res!.status).toBe(400)
+    await expect(res!.json()).resolves.toEqual({
+      detail: "invalid_reuse_user_message_id",
+    })
+    expect(direct.seen).toHaveLength(0)
   })
 })
 
