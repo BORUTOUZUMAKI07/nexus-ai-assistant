@@ -203,12 +203,32 @@ function AppPageInner() {
   // entirely. Sourced from the plans query below.
 
   const handleOpenArtifact = (artifact: ArtifactItem) => {
-    setActiveArtifact(artifact);
+    // A reply's artifact card carries the artifact as *extracted* from the answer
+    // text, which has no server id. After the user saves it, that card still
+    // holds the transient copy — so opening from the card produced a canvas with
+    // no version, no history and no Edit button, even though the document was
+    // persisted a second earlier. Prefer the saved row when it describes the same
+    // document.
+    const persistedTwin =
+      artifact.version === undefined
+        ? allArtifacts.find(
+            (a) =>
+              a.version !== undefined &&
+              a.content === artifact.content &&
+              a.title === artifact.title &&
+              a.language === artifact.language
+          )
+        : undefined;
+    const opened = persistedTwin
+      ? { ...persistedTwin, isActiveVersion: true }
+      : artifact;
+
+    setActiveArtifact(opened);
     // Add to the session list if it is not already there. A saved artifact is
     // already in the query cache and shows through the merge, so a duplicate
     // here is harmless — the merge dedupes by id, saved first.
     setSessionArtifacts((prev) =>
-      prev.some((a) => a.id === artifact.id) ? prev : [...prev, artifact]
+      prev.some((a) => a.id === opened.id) ? prev : [...prev, opened]
     );
   };
 
