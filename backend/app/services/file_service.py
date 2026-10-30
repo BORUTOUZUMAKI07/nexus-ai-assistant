@@ -84,8 +84,8 @@ class FileService:
     ) -> File:
         """
         Steps 1-2 of the lifecycle only: persist raw bytes to cloud storage and
-        create the DB record (status='pending'). The caller decides whether to
-        ingest synchronously (ingest_bytes) or hand the row to the Celery worker.
+        create the DB record (status='pending'). The router then calls
+        ``ingest_bytes`` on the same request — there is no queue.
         """
         repo = FileRepository(session)
         file_ext = Path(filename).suffix.lower()

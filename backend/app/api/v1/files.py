@@ -7,7 +7,6 @@ from uuid import UUID
 
 import structlog
 from backend.app.api.deps import (
-    get_current_org_id,
     get_current_user,
     get_db,
     get_file_service,
@@ -27,7 +26,7 @@ from backend.app.domain.user.models import User
 from backend.app.infrastructure.resilience.rate_limit import rate_limit
 from backend.app.services.file_service import FileService
 from backend.app.services.rag_service import RAGService
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi import File as FastAPIFile
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -40,19 +39,17 @@ async def upload_file(
     file: UploadFile = FastAPIFile(...),
     conversation_id: UUID | None = None,
     current_user: User = Depends(get_current_user),
-    current_org_id: UUID | None = Depends(get_current_org_id),
     session: AsyncSession = Depends(get_db),
     file_svc: FileService = Depends(get_file_service),
-    response: Response = None,  # type: ignore[assignment]  # noqa: F821
     _idem_key: None = require_idempotency_key("file.upload"),
     _rl: None = rate_limit("file.upload", limit=30, window_seconds=60, org_scope=True),
 ):
-    """Upload a file to cloud storage, then chunk and index it for RAG.
+    """Upload a file to cloud storage, then chunk and index it for RAG inline.
 
-    With ASYNC_INDEXING=true the row is handed to the Celery worker
-    (process_file_indexing_task) and answered 202 Accepted with a ``Location``
-    header pointing at ``GET /files/{id}/index-status`` (202-async job pattern);
-    otherwise it is ingested synchronously and answered 201.
+    Answered 201 only when the document is indexed and searchable. There is no
+    queue: a background consumer needs an always-on worker process, which the
+    free deployment target does not provide, so the work stays on this request.
+    ``GET /files/{id}/index-status`` remains for polling a row after a failure.
     """
     filename = file.filename or "uploaded_document"
     # Enforce an upload size ceiling BEFORE buffering the whole body into
@@ -92,35 +89,6 @@ async def upload_file(
             session=session,
             conversation_id=conversation_id,
         )
-
-        # Async route: dispatch to the Celery worker through the EventPublisher
-        # seam (with sync fallback if the dispatch fails or the broker is
-        # unreachable). Sync route: ingest now.
-        if settings.ASYNC_INDEXING:
-            from backend.app.infrastructure.events import get_event_publisher
-            from backend.app.infrastructure.events.base import DomainEvent
-
-            dispatched = await get_event_publisher().publish(
-                DomainEvent(
-                    event_type="file.index_requested",
-                    aggregate_id=str(db_file.id),
-                    user_id=current_user.id,
-                    org_id=str(current_org_id) if current_org_id else None,
-                    payload={
-                        "file_id": str(db_file.id),
-                        "filename": filename,
-                        "conversation_id": str(conversation_id) if conversation_id else None,
-                    },
-                )
-            )
-            if dispatched:
-                logger.info("file_indexing_dispatched_to_worker", file_id=str(db_file.id))
-                # 202 Accepted + Location: the job is queued, poll the index-status
-                # endpoint (202-async job pattern).
-                response.status_code = status.HTTP_202_ACCEPTED
-                response.headers["Location"] = f"{settings.API_V1_PREFIX}/files/{db_file.id}/index-status"
-                return db_file
-            logger.warning("async_indexing_dispatch_failed_falling_back_to_sync", file_id=str(db_file.id))
 
         return await file_svc.ingest_bytes(
             db_file_id=db_file.id,

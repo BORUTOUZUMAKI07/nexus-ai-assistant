@@ -3,7 +3,7 @@
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 # Usage: make <target>  (e.g. make dev)
 
-.PHONY: help infra dev backend frontend worker migrate test lint clean check e2e check-arch clean-check verify-feature vcr harness-audit init
+.PHONY: help infra dev backend frontend migrate test lint clean check e2e check-arch clean-check verify-feature vcr harness-audit init
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 PYTHON     := python
@@ -54,15 +54,6 @@ UVICORN_LOOP := --loop backend.app.infrastructure.common.event_loop:event_loop_f
 
 backend: ## Start FastAPI backend (hot reload)
 	cd backend && $(UV) run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 $(UVICORN_LOOP)
-
-worker: ## Start Celery worker
-	cd backend && $(UV) run celery -A app.worker.celery_app worker --loglevel=info --concurrency=4
-
-worker-beat: ## Start Celery beat (scheduled tasks)
-	cd backend && $(UV) run celery -A app.worker.celery_app beat --loglevel=info
-
-flower: ## Start Flower (Celery monitoring dashboard) at http://localhost:5555
-	cd backend && $(UV) run celery -A app.worker.celery_app flower --port=5555
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
 frontend: ## Start Next.js frontend dev server

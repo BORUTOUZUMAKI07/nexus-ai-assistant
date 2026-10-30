@@ -6,7 +6,6 @@ Tests for wiring of the previously-dead service modules:
   - Structured-output routing with raw fallback (orchestrator node)
   - Critic subagent self-refinement loop in the synthesizer node
   - static-context prompt caching in the prompt compiler
-  - Celery file-indexing task dispatch config
   - Admin evaluation router handlers
 """
 import uuid
@@ -341,19 +340,6 @@ async def test_prompt_compiler_static_context_skips_caching_for_dynamic_inputs(m
         custom_instructions=None, user_memories=[MagicMock()], retrieved_context="[1] File data"
     )
     assert isinstance(result, str)
-
-
-# ─── 7. Celery File-Indexing Dispatch Config ──────────────────────────────────
-
-
-def test_async_indexing_flag_defaults_off():
-    assert settings.ASYNC_INDEXING is False
-
-
-def test_process_file_indexing_task_resolves():
-    from backend.app.worker.tasks import process_file_indexing_task
-
-    assert process_file_indexing_task.name == "tasks.process_file_indexing"
 
 
 # ─── 8. Admin Evaluation Router Handlers ──────────────────────────────────────

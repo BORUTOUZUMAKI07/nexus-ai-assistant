@@ -33,10 +33,9 @@ dependencies = [
     # first import with `ModuleNotFoundError: No module named 'greenlet'`.
     "greenlet>=3.0.0",
     
-    # Caching & Background Queues
+    # Caching (also the rate-limit and idempotency store). No queue: there is no
+    # broker, worker or dashboard, because uploads index inline.
     "redis>=5.0.0",
-    "celery>=5.3.0",
-    "flower>=2.0.0",
     
     # Authentication & Security
     # PyJWT, not python-jose. python-jose 3.5.0 is the terminal release and

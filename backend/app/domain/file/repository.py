@@ -1,13 +1,12 @@
 """
 Repository for File and Chunk domain operations.
 """
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 from backend.app.domain.base_repository import BaseRepository
 from backend.app.domain.file.models import File, FileChunk, FileMetadata
-from sqlalchemy import and_, or_
-from sqlmodel import delete, select, update
+from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 
@@ -56,37 +55,6 @@ class FileRepository(BaseRepository[File]):
         await self.session.commit()
         await self.session.refresh(db_file)
         return db_file
-
-    async def claim_indexing(self, file_id: UUID, *, stale_after_seconds: int = 600) -> bool:
-        """Atomically claim a pending/failed file so duplicate Celery deliveries don't race.
-
-        Also reclaims a ``processing`` row whose ``updated_at`` is older than
-        ``stale_after_seconds``. Celery's hard ``task_time_limit`` SIGKILLs a
-        stuck worker (``celery_app.py``), and a SIGKILL cannot write a terminal
-        status, so without the stale reclaim the row would sit in ``processing``
-        forever and every redelivery would be skipped (P1 #16). The freshness
-        bound is what stops this from racing an indexing run that is still
-        genuinely alive.
-        """
-        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=stale_after_seconds)
-        statement = (
-            update(File)
-            .where(
-                File.id == file_id,
-                or_(
-                    File.status.in_(["pending", "failed"]),
-                    and_(File.status == "processing", File.updated_at < cutoff),
-                ),
-            )
-            .values(
-                status="processing",
-                error_message=None,
-                updated_at=datetime.now(UTC).replace(tzinfo=None),
-            )
-        )
-        result = await self.session.exec(statement)
-        await self.session.commit()
-        return bool(result.rowcount and result.rowcount > 0)
 
     async def update_status(self, file_id: UUID, status: str, chunk_count: int | None = None, error_message: str | None = None) -> File | None:
         db_file = await self.get_by_id(file_id)

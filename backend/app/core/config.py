@@ -222,11 +222,10 @@ class Settings(BaseSettings):
     # only invited someone to reach for it where it would not be appropriate.
     SUPABASE_SERVICE_ROLE_KEY: str | None = None
 
-    # ── Redis / Celery ─────────────────────────────────────────────────────────
-    # One URL for cache, broker and results. CELERY_BROKER_URL and
-    # CELERY_RESULT_BACKEND were separate fields pointing at databases /1 and /2
-    # while Celery actually used this field's /0 — so configuring them looked
-    # like it worked and did nothing.
+    # ── Redis ──────────────────────────────────────────────────────────────────
+    # Cache, rate-limit counters and idempotency keys. Not a job queue: uploads
+    # index inline, because a background consumer needs an always-on worker
+    # process that the free deployment target does not offer.
     REDIS_URL: str = Field(default="redis://localhost:6379/0")
 
     # ── Qdrant ─────────────────────────────────────────────────────────────────
@@ -580,13 +579,6 @@ class Settings(BaseSettings):
         "read in deterministic order and concatenated.",
     )
     STATIC_CORPUS_MAX_CHARS: int = Field(default=20000)
-
-    # ── Async Indexing (Celery) ───────────────────────────────────────────────
-    # When True, /files/upload persists the file + DB row and dispatches
-    # process_file_indexing_task to the Celery worker instead of ingesting
-    # synchronously in the request. Falls back to sync ingest if the broker
-    # is unreachable.
-    ASYNC_INDEXING: bool = Field(default=False)
 
     # ── Build / prompt identity (log attribution) ─────────────────────────────
     # Bound into every request's log context (core/logging.bind_request_context)
