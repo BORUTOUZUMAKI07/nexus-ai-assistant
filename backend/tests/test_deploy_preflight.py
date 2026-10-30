@@ -38,6 +38,22 @@ def test_static_preflight_passes():
     assert "PREFLIGHT PASSED" in result.stdout
 
 
+def test_blueprint_pins_async_indexing_off():
+    """Render's free plan runs no worker; the blueprint must not imply otherwise.
+
+    Preflight enforces this too, but a test keeps the invariant visible where a
+    reviewer looks: flipping this to true would queue indexing to a consumer that
+    never boots, and uploads would sit pending with no error.
+    """
+    yaml = pytest.importorskip("yaml")
+    doc = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
+    backend = next(s for s in doc["services"] if s["name"] == "nexus-backend")
+    env = {e["key"]: e.get("value") for e in backend.get("envVars", [])}
+    assert str(env.get("ASYNC_INDEXING", "")).lower() == "false", (
+        "nexus-backend must set ASYNC_INDEXING=false — Render free has no Celery worker"
+    )
+
+
 def test_preflight_rejects_an_unknown_option():
     """A typo must fail loudly rather than silently skipping the environment checks."""
     result = _run("--statik")

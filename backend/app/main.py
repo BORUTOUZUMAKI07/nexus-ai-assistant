@@ -502,7 +502,23 @@ async def readiness_check():
         if getattr(app.state, "mcp_transport_started", False)
         else ("disabled" if mcp_subapp is None else "not_started")
     )
-    return {"status": "ready", "database": "available", "mcp_transport": mcp_transport}
+    # Rate limiting shares Redis with the cache. When Redis is unreachable the
+    # limiter degrades to a per-process window rather than failing open — correct,
+    # but invisible unless someone reads the logs, which on a hosted origin nobody
+    # does. Surfacing it here makes "is brute-force protection actually shared on
+    # this deployment?" a single curl. Like `mcp_transport`, it does NOT move the
+    # status code: auth still works, the ceiling is just per-instance.
+    try:
+        await redis_client.ping()
+        rate_limit_store = "redis"
+    except Exception:
+        rate_limit_store = "in_process"
+    return {
+        "status": "ready",
+        "database": "available",
+        "mcp_transport": mcp_transport,
+        "rate_limit_store": rate_limit_store,
+    }
 
 
 @app.get("/", tags=["system"])

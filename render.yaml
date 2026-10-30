@@ -62,6 +62,12 @@ services:
         value: /api/v1
       - key: SERVICE_VERSION
         value: "1.0.0"
+      # Render's free plan has no background workers, so a Celery dispatch here
+      # would be queued to a consumer that never starts and the upload would stay
+      # "pending" forever. Pin the supported no-worker mode in the blueprint
+      # rather than relying on the code default staying false.
+      - key: ASYNC_INDEXING
+        value: "false"
       # Database / cache / vector / storage (all hosted).
       - key: DATABASE_URL
         sync: false

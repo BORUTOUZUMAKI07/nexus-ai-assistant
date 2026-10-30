@@ -52,7 +52,11 @@ async def test_readiness_endpoint_returns_ready_when_database_is_available(monke
     async def healthy():
         return True
 
+    async def reachable():
+        return True
+
     monkeypatch.setattr(main_module, "check_database_health", healthy)
+    monkeypatch.setattr(main_module.redis_client, "ping", reachable)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         response = await ac.get("/health/ready")
@@ -62,7 +66,37 @@ async def test_readiness_endpoint_returns_ready_when_database_is_available(monke
         "status": "ready",
         "database": "available",
         "mcp_transport": "not_started",
+        "rate_limit_store": "redis",
     }
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_degraded_rate_limit_when_redis_is_unreachable(monkeypatch):
+    """A deployed origin must make per-instance rate limiting visible, not just log it.
+
+    The limiter falls back to an in-process window when Redis is unreachable. That
+    keeps auth available, but the ceiling is then per-instance: on a multi-instance
+    deployment brute-force protection is weaker than it looks. Readiness reports it
+    so the check is a request, not a log hunt.
+    """
+
+    async def healthy():
+        return True
+
+    async def unreachable():
+        raise ConnectionError("upstash unreachable")
+
+    monkeypatch.setattr(main_module, "check_database_health", healthy)
+    monkeypatch.setattr(main_module.redis_client, "ping", unreachable)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/health/ready")
+
+    # Still ready: serving traffic is not the same as being fully protected.
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["rate_limit_store"] == "in_process"
 
 
 @pytest.mark.asyncio

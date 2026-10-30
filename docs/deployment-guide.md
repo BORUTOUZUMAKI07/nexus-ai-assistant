@@ -282,6 +282,27 @@ Steps:
    300-second function cap end-to-end (your runs are 10–90s; long Deep runs
    are the ones to watch).
 
+### Free-tier ceilings, in one table
+
+These are the numbers that only bite in production. Measured against the plans
+as documented at the time of writing — re-check them before moving off free.
+
+| Limit | Value | What it means here |
+|---|---|---|
+| Render free background workers | **none** | `ASYNC_INDEXING=false` is pinned in `render.yaml`; uploads index inline (201). The periodic Celery jobs — drift check, cache sweep, prompt regression, webhook retry — do not run. Webhook redelivery stays available via `POST /webhooks/{id}/redeliver/{delivery_id}`. |
+| Render free idle policy | spin-down after ~15 min | First request after idle cold-starts (tens of seconds). |
+| Vercel Hobby function duration | **300 s** including streaming | A run must finish end to end inside it. Quick/Fast runs are 10–90 s; a very long Deep Agent run is the one at risk, and it fails as a truncated stream rather than a clean error. |
+| Vercel Hobby request/response body | **4.5 MB** | Base64 image attachments approach this. Large uploads belong on the file path, not inline in a message. |
+| Vercel Hobby licence | **non-commercial** | Commercial use needs Pro. Not a technical limit, but it is a limit. |
+| Next.js 16 runtime | Node **20.9+** | Set the Node version on the Vercel project; `proxy.ts` already replaces the deprecated middleware. |
+| Render free Postgres | expires after 30 days | Not used here: Postgres is Supabase, cache is Upstash, vectors are Qdrant Cloud, objects are Supabase Storage. |
+
+**Rate limiting depends on Upstash being reachable.** If Redis is unreachable
+(e.g. a TLS/IPv6 route Render cannot take), the limiter degrades instead of
+failing open silently: it falls back to an in-process window and every request
+increments `redis_fail_open`. Watch that metric on the deployed origin; a
+sustained nonzero rate means brute-force protection is per-instance only.
+
 Notes that are easy to get wrong:
 
 - The backend image binds to `$PORT` (`backend/Dockerfile`), which Render

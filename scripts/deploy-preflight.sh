@@ -80,7 +80,18 @@ for s in services:
     if s.get("type") == "worker":
         print("a worker service is defined; Render free tier has no background workers")
         sys.exit(1)
-print(f"ok: {len(services)} services, all free web services")
+backend = next(s for s in services if s.get("name") == "nexus-backend")
+env = {e.get("key"): e.get("value") for e in (backend.get("envVars") or [])}
+# Free Render runs no worker, so the async Celery path must be off. Left unset it
+# falls back to the code default, but the blueprint is the contract: a later
+# flip to true here would queue indexing to a consumer that never boots.
+if str(env.get("ASYNC_INDEXING", "")).lower() != "false":
+    print(
+        "nexus-backend must pin ASYNC_INDEXING=false: Render free has no worker "
+        "and uploads would stay pending"
+    )
+    sys.exit(1)
+print(f"ok: {len(services)} services, all free web services; ASYNC_INDEXING=false")
 PY
   then pass "render.yaml parses; services are free-tier web services"
   else fail "render.yaml failed validation (see the message above)"
