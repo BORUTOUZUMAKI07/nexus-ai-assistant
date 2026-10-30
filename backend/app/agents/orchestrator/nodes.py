@@ -1133,7 +1133,21 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             f"[{i + 1}] ({c['filename']}, score={c.get('score', 0.0):.2f}) {c.get('content_snippet', '')[:600]}"
             for i, c in enumerate(citations)
         )
-        context_additions.append("### Retrieved Local Context (RAG):\n" + _wrap_untrusted("rag", citation_block))
+        # Same reasoning as the research block: the model's prior is "I have no
+        # access to your files", and a system-tail instruction did not stop it
+        # refusing while a passage that scored 0.99 sat in the prompt. The
+        # directive travels with the passages it applies to.
+        context_additions.append(
+            "### Retrieved Local Context (RAG):\n"
+            + _wrap_untrusted("rag", citation_block)
+            + "\n\n### Answer from the block above\n"
+            "Those passages are the user's own indexed documents, retrieved for this "
+            "question. Quote the passage that answers it and cite its [n] marker and "
+            "filename. Never open with, or anywhere claim, that you cannot access the "
+            "user's documents, files, or knowledge base while this block is present in "
+            "this message. If the passages do not settle the question, say what they "
+            "do establish and what remains missing."
+        )
 
     tool_results = state.get("tool_results", [])
     web_blocks: list[str] = []
@@ -1221,6 +1235,14 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             "are present. Attribute claims to the source URLs shown. If the findings "
             "do not settle the question, say what they do establish and what remains "
             "missing rather than refusing the topic."
+        )
+    if citations:
+        system_prompt += (
+            "\n\nRetrieved document context for THIS turn is provided above under "
+            "'### Retrieved Local Context (RAG)'. It was retrieved from the user's own "
+            "indexed files for this question: answer from it, quote the relevant "
+            "passage, and name the source file. Do not claim you lack access to the "
+            "user's documents, files, or knowledge base while that block is present."
         )
 
     final_messages = [{"role": "system", "content": system_prompt}]
@@ -1438,30 +1460,47 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             # than silently reported as the group the user picked.
             answer_model = get_last_resolved_model() or group_primary_model(synthesis_group)
 
-            if has_research_findings and not refusal_retried and _looks_like_refusal(draft):
-                # The prompt instruction asks; this is the check. Findings were
-                # gathered, the model was told to answer from them, and it
-                # refused anyway -- so re-ask once, with the correction next to
-                # the evidence and at a lower temperature. Charged like any
-                # other step so the retry cannot hide from the spend ceiling.
+            if (has_research_findings or citations) and not refusal_retried and _looks_like_refusal(draft):
+                # The prompt instruction asks; this is the check. Evidence was
+                # gathered (web findings, or the user's own retrieved documents),
+                # the model was told to answer from it, and it refused anyway --
+                # so re-ask once, with the correction next to the evidence and at
+                # a lower temperature. Charged like any other step so the retry
+                # cannot hide from the spend ceiling.
                 refusal_retried = True
                 logger.info(
                     "synthesis_refusal_reasked",
                     attempt=attempt + 1,
                     draft_head=draft[:120],
+                    evidence="research" if has_research_findings else "documents",
                 )
                 _charge_step(state)
-                correction = (
-                    f"{draft_prompt}\n\n"
-                    "[Correction \u2014 relay the research, do not refuse]: the '### Research "
-                    "Findings' block above is research this system gathered for this "
-                    "question a moment ago, and it already contains the source URL. You "
-                    "are RELAYING that research, not browsing for it yourself. Write one "
-                    "or two sentences stating what the findings report, with their URL, "
-                    "exactly as a researcher hands back their notes. Any sentence about "
-                    "your own inability to browse, fetch, or reach real-time information "
-                    "will be rejected."
-                )
+                if has_research_findings:
+                    correction = (
+                        f"{draft_prompt}\n\n"
+                        "[Correction \u2014 relay the research, do not refuse]: the '### Research "
+                        "Findings' block above is research this system gathered for this "
+                        "question a moment ago, and it already contains the source URL. You "
+                        "are RELAYING that research, not browsing for it yourself. Write one "
+                        "or two sentences stating what the findings report, with their URL, "
+                        "exactly as a researcher hands back their notes. Any sentence about "
+                        "your own inability to browse, fetch, or reach real-time information "
+                        "will be rejected."
+                    )
+                else:
+                    names = ", ".join(
+                        str(c.get("filename")) for c in citations[:3] if isinstance(c, dict)
+                    )
+                    correction = (
+                        f"{draft_prompt}\n\n"
+                        "[Correction \u2014 quote the retrieved documents, do not refuse]: the "
+                        "'### Retrieved Local Context (RAG)' block above contains passages "
+                        f"retrieved from the user's own files ({names}). Those passages are "
+                        "your evidence: quote the one that answers the question and name "
+                        "its file. You are not being asked to fetch anything \u2014 the text is "
+                        "already in this message. Any sentence about being unable to access "
+                        "the user's documents, files, or knowledge base will be rejected."
+                    )
                 draft = await ai_client.completion(
                     messages=final_messages[:-1] + [{"role": "user", "content": correction}],
                     model=synthesis_group,
@@ -1514,6 +1553,33 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             delivered_chars=len(_research_synthesis),
         )
         response_text = _research_synthesis
+
+    # The document path needs the same last line of defence, but there is no
+    # model-written answer to relay: the retrieved passage *is* the evidence the
+    # pipeline holds. Quoting the best one with its file and score is honest and
+    # traceable, and it is only reached when the alternative is showing a refusal
+    # for a question the knowledge base could already answer.
+    if _looks_like_refusal(response_text) and citations:
+        usable = [c for c in citations if isinstance(c, dict) and c.get("content_snippet")]
+        best = max(usable, key=lambda c: float(c.get("score") or 0.0), default=None)
+        if best is not None:
+            try:
+                score = float(best.get("score") or 0.0)
+            except (TypeError, ValueError):
+                score = 0.0
+            logger.info(
+                "synthesis_refusal_fell_back_to_retrieved_passage",
+                refused_head=(response_text or "")[:120],
+                filename=best.get("filename"),
+                score=score,
+            )
+            response_text = (
+                f"From **{best.get('filename') or 'your documents'}** "
+                f"({score:.0%} match):\n\n"
+                f"> {str(best['content_snippet']).strip()}\n\n"
+                "That is the most relevant passage retrieved from your files for "
+                "this question."
+            )
 
     # â”€â”€ Guardrail on the final draft (input guardrail parity on output) â”€â”€â”€â”€â”€â”€â”€â”€â”€
     from backend.app.services.evaluation.guardrail_service import (

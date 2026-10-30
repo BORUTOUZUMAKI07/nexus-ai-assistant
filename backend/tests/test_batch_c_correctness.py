@@ -462,6 +462,173 @@ async def test_without_findings_a_refusal_is_returned_untouched(monkeypatch):
     assert len(calls) == 1, f"refusal without evidence was re-asked: {len(calls)} calls"
 
 
+# ── Document-grounded refusals ──────────────────────────────────────────────
+#
+# The research ladder above exists because a model disclaimed while its own
+# findings sat in the prompt. The same thing happened on the document path: the
+# correct chunk scored 0.99 and the answer still said it could not access the
+# files. The guard is not web-specific, so neither is the fix.
+
+_DOC_CITATIONS = [
+    {
+        # RAGCitation requires file_id; without it the evidence gate logs a
+        # validation warning and skips, which would make this fixture exercise a
+        # degraded path instead of the one a real run takes.
+        "file_id": "11111111-1111-4111-8111-111111111111",
+        "filename": "invoice.pdf",
+        "chunk_index": 0,
+        "score": 0.99,
+        "content_snippet": "Invoice code INV-2041 is due on 12 May.",
+    }
+]
+
+
+def _document_state():
+    state = _synth_state("What is the invoice code and when is it due?")
+    state["citations"] = list(_DOC_CITATIONS)
+    return state
+
+
+async def test_the_rag_directive_travels_with_the_passages(monkeypatch):
+    """A system-tail instruction alone did not move the model; the correction
+    has to sit in the same message as the retrieved passage."""
+    from backend.app.agents.orchestrator import nodes
+    from backend.app.services.confidence_service import confidence_service
+
+    captured: dict = {}
+
+    async def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return "Invoice INV-2041 is due on 12 May (invoice.pdf)."
+
+    monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+    monkeypatch.setattr(
+        confidence_service,
+        "decide",
+        lambda *a, **k: {
+            "confidence": 0.95,
+            "action": "answer",
+            "grounded": True,
+            "threshold": 0.6,
+        },
+    )
+
+    await nodes.synthesizer_node(_document_state())
+
+    user_msgs = [m["content"] for m in captured["messages"] if m["role"] == "user"]
+    tail = user_msgs[-1]
+    assert "### Retrieved Local Context (RAG)" in tail
+    assert "INV-2041" in tail
+    assert "### Answer from the block above" in tail
+    assert "cite its [n]" in tail
+    # The system prompt carries the same statement, for the case where the model
+    # reads the tail as instructions but the doc message as background.
+    system = captured["messages"][0]["content"]
+    assert "Retrieved Local Context (RAG)" in system
+
+
+async def test_a_document_grounded_refusal_is_reasked_with_the_passage(monkeypatch):
+    from backend.app.agents.orchestrator import nodes
+    from backend.app.services.confidence_service import confidence_service
+
+    calls: list[str] = []
+    replies = iter(
+        [
+            "I cannot access your documents or files to look that up.",
+            "Invoice INV-2041 is due on 12 May, per invoice.pdf.",
+        ]
+    )
+
+    async def fake_completion(**kwargs):
+        calls.append(str(kwargs.get("messages")))
+        return next(replies)
+
+    monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+    monkeypatch.setattr(
+        confidence_service,
+        "decide",
+        lambda *a, **k: {
+            "confidence": 0.95,
+            "action": "answer",
+            "grounded": True,
+            "threshold": 0.6,
+        },
+    )
+
+    out = await nodes.synthesizer_node(_document_state())
+
+    assert len(calls) == 2, f"expected draft + one correction, got {len(calls)} calls"
+    assert "Correction" in calls[1]
+    assert "invoice.pdf" in calls[1]
+    assert "INV-2041 is due on 12 May" in out["messages"][0].content
+    assert "cannot access" not in out["messages"][0].content
+
+
+async def test_a_second_document_refusal_delivers_the_retrieved_passage(monkeypatch):
+    """Bounded, and the user still gets the evidence instead of a refusal."""
+    from backend.app.agents.orchestrator import nodes
+    from backend.app.services.confidence_service import confidence_service
+
+    calls: list[str] = []
+
+    async def always_refuse(**kwargs):
+        calls.append(str(kwargs.get("messages")))
+        return "I do not have access to your documents."
+
+    monkeypatch.setattr(nodes.ai_client, "completion", always_refuse)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+    monkeypatch.setattr(
+        confidence_service,
+        "decide",
+        lambda *a, **k: {
+            "confidence": 0.95,
+            "action": "answer",
+            "grounded": True,
+            "threshold": 0.6,
+        },
+    )
+
+    out = await nodes.synthesizer_node(_document_state())
+    delivered = out["messages"][0].content
+
+    assert len(calls) == 2, f"guard looped: {len(calls)} calls"
+    assert "do not have access" not in delivered
+    assert "INV-2041 is due on 12 May" in delivered
+    assert "invoice.pdf" in delivered
+
+
+async def test_a_grounded_document_answer_is_not_reasked(monkeypatch):
+    """A correct first draft must not pay for the retry."""
+    from backend.app.agents.orchestrator import nodes
+    from backend.app.services.confidence_service import confidence_service
+
+    calls: list[str] = []
+
+    async def answer_first_time(**kwargs):
+        calls.append(str(kwargs.get("messages")))
+        return "Invoice INV-2041 is due on 12 May (invoice.pdf)."
+
+    monkeypatch.setattr(nodes.ai_client, "completion", answer_first_time)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+    monkeypatch.setattr(
+        confidence_service,
+        "decide",
+        lambda *a, **k: {
+            "confidence": 0.95,
+            "action": "answer",
+            "grounded": True,
+            "threshold": 0.6,
+        },
+    )
+
+    out = await nodes.synthesizer_node(_document_state())
+
+    assert len(calls) == 1, f"healthy document answer re-asked: {len(calls)} calls"
+    assert "INV-2041" in out["messages"][0].content
+
+
 def test_refusal_detector_separates_a_refusal_from_a_sourced_caveat():
     """A caveat about genuinely missing evidence is an answer, not a refusal."""
     from backend.app.agents.orchestrator.nodes import _looks_like_refusal
