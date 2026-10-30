@@ -11,10 +11,11 @@ contain this one. Anything that only exists in chat is lost at handoff.
 
 ## Current State
 
-- **Last updated:** 2026-10-29
-- **Last commit:** `f309068`. The whole backlog is committed in seven coherent
-  units on top of `8756a4c` (harness docs, rule registry, verification gates,
-  chat/research fixes, auth/API, frontend surface, infra+docs).
+- **Last updated:** 2026-10-30
+- **Last commit:** see `git log -1`. This session added: end-to-end coverage for
+  the nine journeys that were manual-only, the artifact-card fix they uncovered,
+  a document-grounded refusal guard, an enforced free-tier flag, and a readiness
+  field for the rate-limit store.
 - **Working tree:** clean (`git status` empty) as of this entry.
 - **Standard startup path:** `./init.sh` (or `make init`) — infra up, deps checked, migrations applied, health reported
 - **Standard verification path:** `make check` — ruff + mypy allowlist + backend unit suite + frontend Vitest
@@ -33,12 +34,14 @@ Everything below ran, in this order, with Docker up and the stack on the
 |---|---|---|
 | `ruff check app tests` | **pass** | All checks passed |
 | `mypy --follow-imports=silent` (CI allowlist) | **pass** | 33 source files, no issues |
-| Backend suite | **1680 passed, 3 skipped, 9 deselected** (exit 0) | 11m24s. 1663 before this session's 17 new tests |
-| Frontend Vitest | **39 files / 409 tests passed** | 32s |
-| `npx playwright test` (e2e) | **25 passed** (exit 0) | 28.6s, all journeys in `docs/golden-paths.md` |
+| Backend suite | **1695 passed, 3 skipped, 9 deselected** (exit 0) | 8m41s |
+| Frontend Vitest | **39 files / 409 tests passed** | 42s |
+| `npx playwright test` (e2e) | **36 passed** (exit 0) | 48.9s. 25 before this session; the 11 new ones cover the nine formerly-manual journeys |
 | `scripts/check-arch.sh` | **6 rules hold** across 820 files | Proven load-bearing: 3 violations detected and exit 1 |
 | `scripts/clean-state-check.sh` | **pass** | 6 dimensions |
 | `scripts/verify-feature.sh` | **14 / 15 passing** | Only `F-DEPLOY-001` (credentials) remains blocked |
+| `bash scripts/deploy-preflight.sh` | **7 items outstanding** | 5 env names + 2 CLIs; every line names what to supply |
+| `npx tsc --noEmit` | **pass** | exit 0 |
 | Harness audit (`audit-harness.sh`) | **28/70 → 51/73**, critical 4/7 → 6/7 | The last critical is a known false negative (see below) |
 
 > **`make` is not installed on this machine.** Every `make X` target below has a
@@ -61,11 +64,18 @@ a baseline it can be read against.
    current state before touching anything.
 2. Get Render + Vercel credentials (`VERCEL_TOKEN`, `RENDER_API_KEY`), run
    `bash scripts/deploy-preflight.sh` to see exactly which values are missing,
-   and supply them — that is the whole of `F-DEPLOY-001`.
-3. Bring `F-DEPLOY-001` to `passing` only through
+   and supply them — that is the whole of `F-DEPLOY-001`. Today it reports
+   `SECRET_KEY`, `ENCRYPTION_KEY`, `DATABASE_URL`, `CORS_ORIGINS`,
+   `APP_PUBLIC_URL` unset plus both CLIs absent.
+3. On the deployed origin, `GET /health/ready` now returns `rate_limit_store`:
+   `redis` means shared limiting, `in_process` means per-instance. Check it once
+   the backend is live — that was previously only visible in logs.
+4. Bring `F-DEPLOY-001` to `passing` only through
    `bash scripts/verify-feature.sh F-DEPLOY-001` once the deployed /health and a
    real sign-in on the deployed origin both answer.
-4. Then pick the next feature with `state: not_started` and keep WIP=1.
+5. Then pick the next `state: not_started` item and keep WIP=1. The remaining
+   manual-only journeys are listed in `docs/golden-paths.md` — HITL approval,
+   OAuth round-trip, 2FA, email verification/reset, MCP client session.
 
 ## Blockers
 
