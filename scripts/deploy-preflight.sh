@@ -78,20 +78,18 @@ for s in services:
         print(f"{s.get('name')} is plan={s.get('plan')!r}, not 'free'")
         sys.exit(1)
     if s.get("type") == "worker":
-        print("a worker service is defined; Render free tier has no background workers")
+        print(
+            "a worker service is defined; the app has no queue (uploads index "
+            "inline) and Render free has no background workers"
+        )
         sys.exit(1)
-backend = next(s for s in services if s.get("name") == "nexus-backend")
-env = {e.get("key"): e.get("value") for e in (backend.get("envVars") or [])}
-# Free Render runs no worker, so the async Celery path must be off. Left unset it
-# falls back to the code default, but the blueprint is the contract: a later
-# flip to true here would queue indexing to a consumer that never boots.
-if str(env.get("ASYNC_INDEXING", "")).lower() != "false":
-    print(
-        "nexus-backend must pin ASYNC_INDEXING=false: Render free has no worker "
-        "and uploads would stay pending"
-    )
+if not any(s.get("name") == "nexus-backend" for s in services):
+    print("no nexus-backend service")
     sys.exit(1)
-print(f"ok: {len(services)} services, all free web services; ASYNC_INDEXING=false")
+# There is no queue in the app any more, so the blueprint must not declare a
+# background worker: a service type that needs a paid plan and that nothing
+# would dispatch to.
+print(f"ok: {len(services)} services, all free web services")
 PY
   then pass "render.yaml parses; services are free-tier web services"
   else fail "render.yaml failed validation (see the message above)"
