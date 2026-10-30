@@ -206,7 +206,10 @@ file IO, elicitations). Every request is gated — a Bearer JWT, the
 - Idempotency: send `Idempotency-Key` on mutating requests (guard in
   `deps.py`).
 - Rate limits: 429 responses when exceeded (Redis sliding window, fail-open).
-- File uploads: multipart; `MAX_UPLOAD_SIZE_MB` enforced before buffering.
+- File uploads: multipart; `MAX_UPLOAD_SIZE_MB` (default **4**) enforced before
+  buffering. Over-limit requests answer **413** with the file's actual size, the
+  limit, and the fix — the ceiling is 4 MB because the browser's path crosses a
+  Vercel function whose request body is capped at ~4.5 MB.
 - Every documented route above was confirmed present in the live schema; the
   counts at the top were regenerated from `app.openapi()` on 2026-10-04
   (103 paths / 123 operations). Regenerate from `/openapi.json` if it drifts.

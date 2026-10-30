@@ -23,6 +23,10 @@ contain this one. Anything that only exists in chat is lost at handoff.
 - **Standard verification path:** `make check` — ruff + mypy allowlist + backend unit suite + frontend Vitest
 - **Clean-state gate:** `make clean-check` — run before every commit / handoff
 - **Current highest-priority unfinished feature:** none active (see `feature_list.json`; pick ONE and set it `active`)
+- **Upload ceiling:** `MAX_UPLOAD_SIZE_MB=4` (audio 4MB too), because the BFF
+  request body is capped at ~4.5MB on Vercel. Enforced in the picker, the BFF and
+  the backend; the 413 names the actual size. Mirror any change in
+  `frontend/src/lib/upload-limits.ts`.
 - **Current blocker:** none locally. Docker is up,
   the local stack is healthy, and both behaviour suites pass. Deployment
   (`F-DEPLOY-001`) is blocked on **credentials only** — see *Blockers*.
@@ -36,9 +40,9 @@ Everything below ran, in this order, with Docker up and the stack on the
 |---|---|---|
 | `ruff check app tests` | **pass** | All checks passed |
 | `mypy --follow-imports=silent` (CI allowlist) | **pass** | 29 source files, no issues (4 event-publisher files removed) |
-| Backend suite | **1684 passed, 3 skipped, 9 deselected** (exit 0) | 4m41s. 11 tests removed with the queue |
-| Frontend Vitest | **39 files / 409 tests passed** | 42s |
-| `npx playwright test` (e2e) | **36 passed** (exit 0) | 43.1s. 25 before this session; the 11 new ones cover the nine formerly-manual journeys |
+| Backend suite | **1685 passed, 3 skipped, 9 deselected** (exit 0) | 6m15s |
+| Frontend Vitest | **39 files / 411 tests passed** | 30s |
+| `npx playwright test` (e2e) | **37 passed** (exit 0) | 38.7s |
 | `scripts/check-arch.sh` | **6 rules hold** across 820 files | Proven load-bearing: 3 violations detected and exit 1 |
 | `scripts/clean-state-check.sh` | **pass** | 6 dimensions |
 | `scripts/verify-feature.sh` | **14 / 15 passing** | Only `F-DEPLOY-001` (credentials) remains blocked |

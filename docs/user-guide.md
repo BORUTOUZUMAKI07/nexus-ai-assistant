@@ -49,7 +49,9 @@
 ## 4. Knowledge base & document RAG
 
 - Open the **Knowledge** tab.
-- Upload PDF, Markdown, text, or JSON files (drag & drop or picker).
+- Upload PDF, Markdown, text, or JSON files (drag & drop or picker). Files are
+  capped at **4 MB** per file — the browser reaches the API through a proxied
+  request body, so a larger document is split rather than silently truncated.
 - Nexus extracts text, chunks it, embeds **dense + sparse** vectors, and
   indexes them into Qdrant. The upload answers 201 only once the document is
   searchable, so there is nothing to wait for in the background.

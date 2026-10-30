@@ -282,7 +282,7 @@ as documented at the time of writing — re-check them before moving off free.
 | Render free background workers | **none** | Not needed: the app has no queue. Uploads index inline (201) and there are no periodic jobs — webhook redelivery is explicit via `POST /webhooks/{id}/redeliver/{delivery_id}`. |
 | Render free idle policy | spin-down after ~15 min | First request after idle cold-starts (tens of seconds). |
 | Vercel Hobby function duration | **300 s** including streaming | A run must finish end to end inside it. Quick/Fast runs are 10–90 s; a very long Deep Agent run is the one at risk, and it fails as a truncated stream rather than a clean error. |
-| Vercel Hobby request/response body | **4.5 MB** | Base64 image attachments approach this. Large uploads belong on the file path, not inline in a message. |
+| Vercel Hobby request/response body | **4.5 MB** | This is why `MAX_UPLOAD_SIZE_MB` defaults to **4**, not 50: documents and base64 images cross the BFF, so a bigger ceiling would be enforced by the platform first, with an opaque error. Raise it only if the body stops crossing a function (or on a non-Vercel host) and mirror it in `frontend/src/lib/upload-limits.ts`. |
 | Vercel Hobby licence | **non-commercial** | Commercial use needs Pro. Not a technical limit, but it is a limit. |
 | Next.js 16 runtime | Node **20.9+** | Set the Node version on the Vercel project; `proxy.ts` already replaces the deprecated middleware. |
 | Render free Postgres | expires after 30 days | Not used here: Postgres is Supabase, cache is Upstash, vectors are Qdrant Cloud, objects are Supabase Storage. |
