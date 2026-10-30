@@ -1,4 +1,4 @@
-import { test as base, type Page, type Route } from "@playwright/test"
+import { expect, test as base, type Page, type Route } from "@playwright/test"
 
 export const AUTH_COOKIE = "nexus_access_token"
 export const TEST_TOKEN = "test-access-token"
@@ -288,6 +288,119 @@ export class NexusAppPage {
       .fill(text)
     await this.page.keyboard.press("Enter")
   }
+}
+
+// ── Stored transcript helpers ────────────────────────────────────────────────
+//
+// `messagesFromHistory` only treats a row as addressable by the edit/regenerate
+// routes when its id is a server UUID, so these fixtures use real UUIDs rather
+// than `msg-1`-style handles: with a client id the hooks take the local-only
+// path and the PATCH/POST those journeys exist to prove would never be sent.
+
+export const HISTORY_USER_ID = "22222222-2222-4222-8222-222222222222"
+export const HISTORY_ASSISTANT_ID = "33333333-3333-4333-8333-333333333333"
+export const HISTORY_QUESTION = "what is the capital of France"
+export const HISTORY_ANSWER = "Paris is the capital of France."
+
+/** A stored conversation row in the shape `messagesFromHistory` reads. */
+export function historyRow(over: Record<string, unknown> = {}) {
+  return {
+    id: HISTORY_USER_ID,
+    role: "user",
+    content: HISTORY_QUESTION,
+    thought_process: null,
+    model: null,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    citations: [],
+    tool_calls: [],
+    user_feedback: null,
+    created_at: "2026-10-21T00:00:00Z",
+    ...over,
+  }
+}
+
+/** One question and its answer, optionally customising the assistant row. */
+export function historyTranscript(assistant: Record<string, unknown> = {}) {
+  return [
+    historyRow(),
+    historyRow({
+      id: HISTORY_ASSISTANT_ID,
+      role: "assistant",
+      content: HISTORY_ANSWER,
+      model: "openai/gpt-4o-mini",
+      ...assistant,
+    }),
+  ]
+}
+
+/**
+ * Sidebar + transcript + a chat stream, then open the conversation.
+ *
+ * The transcript route is registered before the list route on purpose: both
+ * match `/api/conversations…` and the mock router is first-match-wins, so the
+ * detail route has to come first.
+ */
+export async function openConversation(
+  page: Page,
+  messages: unknown[],
+  stream: string = `0:${JSON.stringify("A fresh answer.")}\n`
+) {
+  const mocks = mockApi(page)
+
+  mocks.route(new RegExp(`/api/conversations/${TEST_CONVERSATION.id}$`), (route) => {
+    if (route.request().method() === "PATCH") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(messages[messages.length - 1]),
+      })
+    }
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: TEST_CONVERSATION.id,
+        title: TEST_CONVERSATION.title,
+        system_prompt: null,
+        messages,
+      }),
+    })
+  })
+
+  mocks.route(/\/api\/conversations(\?|$)/, (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(TEST_CONVERSATION),
+      })
+    }
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([TEST_CONVERSATION]),
+    })
+  })
+
+  // Editing is a PATCH on the message row. Without this route the catch-all
+  // answers 404, the hook throws, and no resend is ever sent.
+  mocks.route(new RegExp(`/messages/${HISTORY_USER_ID}$`), (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(historyRow({ content: "edited" })),
+    })
+  )
+
+  mocks.route(/\/api\/chat(\?|$)/, (route) => route.fulfill(buildChatStream(stream)))
+
+  await mocks.setup()
+  await page.goto("/app")
+  await page.getByText(TEST_CONVERSATION.title).first().click()
+  await expect(page.getByText(HISTORY_QUESTION).first()).toBeVisible()
+  return mocks
 }
 
 export const test = base

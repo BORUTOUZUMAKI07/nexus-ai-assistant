@@ -98,24 +98,37 @@ path gives the same result.
 
 ---
 
+## Journeys promoted from manual to automated
+
+These were the "manual pass only" rows. Each now has a spec, which is the
+promotion loop working as intended: a recurring manual check became a command.
+
+| Journey | Spec that proves it |
+|---|---|
+| Edit a message and re-run from that point | `message-actions.spec.ts` "edits a user turn and resends the edited text" — asserts the PATCH body **and** that the edited text is what `/api/chat` carries |
+| Regenerate the last answer | `message-actions.spec.ts` "regenerates the last answer through the backend prompt" |
+| Artifact canvas | `message-actions.spec.ts` "saves an answer as an artifact, edits it and writes a new version" — save, edit, `/versions` POST, editor closes |
+| Citation inspector | `message-actions.spec.ts` "opens the citation inspector with the grounded passage" — dialog, filename, snippet, match % |
+| Voice input | `surfaces.spec.ts` "dictates a message through the transcriber" — record → stop → `/api/audio/transcribe` → text in the composer (Chromium fake capture device) |
+| Read aloud (TTS) | `surfaces.spec.ts` "reads an answer aloud through the speech endpoint" |
+| Organizations + webhooks | `surfaces.spec.ts` "creates an org, invites a member, registers a webhook and sees a delivery" |
+| Public share link | `surfaces.spec.ts` "copies a share link built on the public app origin" (clipboard holds the `APP_PUBLIC_URL` link) and "renders a shared transcript signed out" |
+| Command palette | `surfaces.spec.ts` "opens on Ctrl+K and navigates to Knowledge" |
+| Plan mode | `surfaces.spec.ts` "drafts a plan, and approving it sends the plan to the agent" — the approved steps reach `/api/chat` |
+
 ## Journeys with **no** automated spec yet
 
-These are real, shipped surfaces that only a manual pass can currently prove.
-A journey moves out of this list by gaining a spec — that is the whole
-"review feedback promotion" loop: a recurring manual check becomes an
-automated one.
+Real, shipped surfaces that still only a manual pass proves. A journey moves out
+of this list by gaining a spec.
 
 | Journey | What to check by hand |
 |---|---|
-| Edit a message and re-run from that point | Edited text replaces the old text in the transcript **and** is what the model sees on the next turn |
-| Regenerate the last answer | New answer replaces the old one; no duplicate message row |
-| Artifact canvas | A document-shaped answer opens the canvas; an edit saves a version; regeneration keeps the same title |
-| Citation inspector | Clicking a citation opens the inspector with the right chunk |
-| Voice input / TTS | Dictated text lands in the composer; the reply can be read back |
-| Organizations + webhooks (`IntegrationsSettings`) | Invite a member, accept it, register a webhook endpoint, see a delivery |
-| Public share link | Generated URL uses `APP_PUBLIC_URL`, opens `/share/{token}` signed out, and renders the conversation |
-| Command palette (`⌘K` / `Ctrl+K`) | Opens, filters, and navigates |
-| Plan mode | A plan is produced and reappears in plan history |
+| Human-in-the-loop approval card | A high-impact tool call pauses, Approve resumes the run, Reject is honoured by the answer |
+| OAuth sign-in round trip | Google/GitHub consent → callback → session cookie → `/app` (needs real provider clients) |
+| 2FA enrolment and challenge | Enable TOTP, sign in with a code, recovery code works once |
+| Email verification / password reset | Link arrives, token verifies once, reset signs out other sessions |
+| MCP client session | A client lists tools and calls one over `/mcp/mcp` with a bearer token |
+| The deploy itself | `bash scripts/deploy-preflight.sh` on the real Render + Vercel origins |
 
 ## Adding a journey
 

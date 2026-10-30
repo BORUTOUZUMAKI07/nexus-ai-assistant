@@ -10,6 +10,17 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:3000",
     trace: "on-first-retry",
+    // Voice input is a shipped path, so it belongs in the suite rather than in
+    // the "needs a human with a microphone" list. Chromium's fake capture device
+    // gives MediaRecorder real (silent) chunks, and the transcriber itself is
+    // mocked at the BFF boundary.
+    permissions: ["microphone"],
+    launchOptions: {
+      args: [
+        "--use-fake-ui-for-media-stream",
+        "--use-fake-device-for-media-stream",
+      ],
+    },
   },
   projects: [
     {
