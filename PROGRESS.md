@@ -12,10 +12,12 @@ contain this one. Anything that only exists in chat is lost at handoff.
 ## Current State
 
 - **Last updated:** 2026-10-30
-- **Last commit:** see `git log -1`. This session added: end-to-end coverage for
+- **Last commit:** see `git log -1`. This session added end-to-end coverage for
   the nine journeys that were manual-only, the artifact-card fix they uncovered,
-  a document-grounded refusal guard, an enforced free-tier flag, and a readiness
-  field for the rate-limit store.
+  a document-grounded refusal guard, and a readiness field for the rate-limit
+  store — then **removed Celery entirely**: no worker, broker, beat, Flower, event
+  publisher or `ASYNC_INDEXING`. Uploads index inline and answer 201 when the
+  document is searchable.
 - **Working tree:** clean (`git status` empty) as of this entry.
 - **Standard startup path:** `./init.sh` (or `make init`) — infra up, deps checked, migrations applied, health reported
 - **Standard verification path:** `make check` — ruff + mypy allowlist + backend unit suite + frontend Vitest
@@ -33,14 +35,14 @@ Everything below ran, in this order, with Docker up and the stack on the
 | Check | Result | Notes |
 |---|---|---|
 | `ruff check app tests` | **pass** | All checks passed |
-| `mypy --follow-imports=silent` (CI allowlist) | **pass** | 33 source files, no issues |
-| Backend suite | **1695 passed, 3 skipped, 9 deselected** (exit 0) | 8m41s |
+| `mypy --follow-imports=silent` (CI allowlist) | **pass** | 29 source files, no issues (4 event-publisher files removed) |
+| Backend suite | **1684 passed, 3 skipped, 9 deselected** (exit 0) | 4m41s. 11 tests removed with the queue |
 | Frontend Vitest | **39 files / 409 tests passed** | 42s |
-| `npx playwright test` (e2e) | **36 passed** (exit 0) | 48.9s. 25 before this session; the 11 new ones cover the nine formerly-manual journeys |
+| `npx playwright test` (e2e) | **36 passed** (exit 0) | 43.1s. 25 before this session; the 11 new ones cover the nine formerly-manual journeys |
 | `scripts/check-arch.sh` | **6 rules hold** across 820 files | Proven load-bearing: 3 violations detected and exit 1 |
 | `scripts/clean-state-check.sh` | **pass** | 6 dimensions |
 | `scripts/verify-feature.sh` | **14 / 15 passing** | Only `F-DEPLOY-001` (credentials) remains blocked |
-| `bash scripts/deploy-preflight.sh` | **7 items outstanding** | 5 env names + 2 CLIs; every line names what to supply |
+| `bash scripts/deploy-preflight.sh` | **static: pass; full: 7 items outstanding** | 5 env names + 2 CLIs; no worker service may be declared |
 | `npx tsc --noEmit` | **pass** | exit 0 |
 | Harness audit (`audit-harness.sh`) | **28/70 → 51/73**, critical 4/7 → 6/7 | The last critical is a known false negative (see below) |
 
