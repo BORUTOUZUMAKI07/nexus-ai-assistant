@@ -24,6 +24,7 @@ import {
   MessageCitation,
 } from "@/lib/api";
 import { useKnowledgeFiles, knowledgeKeys } from "@/lib/queries";
+import { MAX_UPLOAD_BYTES } from "@/lib/upload-limits";
 
 // A search hit is a citation. The backend returns the same shape the chat
 // transcript renders, so it is typed as MessageCitation rather than a local
@@ -72,6 +73,17 @@ export const KnowledgeView: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
+    // Reject locally first: the upload is inline and every byte crosses the
+    // BFF, so a 40MB PDF means a slow request that ends in a 413 anyway. Telling
+    // the user now costs nothing and names the actual size.
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setActionError(
+        `"${file.name}" is ${(file.size / (1024 * 1024)).toFixed(1)}MB. The limit is ` +
+          `${Math.round(MAX_UPLOAD_BYTES / (1024 * 1024))}MB — split it into smaller files.`
+      );
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
     setIsUploading(true);
     setActionError(null);
     try {

@@ -558,7 +558,12 @@ class Settings(BaseSettings):
     PARENT_CHUNK_SIZE: int = Field(default=512, description="Parent chunk target tokens")
     CHILD_CHUNK_SIZE: int = Field(default=128, description="Child chunk target tokens")
     CHILD_CHUNK_OVERLAP: int = Field(default=32, description="Child chunk overlap tokens")
-    MAX_UPLOAD_SIZE_MB: int = Field(default=50)
+    # 4 MB, not 50. The browser never reaches the backend directly: an upload
+    # crosses the Next BFF, and on Vercel a function request body is capped at
+    # ~4.5 MB. A larger ceiling here would be a limit the platform rejects first,
+    # with an opaque error. Raise it only where the body is not proxied through
+    # a function-size-capped host (and mirror it in frontend/src/lib/upload-limits.ts).
+    MAX_UPLOAD_SIZE_MB: int = Field(default=4)
     # Audio upload ceiling for /audio/transcribe. This was read as
     # `getattr(settings, "MAX_AUDIO_MB", 25)` -- a setting that did not exist, so
     # the default was the only value it ever took and a config override silently

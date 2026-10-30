@@ -55,11 +55,26 @@ async def upload_file(
     # Enforce an upload size ceiling BEFORE buffering the whole body into
     # memory: rejects oversized uploads early instead of loading them.
     max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
-    if file.size is not None and file.size > max_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds the {settings.MAX_UPLOAD_SIZE_MB}MB upload limit.",
+
+    def _too_large(size_bytes: int) -> HTTPException:
+        """Say how big the file is and what to do, not just "too large".
+
+        The client shows this detail verbatim, so "File exceeds the 4MB upload
+        limit" alone leaves the user guessing whether to retry, split, or
+        compress. Naming the actual size makes the fix obvious.
+        """
+        return HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=(
+                f"File is {size_bytes / (1024 * 1024):.1f}MB; the limit is "
+                f"{settings.MAX_UPLOAD_SIZE_MB}MB. Split the document into smaller "
+                "files, or raise MAX_UPLOAD_SIZE_MB on a deployment whose proxy "
+                "does not cap the request body."
+            ),
         )
+
+    if file.size is not None and file.size > max_bytes:
+        raise _too_large(file.size)
     chunks: list[bytes] = []
     total = 0
     while True:
@@ -68,10 +83,7 @@ async def upload_file(
             break
         total += len(part)
         if total > max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File exceeds the {settings.MAX_UPLOAD_SIZE_MB}MB upload limit.",
-            )
+            raise _too_large(total)
         chunks.append(part)
     file_bytes = b"".join(chunks)
     try:

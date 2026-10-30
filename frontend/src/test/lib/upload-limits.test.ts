@@ -24,13 +24,13 @@ describe("rejectOversizedBody", () => {
     expect(res).not.toBeNull();
     expect(res!.status).toBe(413);
     const body = await res!.json();
-    expect(body.detail).toContain("50MB");
+    expect(body.detail).toContain("4MB");
     expect(body.max_bytes).toBe(MAX_UPLOAD_BYTES);
   });
 
   it("accepts a body exactly at the ceiling", () => {
     // Off-by-one guard. `>` and `>=` must agree on the boundary, and a client
-    // told "the limit is 50MB" must be able to actually send 50MB.
+    // told "the limit is 4MB" must be able to actually send 4MB.
     expect(rejectOversizedBody(String(MAX_UPLOAD_BYTES), MAX_UPLOAD_BYTES, "File")).toBeNull();
   });
 
@@ -47,10 +47,10 @@ describe("rejectOversizedBody", () => {
   });
 
   it("names the offending resource in the error", () => {
-    const res = rejectOversizedBody(String(99 * MB), MAX_AUDIO_UPLOAD_BYTES, "Audio");
+    const res = rejectOversizedBody(String(9 * MB), MAX_AUDIO_UPLOAD_BYTES, "Audio");
     expect(res!.status).toBe(413);
     return res!.json().then((body: { detail: string }) => {
-      expect(body.detail).toMatch(/^Audio exceeds the 25MB limit\.$/);
+      expect(body.detail).toMatch(/^Audio exceeds the 4MB limit\.$/);
     });
   });
 
@@ -64,16 +64,20 @@ describe("rejectOversizedBody", () => {
 
 describe("upload ceilings", () => {
   it("keeps the BFF file limit aligned with the backend default", () => {
-    // MAX_UPLOAD_SIZE_MB in backend/app/core/config.py defaults to 50. If the two
+    // MAX_UPLOAD_SIZE_MB in backend/app/core/config.py defaults to 4. If the two
     // drift, the BFF either rejects uploads the backend would have accepted or
     // buffers requests the backend was always going to refuse.
-    expect(MAX_UPLOAD_BYTES).toBe(50 * 1024 * 1024);
+    expect(MAX_UPLOAD_BYTES).toBe(4 * 1024 * 1024);
   });
 
-  it("uses a distinct, smaller ceiling for audio", () => {
-    // The backend has no ceiling on the audio path at all, so the BFF value is
-    // chosen, not mirrored — and must not accidentally inherit the file limit.
-    expect(MAX_AUDIO_UPLOAD_BYTES).toBe(25 * 1024 * 1024);
-    expect(MAX_AUDIO_UPLOAD_BYTES).toBeLessThan(MAX_UPLOAD_BYTES);
+  it("keeps the audio ceiling inside the platform body cap too", () => {
+    // The backend has no ceiling on the audio path, so the BFF value is chosen.
+    // It used to be 25 MB, which the deployment proxy rejects at ~4.5 MB anyway:
+    // a promise the request could never satisfy. Both ceilings must stay at or
+    // under the body cap until the audio stops crossing a Vercel function.
+    const platformBodyCap = 4.5 * 1024 * 1024;
+    expect(MAX_AUDIO_UPLOAD_BYTES).toBe(4 * 1024 * 1024);
+    expect(MAX_AUDIO_UPLOAD_BYTES).toBeLessThanOrEqual(platformBodyCap);
+    expect(MAX_UPLOAD_BYTES).toBeLessThanOrEqual(platformBodyCap);
   });
 });

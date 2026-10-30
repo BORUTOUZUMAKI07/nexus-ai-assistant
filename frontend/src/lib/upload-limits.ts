@@ -33,7 +33,11 @@
 const MB = 1024 * 1024;
 
 /**
- * Mirrors `MAX_UPLOAD_SIZE_MB` in `backend/app/core/config.py` (default 50).
+ * Mirrors `MAX_UPLOAD_SIZE_MB` in `backend/app/core/config.py` (default 4).
+ *
+ * 4, not 50: the browser reaches the backend through this BFF, and Vercel caps a
+ * function request body at ~4.5 MB. A higher number here would advertise a
+ * ceiling the hosting platform rejects first, with an unhelpful error.
  *
  * Deliberately read from the server environment rather than a `NEXT_PUBLIC_`
  * variable: it is a proxy-side resource limit, and it must be overridable in
@@ -46,18 +50,19 @@ const MB = 1024 * 1024;
  * before the backend's own guard fires.
  */
 export const MAX_UPLOAD_BYTES =
-  Number(process.env.MAX_UPLOAD_SIZE_MB ?? 50) * MB;
+  Number(process.env.MAX_UPLOAD_SIZE_MB ?? 4) * MB;
 
 /**
  * Ceiling for the transcription upload.
  *
  * The backend has no limit here at all — `api/v1/audio.py` does a bare
- * `await file.read()` — so this number is chosen rather than mirrored. The
- * input is a browser `MediaRecorder` blob of a spoken message; 25 MB is roughly
- * half an hour of Opus and far beyond any real voice note, while still being
- * small enough that the BFF can hold one without pressure.
+ * `await file.read()` — so this number is chosen rather than mirrored. It was
+ * 25 MB (roughly half an hour of Opus), which was a promise this deployment
+ * cannot keep: the audio crosses the same BFF, so the platform's ~4.5 MB body
+ * cap rejects it long before 25 MB. 4 MB is minutes of speech — far beyond any
+ * real voice note — and is a number the request can actually satisfy.
  */
-export const MAX_AUDIO_UPLOAD_BYTES = 25 * MB;
+export const MAX_AUDIO_UPLOAD_BYTES = 4 * MB;
 
 /**
  * Rejects an over-sized body before it is read, or `null` if it may proceed.

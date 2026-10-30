@@ -236,6 +236,35 @@ async def test_files_require_auth(client):
 
 
 @pytest.mark.asyncio
+async def test_upload_over_the_size_limit_is_rejected_with_the_actual_size(
+    client, user_auth_headers
+):
+    """The 413 must name the size and the limit, because the client shows it.
+
+    Uploads index inline now, so an over-limit file is not a queued job that
+    might fail later — it is a request that must be refused before the bytes are
+    buffered. The message is the whole user-facing outcome of that refusal.
+    """
+    from backend.app.core.config import settings
+
+    limit_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    oversized = b"x" * (limit_bytes + 1024)
+
+    resp = await client.post(
+        "/api/v1/files/upload",
+        files={"file": ("huge.txt", oversized, "text/plain")},
+        headers=user_auth_headers,
+    )
+
+    assert resp.status_code == 413
+    detail = resp.json()["detail"]
+    assert f"{settings.MAX_UPLOAD_SIZE_MB}MB" in detail
+    # The actual size, not just the ceiling — that is what makes the fix obvious.
+    assert "4.0MB" in detail or f"{(limit_bytes + 1024) / (1024 * 1024):.1f}MB" in detail
+    assert "Split the document" in detail
+
+
+@pytest.mark.asyncio
 async def test_upload_invalid_extension_rejected(client, user_auth_headers):
     resp = await client.post(
         "/api/v1/files/upload",

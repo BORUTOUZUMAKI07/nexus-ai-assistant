@@ -850,7 +850,13 @@ export async function uploadFile(file: File): Promise<KnowledgeFile> {
     headers: authHeaders(),
     body: form,
   });
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+  if (!res.ok) {
+    // A 413 is the one failure the server explains better than we can: the body
+    // names the file's size, the limit and the fix. Every other status keeps the
+    // status-only message, because a generic 500 body says less than the code.
+    if (res.status === 413) throw await parseError(res, "Upload failed: 413");
+    throw new Error(`Upload failed: ${res.status}`);
+  }
   return res.json();
 }
 

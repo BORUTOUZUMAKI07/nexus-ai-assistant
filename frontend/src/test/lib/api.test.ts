@@ -13,6 +13,7 @@ import {
   sendMessageFeedback,
   updateConversation,
   listOAuthProviders,
+  uploadFile,
 } from "@/lib/api"
 
 const API = "/api"
@@ -238,6 +239,35 @@ describe("api client", () => {
  * also the assertion that the handler returns the shape the real endpoint
  * does, not merely that the call resolves.
  */
+describe("upload errors", () => {
+  it("surfaces the server's 413 explanation, which names the size and the limit", async () => {
+    // The client shows this verbatim. "Upload failed: 413" tells the user
+    // nothing they can act on; the detail names the file, the ceiling and the fix.
+    server.use(
+      http.post(`${API}/files/upload`, () =>
+        HttpResponse.json(
+          { detail: "File is 5.2MB; the limit is 4MB. Split the document." },
+          { status: 413 }
+        )
+      )
+    )
+
+    const file = new File(["x"], "big.pdf", { type: "application/pdf" })
+    await expect(uploadFile(file)).rejects.toThrow("File is 5.2MB; the limit is 4MB")
+  })
+
+  it("keeps the status-only message for a generic failure", async () => {
+    server.use(
+      http.post(`${API}/files/upload`, () =>
+        HttpResponse.json({ detail: "boom" }, { status: 500 })
+      )
+    )
+
+    const file = new File(["x"], "notes.txt", { type: "text/plain" })
+    await expect(uploadFile(file)).rejects.toThrow("Upload failed: 500")
+  })
+})
+
 describe("previously unmocked endpoints", () => {
   it("forks a conversation and returns a new row, not the original", async () => {
     const forked = await forkConversation("conv-100", "msg-2", "Branch A")

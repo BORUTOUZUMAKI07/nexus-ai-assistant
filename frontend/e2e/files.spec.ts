@@ -129,6 +129,35 @@ test.describe("Knowledge & RAG", () => {
     await expect(page.getByText("5.0 KB • 3 chunks")).toBeVisible()
   })
 
+  test("refuses an over-limit file locally and names the size", async ({ page }) => {
+    const mocks = mockApi(page)
+    mocks.route(/\/api\/files(\?|$)/, (route) => {
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([FILE]) })
+    })
+    await mocks.setup()
+
+    const app = new NexusAppPage(page)
+    await app.goto()
+    await page.getByRole("button", { name: "Knowledge", exact: true }).click()
+    await expect(page.getByText("nexus-spec.pdf")).toBeVisible()
+
+    // 5 MB against the 4 MB ceiling. Nothing is uploaded: uploads index inline,
+    // so letting this through would mean a slow request that ends in a 413.
+    let uploads = 0
+    page.on("request", (r) => {
+      if (r.method() === "POST" && r.url().includes("/files/upload")) uploads += 1
+    })
+
+    await page.setInputFiles("input[type=file]", {
+      name: "big-report.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.alloc(5 * 1024 * 1024, "a"),
+    })
+
+    await expect(page.getByText(/big-report\.pdf" is 5\.0MB\. The limit is 4MB/)).toBeVisible()
+    expect(uploads).toBe(0)
+  })
+
   test("shows a readable error when the index backend is unavailable", async ({ page }) => {
     const mocks = mockApi(page)
     mocks.route(/\/api\/files(\?|$)/, (route) => {
