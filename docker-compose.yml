@@ -29,7 +29,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Redis (Celery broker + result backend + LiteLLM cache) ─────────────────
+  # ── Redis (response cache, rate limiting, idempotency, LiteLLM cache) ──────
   redis:
     image: redis:7-alpine
     container_name: nexus_redis

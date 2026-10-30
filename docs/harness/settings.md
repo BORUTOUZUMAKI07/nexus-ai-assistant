@@ -9,7 +9,6 @@ Sensible defaults exist for everything; `.env` overrides. Highlights:
 - `API_V1_PREFIX=/api/v1` — used for all route mounts (single source; one
   setting, not the old duplicated `API_V1_STR`).
 - `MCP_AUTH_ENABLED=True` (gate FastMCP), `MCP_API_KEY` (shared key auth).
-- `ASYNC_INDEXING=false` toggles sync vs Celery 202-async file ingestion.
 - `RESPONSE_CACHE_ENABLED=false` + `RESPONSE_CACHE_TTL_SECONDS=3600`
   (semantic-cost cache).
 - `EXPERIMENTS_CONFIG_PATH=` → canary/shadow experiments YAML (unset =

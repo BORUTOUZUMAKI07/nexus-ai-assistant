@@ -171,7 +171,7 @@ framework import needed; the repo already does this.
 
 - **Tier 3 — not applicable.** Capabilities that assume a managed LangGraph
   runtime or hosted control plane. This is a self-hosted FastAPI app with its own
-  auth, Postgres, Celery, and observability; there is nothing to plug a managed
+  auth, Postgres, and observability; there is nothing to plug a managed
   plane into.
 - **Tier 4 — superseded.** Features the current upstream version removes or
   replaces, or that duplicate something already load-bearing here. No adoption.

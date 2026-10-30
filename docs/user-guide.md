@@ -51,8 +51,8 @@
 - Open the **Knowledge** tab.
 - Upload PDF, Markdown, text, or JSON files (drag & drop or picker).
 - Nexus extracts text, chunks it, embeds **dense + sparse** vectors, and
-  indexes them into Qdrant — synchronously, or asynchronously via Celery
-  (202 + `Location` header when `ASYNC_INDEXING=true`).
+  indexes them into Qdrant. The upload answers 201 only once the document is
+  searchable, so there is nothing to wait for in the background.
 - Ask questions in chat about uploaded docs; answers include numbered
   citations linking back to the source chunks (`CitationInspector`).
 - `POST /api/v1/files/rag/query` is also available programmatically.

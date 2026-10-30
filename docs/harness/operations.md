@@ -10,7 +10,6 @@
 | Stop infra | `make infra-down` (removes volumes!) |
 | Migrate | `make migrate`; generate: `make migrate-auto MSG="..."`; rollback: `make migrate-down` |
 | Run backend | `make backend` (uvicorn :8000) |
-| Run Celery worker / beat / flower | `make worker` / `make worker-beat` / `make flower` (:5555) |
 | Run frontend | `make frontend` (:3000) |
 | All-in-one dev | `make dev` |
 | Backend tests | `make test` / `make test-unit` / `make test-integration` (needs infra) / `make test-cov` |

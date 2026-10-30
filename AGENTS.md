@@ -1,7 +1,7 @@
 # AGENTS.md — Nexus AI Assistant Repo Context
 
 **What this is:** a full-stack AI copilot — FastAPI + LangGraph multi-agent backend
-(DDD modular monolith, PostgreSQL/Qdrant/Redis/Celery) and a Next.js 16 React
+(DDD modular monolith, PostgreSQL/Qdrant/Redis) and a Next.js 16 React
 frontend that reaches the backend only through its own BFF route handlers.
 
 This file is a **directory page**. It carries the session contract and points at

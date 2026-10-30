@@ -178,7 +178,7 @@
         {
           "label": "upload + ingestion tests",
           "cmd": "cd backend && uv run pytest tests/test_rag_ingest_pipeline.py tests/test_multimodal_persist.py -q",
-          "repair": "ASYNC_INDEXING=false takes the synchronous path; if indexing never completes, confirm the sync branch runs before the Celery dispatch."
+          "repair": "Indexing is inline on the upload request; if a document never becomes searchable, read POST /files/upload's response first — a 201 means ingestion ran, so the fault is in chunking/embedding, not in a missing worker."
         },
         {
           "label": "browser journey: upload, list, search, delete, backend-down",

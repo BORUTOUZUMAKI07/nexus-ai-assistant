@@ -110,8 +110,8 @@ tickets, not pages.
 
 ## 7. Roadmap exporters
 
-- **Postgres exporter** for indexing-backlog freshness
-  (`files.index_status` → Prometheus gauge) — required by the
-  `NexusIndexingBacklog` rule (currently commented as `PLANNED`).
+- **Indexing freshness** — not tracked as an SLO: uploads index inline and the
+  response is the completion signal, so a stalled row is an upload error rather
+  than a queue backlog. Revisit only if a queue ever comes back.
 - Per-tenant SLO breakdowns using the `org_id` column added on `usage_logs` /
   `cost_logs` (multi-tenant isolation work).

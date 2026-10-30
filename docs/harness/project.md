@@ -8,15 +8,15 @@ Nexus AI Assistant is a full-stack **AI copilot** ("enterprise-grade AI
 assistant"): a Python **FastAPI** backend implementing a **DDD modular
 monolith** with a **LangGraph** multi-agent orchestrator, plus a **Next.js 16**
 React frontend. It is not a toy demo — it has real auth (JWT + OAuth + 2FA +
-email verification), a 35-table PostgreSQL schema, hybrid RAG on Qdrant, Celery
-async jobs, mem0 memory, orgs/shares/webhooks, admin observability, and a CI
+email verification), a 35-table PostgreSQL schema, hybrid RAG on Qdrant,
+mem0 memory, orgs/shares/webhooks, admin observability, and a CI
 system that gates prompt regressions with live LLM judges.
 
 **Monorepo.** Three top-level concerns:
 
 | Path | Language/stack | Role |
 |---|---|---|
-| `backend/` | Python 3.11+ (CI: 3.12), FastAPI, SQLModel, LangGraph, Celery | The whole API + business logic. All Python code lives under `backend/app/`. |
+| `backend/` | Python 3.11+ (CI: 3.12), FastAPI, SQLModel, LangGraph | The whole API + business logic. All Python code lives under `backend/app/`. |
 | `frontend/` | TypeScript, Next.js 16.4.2 (App Router), React 19.2.8, Vitest, Playwright | Chat UI with BFF-style route handlers that proxy the backend. |
 | `docs/`, `Makefile`, `docker-compose.yml`, `.github/` | Markdown, shell, YAML | Operations, infra, CI. |
 

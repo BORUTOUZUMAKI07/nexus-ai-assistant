@@ -17,8 +17,8 @@ backend/app/
 │   └── (each has models.py SQLModel tables, schemas.py, repository.py, service.py)
 ├── infrastructure/          # cross-cutting: database/engine.py (create_all),
 │                            # database/session.py, database/redis.py, qdrant.py,
-│                            # cache/ (response_cache, rate_limit), events/
-│                            # (EventPublisher seam), common/event_loop.py
+│                            # cache/ (response_cache, rate_limit),
+│                            # common/event_loop.py
 ├── agents/                  # LangGraph orchestrator
 │   ├── orchestrator/        # graph builder, nodes (planner/router/researcher/
 │   │                        #   coder/critic/synthesizer), state, ARQ flags
@@ -38,7 +38,6 @@ backend/app/
 │                            #   get_current_user, get_current_org_id,
 │                            #   get_current_admin, require_idempotency_key,
 │                            #   get_storage, get_cache, service factories
-├── worker/                  # Celery: tasks.py (indexing, eval dispatch), celery_app
 ├── mcp/                     # FastMCP server: tools, elicitations, capabilities
 ├── prompt_templates/        # .txt LLM prompt templates
 └── infrastructure/database/engine.py  # imports ALL domain models for create_all

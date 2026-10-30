@@ -11,7 +11,6 @@ corresponds to one or more alerts from
 | [Latency SLI burn](latency-sli-burn.md) | p95/p99 latency above budget | `NexusLatencyP95Burn`, `NexusLatencyP99Burn` |
 | [Rate-limit exhaustion](rate-limit-exhaustion.md) | Clients throttled with 429s | `NexusRateLimitStorm` |
 | [Redis fail-open](redis-fail-open.md) | Redis unreachable, seams failing open | `NexusRedisFailOpenActive` |
-| [Indexing backlog](indexing-backlog.md) | Async file-indexing runs stuck PENDING | `NexusIndexingBacklog` (PLANNED) |
 
 ## Operating principles
 

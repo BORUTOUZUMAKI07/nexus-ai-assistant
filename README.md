@@ -27,7 +27,7 @@ failures.
 
 | Path | What it is |
 |---|---|
-| `backend/` | FastAPI app — domain/services/API layers, LangGraph orchestrator, RAG, Celery workers, Alembic migrations. `uv sync`-managed. |
+| `backend/` | FastAPI app — domain/services/API layers, LangGraph orchestrator, RAG, Alembic migrations. `uv sync`-managed. |
 | `frontend/` | Next.js 16.4.2 App Router app — chat UI, plan review, artifact canvas, admin + settings views. BFF route handlers proxy the API. |
 | `docs/` | Architecture, API reference, deployment guide, SLOs, alerting rules, runbooks, user guide, keyboard shortcuts. |
 | `.github/workflows/` | CI (`ci.yml`), nightly security + full test suites (`nightly.yml`), release (`release.yml`). |
@@ -116,7 +116,7 @@ Local endpoints once running:
   reset, 2FA (TOTP), OAuth (GitHub/Google) callback flow
 - `conversations` — CRUD, search, fork, plan, HITL, sync + SSE streaming,
   per-message feedback
-- `files` — upload (sync or 202-async via Celery + `Location` header),
+- `files` — upload (chunked + indexed inline, 201 when searchable),
   chunk listing, RAG query, index-status
 - `tools` — list, execute, approval, elicitations (+ respond)
 - `prompts` — templates CRUD, skills list

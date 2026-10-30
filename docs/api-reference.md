@@ -111,7 +111,7 @@ never assumed from the picker.
 | Method | Path | Description |
 |---|---|---|
 | GET | `/files` | list user's files |
-| POST | `/files/upload` | upload → chunk → embed → index (201 sync, or **202** with `Location` when `ASYNC_INDEXING=true`) |
+| POST | `/files/upload` | upload → chunk → embed → index inline; **201** once searchable (no 202/queue) |
 | POST | `/files/rag/query` | query the RAG index |
 | GET | `/files/{file_id}/chunks` | chunk hierarchy |
 | GET | `/files/{file_id}/index-status` | poll async indexing job |

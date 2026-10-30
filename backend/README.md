@@ -1,7 +1,7 @@
 # Nexus AI Assistant — Backend
 
 The FastAPI backend for Nexus AI Assistant: a **DDD modular monolith** with a
-LangGraph agent orchestrator, hybrid RAG, Celery async jobs, and a 35-table
+LangGraph agent orchestrator, hybrid RAG, and a 35-table
 SQLModel/PostgreSQL schema. Python 3.11+ (CI uses 3.12).
 
 ## Stack
@@ -11,7 +11,6 @@ SQLModel/PostgreSQL schema. Python 3.11+ (CI uses 3.12).
 - **Agents**: LangGraph supervisor graph (`backend/app/agents/`)
 - **RAG**: Qdrant (dense + sparse), BM25, FlashRank reranking
   (`backend/app/services/rag/`)
-- **Async**: Celery + Redis broker (`backend/app/worker/`)
 - **MCP**: FastMCP server mounted at `/mcp` (`backend/app/mcp/`)
 - **Config**: pydantic-settings (`backend/app/core/config.py`), `.env` via
   `backend/.env.example`
@@ -55,11 +54,10 @@ Interactive docs: `http://localhost:8000/docs`. Health: `GET /health`,
 |---|---|
 | `core/` | Settings, JWT/Fernet security, exceptions, logging, redaction, rate limit |
 | `domain/` | One bounded context per folder (models/repos/services/schemas): user, conversation, file, tool, prompt, org, share, webhook, plan, artifact, hook, system, experiment, optimization, redteam |
-| `infrastructure/` | Database engine/session/redis, Qdrant, response cache, rate-limit cache, EventPublisher seam, event loop |
+| `infrastructure/` | Database engine/session/redis, Qdrant, response cache, rate-limit cache, event loop |
 | `agents/` | LangGraph orchestrator (planner → router → researcher/coder/critic → synthesizer) + subagent prompts |
 | `services/` | Cross-domain logic: RAG pipeline, monitoring (drift/slices/fairness), evaluation, experiments, bandit, confidence, audit, prompt optimizer, tool adapters (Firecrawl, E2B, elicitations) |
 | `api/v1/` | Routers only — wiring in `api.py`, auth deps in `deps.py` |
-| `worker/` | Celery app + tasks (file indexing, eval dispatch) |
 | `mcp/` | FastMCP tool server |
 | `prompt_templates/` | `.txt` LLM prompt templates |
 
@@ -106,7 +104,6 @@ uv run bandit -c pyproject.toml -r app -q         # security scan
 uv run pip-audit                                  # dependency vulnerabilities
 uv run mypy                                       # curated allowlist (scripts/mypy_targets.txt)
 uv run alembic revision --autogenerate -m "msg"   # new migration
-uv run celery -A backend.app.worker.celery_app worker --loglevel=info
 ```
 
 See the root `Makefile` (`make backend`, `make test`, `make lint`,

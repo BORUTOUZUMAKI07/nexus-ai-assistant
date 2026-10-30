@@ -37,8 +37,7 @@ graph TD
     subgraph Storage
         API --> PG[(PostgreSQL pgvector - 38 tables)]
         RAG --> Qdrant[(Qdrant hybrid vector DB)]
-        API --> RD[(Redis: cache, rate limit, Celery broker)]
-        API --> Celery[Celery worker + beat]
+        API --> RD[(Redis: cache, rate limit, idempotency)]
     end
 ```
 
@@ -129,9 +128,9 @@ Checkpointing uses `AsyncPostgresSaver` + `InMemoryStore`, with full
 
 - `database/` — engine (imports **every** domain model for `create_all`),
   async session, Redis client.
-- `qdrant.py`, `cache/` (response cache, rate-limit cache), `events/`
-  (EventPublisher seam — a pluggable interface; the full transactional-outbox
-  adapter is deliberately deferred, documented in `events/__init__.py`).
+- `qdrant.py`, `cache/` (response cache, rate-limit cache). The event-publisher
+  seam and its Celery adapter were removed with the queue: uploading indexes
+  inline, so there is no domain event to hand off.
 - `common/event_loop.py` — custom async event-loop factory; required on
   Windows via `uvicorn --loop backend.app.infrastructure.common.event_loop:event_loop_factory`.
 
@@ -188,8 +187,9 @@ Checkpointing uses `AsyncPostgresSaver` + `InMemoryStore`, with full
   [`docs/slo.md`](slo.md), [`docs/alerting/alert-rules.yml`](alerting/alert-rules.yml),
   and [`docs/runbooks/`](runbooks/README.md).
 - structlog structured logging with PII/secret redaction on every event.
-- Celery worker handles async file indexing and eval dispatch; the response
-  cache, rate limiter, and Redis client all fail open.
+- Uploads are chunked, embedded and indexed **inline on the request**; there is
+  no queue or background worker. The response cache, rate limiter, and Redis
+  client all fail open.
 
 See also: [API reference](api-reference.md) · [Deployment](deployment-guide.md) ·
 [SLOs](slo.md) · [User guide](user-guide.md) · root [`../AGENTS.md`](../AGENTS.md).

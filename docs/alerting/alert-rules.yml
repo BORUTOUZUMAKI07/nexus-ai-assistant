@@ -98,12 +98,3 @@ groups:
         annotations:
           summary: "Redis is unreachable; rate-limit/response-cache seams are failing open"
           runbook: "docs/runbooks/redis-fail-open.md"
-
-      # PLANNED: indexing backlog gauge once the Postgres exporter ships (§7 in
-      # docs/slo.md). A delayed async indexing run should page the data team:
-      # - alert: NexusIndexingBacklog
-      #   expr: nexus_indexing_backlog_seconds > 900
-      #   for: 15m
-      #   labels: {severity: page, slo: indexing-freshness}
-      #   annotations: {summary: "Files stuck in PENDING indexing state"}
-      #   runbook: "docs/runbooks/indexing-backlog.md"

@@ -19,9 +19,8 @@
 | **Frontend** | Next.js **16.4.2** standalone output; `frontend/Dockerfile` builds it. |
 | **Database** | PostgreSQL with **pgvector** (`pgvector/pgvector:pg16` locally) — 38 SQLModel tables. Supabase/Postgres-compatible hosts work. |
 | **Vector store** | Qdrant (hybrid dense+sparse). Local container `qdrant/qdrant` in compose. |
-| **Redis** | Cache, rate-limiting, and Celery broker. Local `redis:7-alpine` in compose. `REDIS_URL=redis://localhost:6379/0` locally. |
+| **Redis** | Cache, rate-limiting and idempotency keys. Local `redis:7-alpine` in compose. `REDIS_URL=redis://localhost:6379/0` locally. Not a job queue. |
 | **Object storage** | Supabase Storage over its REST API (`SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` + `STORAGE_BUCKET`). No S3/R2/MinIO server — the boto3 layer was removed. |
-| **Async tasks** | Celery worker + beat (file indexing, eval dispatch). |
 | **Observability** | In-process `MetricsCollector` exported over **OTLP (logs + metrics + traces)** to the Layer-2 collector → New Relic (`docker-compose` / `render.yaml`); `/metrics` kept as a local Prometheus debug surface; LangSmith agent traces. |
 
 CI/CD artifacts:
@@ -144,13 +143,6 @@ uv run uvicorn backend.app.main:app \
 Docker (uses `backend/Dockerfile`): pick the image from the GHCR release
 (`ghcr.io/<owner>/<repo>/backend:<tag>`) or build from source.
 
-Celery worker + beat (async indexing, eval dispatch):
-
-```bash
-uv run celery -A backend.app.worker.celery_app worker --loglevel=info
-uv run celery -A backend.app.worker.celery_app beat --loglevel=info
-```
-
 Health checks: `GET /health` (liveness), `GET /health/ready` (readiness).
 Metrics: `GET /metrics` (Prometheus text) is a **local debug surface**. The app
 exports logs, metrics and traces over OTLP/HTTP to `NEW_RELIC_OTLP_ENDPOINT`
@@ -269,15 +261,13 @@ Steps:
    `https://<frontend>/api/auth/oauth/<provider>/callback` (the same URI is
    registered in each provider's console). Also set `METRICS_TOKEN`.
 
-5. **No free background worker.** Render's free instances cover web services
-   (and Postgres/Key-Value), **not** background workers, so the Celery
-   worker/beat pair from §"Async tasks" cannot run there on the free plan.
-   Deploy with `ASYNC_INDEXING=false`: the app then indexes uploads inline on
-   the request path, which is the supported no-worker mode. The periodic
-   Celery jobs (failed-webhook retry, eval dispatch) simply do not run on free
-   — webhook redelivery stays available manually via
+5. **No background worker is needed (or available).** Render's free instances
+   cover web services (and Postgres/Key-Value), **not** background workers — so
+   the app has no queue at all: an upload is chunked, embedded and indexed on
+   the request path and answered 201 when the document is searchable. There are
+   no periodic jobs to miss; webhook redelivery is available explicitly via
    `POST /webhooks/{id}/redeliver/{delivery_id}`.
-   Also expect the ~15-minute idle spin-down: the first request after idle
+   Expect the ~15-minute idle spin-down: the first request after idle
    cold-starts, and any in-flight SSE answer is bounded by Vercel Hobby's
    300-second function cap end-to-end (your runs are 10–90s; long Deep runs
    are the ones to watch).
@@ -289,7 +279,7 @@ as documented at the time of writing — re-check them before moving off free.
 
 | Limit | Value | What it means here |
 |---|---|---|
-| Render free background workers | **none** | `ASYNC_INDEXING=false` is pinned in `render.yaml`; uploads index inline (201). The periodic Celery jobs — drift check, cache sweep, prompt regression, webhook retry — do not run. Webhook redelivery stays available via `POST /webhooks/{id}/redeliver/{delivery_id}`. |
+| Render free background workers | **none** | Not needed: the app has no queue. Uploads index inline (201) and there are no periodic jobs — webhook redelivery is explicit via `POST /webhooks/{id}/redeliver/{delivery_id}`. |
 | Render free idle policy | spin-down after ~15 min | First request after idle cold-starts (tens of seconds). |
 | Vercel Hobby function duration | **300 s** including streaming | A run must finish end to end inside it. Quick/Fast runs are 10–90 s; a very long Deep Agent run is the one at risk, and it fails as a truncated stream rather than a clean error. |
 | Vercel Hobby request/response body | **4.5 MB** | Base64 image attachments approach this. Large uploads belong on the file path, not inline in a message. |
