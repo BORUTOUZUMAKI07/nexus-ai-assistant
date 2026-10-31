@@ -27,6 +27,32 @@ from fakes import FakeSession
 # ── Circuit breaker ──────────────────────────────────────────────────────────
 
 
+async def _wait_for_half_open(
+    breaker: CircuitBreaker, name: str, timeout: float = 5.0
+) -> None:
+    """Block until the breaker has provably left the open window.
+
+    ``stats()`` promotes open -> half_open without consuming the single probe
+    slot, so polling it observes the transition without disturbing the test.
+
+    The previous form slept a fixed 0.06 s against a 0.05 s open timeout and
+    failed occasionally in full-suite runs. The cause was not load: on Windows
+    ``time.monotonic()`` is ``GetTickCount64`` with ~15.6 ms granularity, so two
+    reads 60 ms apart can quantise to 46.8 ms and the breaker still looks open.
+    A bounded poll removes the clock-versus-sleep race instead of widening the
+    margin (which would only make the flake rarer, not impossible).
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while breaker.stats(name)["state"] != "half_open":
+        if loop.time() > deadline:
+            raise AssertionError(
+                f"breaker for {name!r} never reached half_open within {timeout}s "
+                f"(state={breaker.stats(name)['state']})"
+            )
+        await asyncio.sleep(0.01)
+
+
 @pytest.mark.asyncio
 async def test_breaker_allows_while_closed():
     breaker = CircuitBreaker(failure_threshold=3, open_timeout_seconds=60.0)
@@ -49,7 +75,7 @@ async def test_breaker_half_open_probe_recovers_on_success():
     await breaker.record_failure("fast_chat")
     await breaker.record_failure("fast_chat")
     assert await breaker.allow("fast_chat") is False  # open
-    await asyncio.sleep(0.06)  # open timeout elapses → half-open
+    await _wait_for_half_open(breaker, "fast_chat")  # open timeout elapses
     assert await breaker.allow("fast_chat") is True  # single probe passes
     assert await breaker.allow("fast_chat") is False  # concurrent caller still blocked
     await breaker.record_success("fast_chat")
@@ -61,7 +87,7 @@ async def test_breaker_probe_failure_reopens():
     breaker = CircuitBreaker(failure_threshold=2, open_timeout_seconds=0.05)
     await breaker.record_failure("g")
     await breaker.record_failure("g")
-    await asyncio.sleep(0.06)
+    await _wait_for_half_open(breaker, "g")
     assert await breaker.allow("g") is True  # probe granted
     await breaker.record_failure("g")  # probe failed
     assert breaker.stats("g")["state"] == "open"
