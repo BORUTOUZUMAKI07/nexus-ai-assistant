@@ -77,7 +77,18 @@ def route_after_orchestrator(
     quality gate (critic) > synthesis.
     """
     if _safety_short_circuited(state):
-        return "synthesizer"
+        # Local retrieval still runs. `critic_grader` queries the user's OWN
+        # indexed documents -- it reaches no network, calls no external service
+        # and cannot act on the world, so it is not the "external tool" the
+        # safety flag exists to withhold. Skipping it made the flag destroy
+        # grounding: a benign question that the router model over-flagged (e.g.
+        # "what is the launch code in my documents?") reached the synthesizer
+        # with an empty context and truthfully answered "no document has been
+        # provided" while the chunk sat in the index. Harm is prevented by
+        # `route_after_critic` below, which still refuses to dispatch the web or
+        # code tool while this flag is set (P1 #14) -- that is where the
+        # external action would have happened.
+        return "critic_grader"
     if state.get("subagent_dispatches"):
         return "subagent_dispatcher"
     if state.get("pending_tool_calls"):

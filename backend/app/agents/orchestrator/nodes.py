@@ -582,7 +582,11 @@ _ARQ_PROMPT_TEMPLATE = """
 You are a constraint-checker for an AI assistant. Analyse the user request below
 and return a compact JSON object with EXACTLY these keys and no others:
   "needs_tool"    : true if the task requires an external tool (web search, code execution, file read)
-  "safety_flag"   : true if the request touches PII, harmful content, or violates AI safety policy
+  "safety_flag"   : true only if the request asks for harmful, illegal, or third-party-privacy-violating
+                    material (weapons, exploits, someone else's personal data). A request to find, quote
+                    or explain information in the user's OWN uploaded documents is NOT a safety concern,
+                    even when it mentions codes, keys, credentials, salaries or other sensitive-sounding
+                    words -- that is the ordinary knowledge-base use case.
   "recency_needed": true if answering well requires real-time or post-training-cutoff data
   "ambiguous"     : true if the request is underspecified and a clarifying question would help
 
