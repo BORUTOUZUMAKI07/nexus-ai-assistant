@@ -28,6 +28,15 @@ const csp = [
   "script-src 'self' 'unsafe-inline'" + (isDev ? " 'unsafe-eval'" : ""),
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
+  // `media-src` must be stated explicitly, not inherited from `default-src`.
+  // Read-aloud fetches the backend's edge-tts MP3 and plays it from a
+  // `blob:` object URL; with no `media-src`, that falls back to
+  // `default-src 'self'`, which does not cover `blob:` — Chromium then rejects
+  // the source with `MEDIA_ELEMENT_ERROR: Media load rejected by URL safety
+  // check` and the speaker button silently plays nothing even though the
+  // request returns 200 with valid audio. `img-src` already allowed `blob:`,
+  // which is why only audio was affected.
+  "media-src 'self' blob: data:",
   "font-src 'self'",
   "connect-src 'self'",
   "object-src 'none'",
