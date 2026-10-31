@@ -99,7 +99,9 @@ class AuditService:
             logger.warning("audit_lifecycle_hooks_failed", error=str(exc))
             sections["lifecycle_hooks"] = {"error": str(exc)}
 
-        # Model provenance — last 24h usage by model + variant coverage.
+        # Model provenance -- usage by model + variant coverage, over every row
+        # retained (the comment said "last 24h" while the query below has no
+        # time bound, so the label and the data disagreed).
         try:
             usage = (
                 await self._session.exec(select(UsageLog).order_by(UsageLog.created_at.desc()).limit(10000))

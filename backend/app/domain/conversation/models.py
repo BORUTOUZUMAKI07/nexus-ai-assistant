@@ -25,7 +25,11 @@ class Conversation(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True, nullable=False)
     title: str = Field(default="New Conversation")
-    model: str = Field(default="llama-3.3-70b-versatile")
+    # The canonical router group rather than the old provider slug. This field
+    # is metadata (routing reads the request's model, and the syntheses that
+    # actually ran are recorded per message), so the old default only meant a
+    # conversation row advertised a model the app no longer routes to.
+    model: str = Field(default="complex_reasoning")
     project_id: uuid.UUID | None = Field(default=None, foreign_key="projects.id", index=True)
     system_prompt: str | None = Field(default=None)
     context_summary: str | None = Field(default=None, description="Compressed conversation context summary")

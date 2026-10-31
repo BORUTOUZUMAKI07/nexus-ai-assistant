@@ -234,3 +234,30 @@ def test_the_quality_evaluator_is_handed_text_not_a_parts_list():
     asyncio.run(_persist_reply(**_reply_kwargs(user_messages=[vision_user])))
 
     assert _Quality.seen == ["what colour is this"]
+
+
+# -- the model stamped on the rows ------------------------------------------
+#
+# Every row here used to carry ``settings.DEFAULT_MODEL`` -- a configured value --
+# rather than the model that answered. The transcript therefore labelled each
+# reloaded answer with a model the app no longer routes to, cost was priced
+# against it, and the admin model-provenance / per-model slices aggregated every
+# row under one legacy slug. The stream path now passes the checkpoint's
+# ``answer_model`` in; these tests pin the pass-through and the fallback.
+
+
+def test_the_persisted_model_is_the_one_that_answered():
+    asyncio.run(_persist_reply(**_reply_kwargs(model="openai/gpt-oss-120b")))
+
+    assert _ConversationService.WRITTEN[0]["model"] == "openai/gpt-oss-120b"
+    args, _ = _UsageService.LOGGED[0]
+    assert getattr(args[0], "model", None) == "openai/gpt-oss-120b"
+
+
+def test_an_unknown_model_falls_back_to_the_configured_default():
+    # Only a run that died before any model produced text should land here.
+    from backend.app.core.config import settings
+
+    asyncio.run(_persist_reply(**_reply_kwargs(model=None)))
+
+    assert _ConversationService.WRITTEN[0]["model"] == settings.DEFAULT_MODEL

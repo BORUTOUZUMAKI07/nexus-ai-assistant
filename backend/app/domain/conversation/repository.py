@@ -94,7 +94,7 @@ class ConversationRepository(BaseRepository[Conversation]):
         result = await self.session.exec(statement)
         return list(result.all())
 
-    async def create(self, user_id: UUID, title: str = "New Chat", model: str = "llama-3.3-70b-versatile", system_prompt: str | None = None) -> Conversation:
+    async def create(self, user_id: UUID, title: str = "New Chat", model: str = "complex_reasoning", system_prompt: str | None = None) -> Conversation:
         conversation = Conversation(
             user_id=user_id,
             title=title,

@@ -52,7 +52,11 @@ class UserSettings(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", unique=True, index=True, nullable=False)
-    default_model: str = Field(default="llama-3.3-70b-versatile")
+    # The canonical router group, not a provider slug. Every row created before
+    # the picker was wired carries `llama-3.3-70b-versatile`, which resolves to
+    # `complex_reasoning` anyway -- so the old default made the settings dropdown
+    # show a third option whose label was identical to the first one.
+    default_model: str = Field(default="complex_reasoning")
     temperature: float = Field(default=0.7)
     max_tokens: int = Field(default=4096)
     system_prompt_override: str | None = Field(default=None, sa_type=Text)

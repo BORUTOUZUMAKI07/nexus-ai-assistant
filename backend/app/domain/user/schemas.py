@@ -159,7 +159,7 @@ class UserSettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     theme: str | None = Field(default="dark", max_length=32)
-    default_model: str | None = Field(default="llama-3.3-70b-versatile", max_length=128)
+    default_model: str | None = Field(default="complex_reasoning", max_length=128)
     system_prompt_override: str | None = Field(default=None, max_length=20000)
     temperature: float | None = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=4096, ge=1, le=32768)

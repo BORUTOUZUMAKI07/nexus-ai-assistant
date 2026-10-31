@@ -15,7 +15,6 @@ from backend.app.api.deps import (
     get_current_user,
     get_usage_service,
 )
-from backend.app.core.config import settings
 from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.domain.conversation.schemas import (
     MessageCreate,
@@ -25,7 +24,13 @@ from backend.app.domain.conversation.schemas import (
 )
 from backend.app.domain.usage.schemas import UsageLogCreate
 from backend.app.domain.user.models import User
-from backend.app.infrastructure.ai.litellm_client import ai_client, resolve_provider
+from backend.app.infrastructure.ai.litellm_client import (
+    ai_client,
+    get_last_resolved_model,
+    group_primary_model,
+    resolve_answer_model,
+    resolve_provider,
+)
 from backend.app.infrastructure.cache.response_cache import response_cache
 from backend.app.services.context_compiler import context_compiler
 from backend.app.services.conversation_service import ConversationService
@@ -76,7 +81,11 @@ async def send_message_sync(
 
     # 4. Context & Prompt Compilation
     history = await conv_svc.get_messages(conversation_id)
-    target_model = message_in.model or settings.DEFAULT_MODEL
+    # Whitelisted to a router group. `message_in.model or settings.DEFAULT_MODEL`
+    # accepted any string, and the default was a legacy provider slug the router
+    # no longer knows -- so an API caller sending an unknown model took the
+    # request out of the fallback chain entirely.
+    target_model = resolve_answer_model(message_in.model)
 
     # Canary/shadow release: deterministic user-bucket assignment for
     # the chat system prompt. No-op ("default") unless the experiment is
@@ -184,20 +193,26 @@ async def send_message_sync(
         except Exception as exc:  # noqa: BLE001 - cache write must not fail the reply
             logger.debug("response_cache_write_failed", error=str(exc))
 
+    # The model that actually answered, not the group requested: a provider
+    # fallback is a fact about the run, and recording the requested group here
+    # is what made the admin provenance panel aggregate every row under one
+    # label while the app was answering with something else.
+    recorded_model = get_last_resolved_model() or group_primary_model(target_model)
+
     # 6. Save Assistant Message
     assistant_msg = await conv_svc.add_message(
         conversation_id=conversation_id,
         role="assistant",
         content=response_text,
         parent_message_id=user_msg.id,
-        model=target_model,
+        model=recorded_model,
         prompt_tokens=prompt_tok,
         completion_tokens=comp_tok,
         metadata_json={"prompt_variant": experiment_variant},
     )
 
     # 7. Log Usage Telemetry (tokens, cost, quality)
-    cost_usd = cost_tracking_service.calculate_cost(target_model, prompt_tok, comp_tok)
+    cost_usd = cost_tracking_service.calculate_cost(recorded_model, prompt_tok, comp_tok)
     quality = quality_service.evaluate_response_quality(
         sanitized_content, response_text, prompt_tok + comp_tok, duration_ms
     )
@@ -207,7 +222,7 @@ async def send_message_sync(
             org_id=org_id,
             conversation_id=conversation_id,
             message_id=assistant_msg.id,
-            model=target_model,
+            model=recorded_model,
             prompt_tokens=prompt_tok,
             completion_tokens=comp_tok,
             latency_ms=duration_ms,
@@ -223,8 +238,8 @@ async def send_message_sync(
         session=usage_svc._repo.session,
         user_id=current_user.id,
         org_id=org_id,
-        model=target_model,
-        provider=resolve_provider(target_model),
+        model=recorded_model,
+        provider=resolve_provider(recorded_model),
         prompt_tokens=prompt_tok,
         completion_tokens=comp_tok,
     )
@@ -278,7 +293,7 @@ async def send_message_stream(
     )
 
     history = await conv_svc.get_messages(conversation_id)
-    target_model = message_in.model or settings.DEFAULT_MODEL
+    target_model = resolve_answer_model(message_in.model)
 
     system_prompt = await prompt_compiler.compile_system_prompt_cached(
         custom_instructions=message_in.system_prompt_override or conv.system_prompt,
@@ -308,21 +323,22 @@ async def send_message_stream(
 
             full_response = "".join(collected_chunks)
             duration_ms = (time.time() - start_time) * 1000
+            recorded_model = get_last_resolved_model() or group_primary_model(target_model)
 
-            prompt_tok = ai_client.count_tokens(str(formatted_context), target_model)
-            comp_tok = ai_client.count_tokens(full_response, target_model)
+            prompt_tok = ai_client.count_tokens(str(formatted_context), recorded_model)
+            comp_tok = ai_client.count_tokens(full_response, recorded_model)
 
             assistant_msg = await conv_svc.add_message(
                 conversation_id=conversation_id,
                 role="assistant",
                 content=full_response,
                 parent_message_id=user_msg.id,
-                model=target_model,
+                model=recorded_model,
                 prompt_tokens=prompt_tok,
                 completion_tokens=comp_tok,
             )
 
-            cost_usd = cost_tracking_service.calculate_cost(target_model, prompt_tok, comp_tok)
+            cost_usd = cost_tracking_service.calculate_cost(recorded_model, prompt_tok, comp_tok)
             quality = quality_service.evaluate_response_quality(
                 sanitized_content, full_response, prompt_tok + comp_tok, duration_ms
             )
@@ -332,7 +348,7 @@ async def send_message_stream(
                     org_id=org_id,
                     conversation_id=conversation_id,
                     message_id=assistant_msg.id,
-                    model=target_model,
+                    model=recorded_model,
                     prompt_tokens=prompt_tok,
                     completion_tokens=comp_tok,
                     latency_ms=duration_ms,
@@ -344,8 +360,8 @@ async def send_message_stream(
                 session=usage_svc._repo.session,
                 user_id=current_user.id,
                 org_id=org_id,
-                model=target_model,
-                provider=resolve_provider(target_model),
+                model=recorded_model,
+                provider=resolve_provider(recorded_model),
                 prompt_tokens=prompt_tok,
                 completion_tokens=comp_tok,
             )
@@ -365,7 +381,10 @@ async def send_message_stream(
                         role="assistant",
                         content=partial,
                         parent_message_id=user_msg.id,
-                        model=target_model,
+                        model=(
+                            get_last_resolved_model()
+                            or group_primary_model(target_model)
+                        ),
                     )
                     logger.info("partial_response_persisted_on_disconnect", conversation_id=str(conversation_id))
                 except Exception as exc:

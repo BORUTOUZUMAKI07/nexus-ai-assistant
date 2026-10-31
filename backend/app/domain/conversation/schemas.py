@@ -75,7 +75,9 @@ class ConversationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = Field(default="New Chat", max_length=200)
-    model: str | None = Field(default="llama-3.3-70b-versatile", max_length=128)
+    # The canonical router group; the old provider slug here is why a newly
+    # created conversation advertised a model the app no longer routes to.
+    model: str | None = Field(default="complex_reasoning", max_length=128)
     system_prompt: str | None = Field(default=None, max_length=20000)
     is_pinned: bool | None = False
 

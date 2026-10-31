@@ -220,6 +220,7 @@ async def execute_run(
                     session_factory=session_factory,
                     tool_calls=collected_tool_calls,
                     citations=await _run_citations(graph, config),
+                    model=await _run_answer_model(graph, config),
                 )
                 await writer.emit({"type": "error", "message": str(exc)})
                 await _terminate(
@@ -243,6 +244,17 @@ async def execute_run(
             # for round-trips per token.
             post_run = await _post_run_frames(graph, config)
             citations = [f for f in post_run if f.get("type") == "citation"]
+            # The model that actually answered, from the same checkpoint read.
+            # The `model_info` frame is built from the graph's `answer_model`,
+            # so the persisted row and the transcript's label cannot disagree.
+            answer_model = next(
+                (
+                    str(f["model"])
+                    for f in post_run
+                    if f.get("type") == "model_info" and f.get("model")
+                ),
+                None,
+            )
 
             message_id = await _persist_reply(
                 conversation_id=conversation_id,
@@ -256,6 +268,7 @@ async def execute_run(
                 session_factory=session_factory,
                 tool_calls=collected_tool_calls,
                 citations=citations,
+                model=answer_model,
             )
 
             for frame in post_run:
@@ -588,6 +601,24 @@ async def _run_citations(graph: Any, config: dict[str, Any]) -> list[dict[str, A
     return citation_payloads(values) if values else []
 
 
+async def _run_answer_model(graph: Any, config: dict[str, Any]) -> str | None:
+    """The provider model that answered this run, read from the checkpointer.
+
+    Only the failure path needs this: a successful run gets the same value from
+    the ``model_info`` frame it already builds. Fail-open to ``None`` so a run
+    that died before the synthesizer ran still persists (with the caller's
+    fallback), rather than losing the partial answer to a metadata read.
+    """
+    try:
+        snapshot = await graph.aget_state(config)
+    except Exception as exc:
+        logger.warning("run_answer_model_read_failed", error_type=type(exc).__name__)
+        return None
+    values = getattr(snapshot, "values", None) or {}
+    model = values.get("answer_model")
+    return str(model) if model else None
+
+
 def _message_text(message: Any) -> str:
     """Flatten a message's ``content`` to text.
 
@@ -629,24 +660,35 @@ async def _persist_reply(
     session_factory: Callable[[], Any],
     citations: list[dict[str, Any]] | None = None,
     tool_calls: list[dict[str, Any]] | None = None,
+    model: str | None = None,
 ) -> UUID | None:
     """Write the assistant message, usage row and cost row for this run.
 
     Runs on its own short-lived session, not the request-scoped one: the request
     may already be gone, and a session torn down mid-write would lose a reply
     that was fully generated and streamed to the user.
+
+    ``model`` is the model that actually answered, read off the run's checkpoint
+    by the caller. Every row here used to be stamped with ``settings.DEFAULT_MODEL``
+    instead -- a configured value, not an observation -- which had three
+    consequences: the reloaded transcript labelled every answer with a model the
+    app no longer routes to, cost was priced against that model, and the admin
+    panel's model-provenance and per-model slices aggregated all 164 rows under
+    one legacy slug. The fallback to ``settings.DEFAULT_MODEL`` is only for a run
+    that died before any model produced text.
     """
     if not emitted_text.strip():
         return None
+    response_model = model or settings.DEFAULT_MODEL
     try:
         async with session_factory() as session:
             conv_svc = ConversationService(session)
             usage_svc = UsageService(session)
             prompt_text = " ".join(_message_text(m) for m in user_messages)
-            prompt_tok = ai_client.count_tokens(prompt_text, settings.DEFAULT_MODEL)
-            comp_tok = ai_client.count_tokens(emitted_text, settings.DEFAULT_MODEL)
+            prompt_tok = ai_client.count_tokens(prompt_text, response_model)
+            comp_tok = ai_client.count_tokens(emitted_text, response_model)
             cost_usd = cost_tracking_service.calculate_cost(
-                settings.DEFAULT_MODEL, prompt_tok, comp_tok
+                response_model, prompt_tok, comp_tok
             )
             last_user = ""
             if user_messages:
@@ -660,7 +702,7 @@ async def _persist_reply(
                 role="assistant",
                 content=emitted_text,
                 parent_message_id=parent_message_id,
-                model=settings.DEFAULT_MODEL,
+                model=response_model,
                 # Stored, not derived. These two are the only durable record of
                 # the evidence behind this answer, and the columns have existed
                 # the whole time with nothing writing them -- so a reloaded
@@ -675,8 +717,8 @@ async def _persist_reply(
                     org_id=org_id,
                     conversation_id=conversation_id,
                     message_id=assistant_msg.id,
-                    model=settings.DEFAULT_MODEL,
-                    provider=resolve_provider(settings.DEFAULT_MODEL),
+                    model=response_model,
+                    provider=resolve_provider(response_model),
                     prompt_tokens=prompt_tok,
                     completion_tokens=comp_tok,
                     # The non-stream path passes `duration_ms` here; omitting it
@@ -692,8 +734,8 @@ async def _persist_reply(
                 session=session,
                 user_id=user_id,
                 org_id=org_id,
-                model=settings.DEFAULT_MODEL,
-                provider=resolve_provider(settings.DEFAULT_MODEL),
+                model=response_model,
+                provider=resolve_provider(response_model),
                 prompt_tokens=prompt_tok,
                 completion_tokens=comp_tok,
             )

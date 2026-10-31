@@ -67,7 +67,7 @@ class ConversationService:
         conv = await self._repo.create(
             user_id=user_id,
             title=conv_in.title or "New Chat",
-            model=conv_in.model or "llama-3.3-70b-versatile",
+            model=conv_in.model or "complex_reasoning",
             system_prompt=conv_in.system_prompt,
         )
         logger.info("conversation_created", conversation_id=str(conv.id))

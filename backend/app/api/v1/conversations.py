@@ -14,7 +14,6 @@ from backend.app.api.deps import (
     get_current_user,
     get_usage_service,
 )
-from backend.app.core.config import settings
 from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.domain.conversation.schemas import (
     BranchCreate,
@@ -25,6 +24,10 @@ from backend.app.domain.conversation.schemas import (
 )
 from backend.app.domain.run.service import RunService
 from backend.app.domain.user.models import User
+from backend.app.infrastructure.ai.litellm_client import (
+    get_last_resolved_model,
+    resolve_answer_model,
+)
 from backend.app.infrastructure.database.session import async_session_factory
 from backend.app.infrastructure.resilience.rate_limit import rate_limit
 from backend.app.services.byok import bind_byok_keys, load_user_byok_keys, reset_byok_keys
@@ -275,11 +278,15 @@ async def stream_conversation(
         if user_messages:
             last_in = user_messages[-1]
             last_user = last_in.get("content") if isinstance(last_in, dict) else str(last_in)
+        # Canonical group, not the legacy `settings.DEFAULT_MODEL` slug: a
+        # conversation created here was advertising a model the router no longer
+        # treats as a witness to what answered, and the requested group is the
+        # only honest value available before the first turn runs.
         conv = await conv_svc.create_conversation(
             user_id=current_user.id,
             conv_in=ConversationCreate(
                 title=(last_user or "New Chat")[:120],
-                model=settings.DEFAULT_MODEL,
+                model=resolve_answer_model(body.model),
                 system_prompt=None,
             ),
         )
@@ -694,12 +701,16 @@ async def hitl_feedback(
                     content = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
                 if content and str(content).strip():
                     try:
+                        # The resumed run's own resolution, when the graph
+                        # recorded one; the default group only when the run
+                        # never reached a provider.
                         await conv_svc.add_message(
                             conversation_id=convo_uuid,
                             role="assistant",
                             content=str(content),
                             parent_message_id=None,
-                            model=settings.DEFAULT_MODEL,
+                            model=get_last_resolved_model()
+                            or resolve_answer_model(None),
                         )
                     except Exception as exc:
                         logger.warning("agentic_hitl_assistant_message_persist_failed", thread_id=thread_id, error=str(exc))

@@ -10,7 +10,9 @@ async def test_get_default_settings(client, user_auth_headers):
     assert resp.status_code == 200
     body = resp.json()
     assert body["theme"] == "dark"
-    assert body["default_model"] == "llama-3.3-70b-versatile"
+    # The canonical router group. The default used to be the provider slug
+    # `llama-3.3-70b-versatile`, which the picker never offered.
+    assert body["default_model"] == "complex_reasoning"
     assert body["enable_memory"] is True
 
 
