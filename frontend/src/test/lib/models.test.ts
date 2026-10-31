@@ -8,7 +8,12 @@
  * test pins it, so the drift is a red build instead of a wrong claim.
  */
 import { describe, it, expect } from "vitest"
-import { MODELS, ROUTING_TIERS, modelDisplayName } from "@/lib/models"
+import {
+  MODELS,
+  ROUTING_TIERS,
+  canonicalModelId,
+  modelDisplayName,
+} from "@/lib/models"
 
 describe("model catalogue", () => {
   it("offers exactly the two selectable router groups", () => {
@@ -68,5 +73,33 @@ describe("model catalogue", () => {
 
   it("returns undefined for a missing model", () => {
     expect(modelDisplayName(undefined)).toBeUndefined()
+  })
+})
+
+describe("canonicalModelId", () => {
+  it("passes a selectable group through unchanged", () => {
+    expect(canonicalModelId("fast_chat")).toBe("fast_chat")
+    expect(canonicalModelId("complex_reasoning")).toBe("complex_reasoning")
+  })
+
+  it("maps the old column default onto its router group", () => {
+    // `llama-3.3-70b-versatile` was `user_settings.default_model`'s default,
+    // and `modelDisplayName` has no entry for it -- measured: it returns the
+    // raw slug. So the settings select rendered a *third* option reading
+    // `llama-3.3-70b-versatile` next to the two real groups, which is what
+    // looked like a model the app did not offer. Canonicalising removes it.
+    expect(canonicalModelId("llama-3.3-70b-versatile")).toBe("complex_reasoning")
+    expect(modelDisplayName("llama-3.3-70b-versatile")).toBe(
+      "llama-3.3-70b-versatile",
+    )
+  })
+
+  it("handles provider-prefixed legacy values", () => {
+    expect(canonicalModelId("groq/llama-3.1-8b-instant")).toBe("fast_chat")
+  })
+
+  it("leaves an unrecognised value unresolved rather than guessing", () => {
+    expect(canonicalModelId("some/unknown-model")).toBeUndefined()
+    expect(canonicalModelId(null)).toBeUndefined()
   })
 })

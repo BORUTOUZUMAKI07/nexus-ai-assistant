@@ -32,7 +32,7 @@ import {
 } from "@/lib/queries";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
-import { MODELS, modelDisplayName } from "@/lib/models";
+import { MODELS, canonicalModelId, modelDisplayName } from "@/lib/models";
 
 export const SettingsView: React.FC = () => {
   const queryClient = useQueryClient();
@@ -53,17 +53,29 @@ export const SettingsView: React.FC = () => {
 
   // The settings dropdown offers the same two models as the sidebar picker, from
   // the single source in `lib/models`, so the "default model" a user saves is a
-  // real router group the chat can honor. A value stored before this change (a
-  // legacy slug) is kept as an extra option rather than dropped, so an older
-  // default is shown instead of rendering the select blank.
+  // real router group the chat can honor.
+  //
+  // A stored legacy slug is canonicalised first (`llama-3.3-70b-versatile` ->
+  // `complex_reasoning`). Rendering it as-is produced a *third* option reading
+  // `llama-3.3-70b-versatile` (measured: `modelDisplayName` has no label for
+  // it), beside the two real groups -- an entry that looked like a model the
+  // app did not offer. Only a value that cannot be mapped at all is
+  // kept as an extra option (labelled as legacy), so a default is never
+  // rendered blank or silently rewritten into a different model.
   const modelOptions = useMemo(() => {
     const known = MODELS.map((m) => ({
       id: m.id as string,
       name: `${m.name} · ${m.provider}`,
     }));
     const stored = settings?.default_model;
-    if (stored && !known.some((o) => o.id === stored)) {
-      return [...known, { id: stored, name: modelDisplayName(stored) ?? stored }];
+    if (stored && !canonicalModelId(stored)) {
+      return [
+        ...known,
+        {
+          id: stored,
+          name: `${modelDisplayName(stored) ?? stored} (legacy)`,
+        },
+      ];
     }
     return known;
   }, [settings?.default_model]);
@@ -86,8 +98,16 @@ export const SettingsView: React.FC = () => {
   // `settings === null` so a save (or a later refetch) never clobbers edits.
   useEffect(() => {
     if (settings === null && settingsQuery.data) {
+      const hydrated = settingsQuery.data;
+      // Normalise a legacy stored default on read, so the select shows the
+      // group it actually resolves to and a save writes the canonical id.
+      const canonical = canonicalModelId(hydrated.default_model);
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSettings(settingsQuery.data);
+      setSettings(
+        canonical && canonical !== hydrated.default_model
+          ? { ...hydrated, default_model: canonical }
+          : hydrated,
+      );
     }
   }, [settings, settingsQuery.data]);
 
@@ -275,7 +295,11 @@ export const SettingsView: React.FC = () => {
               Default model
             </label>
             <select
-              value={settings?.default_model ?? ""}
+              value={
+                canonicalModelId(settings?.default_model) ??
+                settings?.default_model ??
+                ""
+              }
               onChange={(e) => patch({ default_model: e.target.value })}
               className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
             >

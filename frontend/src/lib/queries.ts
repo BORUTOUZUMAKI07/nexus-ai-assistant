@@ -226,8 +226,8 @@ export function useWebhooks() {
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
-export function useSettingsQuery() {
-  return useQuery({ queryKey: settingsKeys.settings, queryFn: fetchSettings });
+export function useSettingsQuery(enabled = true) {
+  return useQuery({ queryKey: settingsKeys.settings, queryFn: fetchSettings, enabled });
 }
 
 export function useMemoriesQuery() {

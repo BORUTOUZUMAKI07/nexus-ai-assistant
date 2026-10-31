@@ -94,6 +94,43 @@ const PROVIDER_MODEL_LABELS: Record<string, string> = {
   "pollinations/turbo": "Pollinations Turbo",
 };
 
+/**
+ * Legacy model strings that older `user_settings.default_model` rows still hold.
+ *
+ * Every one of these is a provider slug from before the picker was wired to the
+ * router groups. They must map onto the *same* group the backend resolves them
+ * to (`resolve_model_group` in `litellm_client.py`), which is why
+ * `llama-3.3-70b-versatile` -- the old column default -- lands on
+ * `complex_reasoning`. Without this map the settings dropdown showed a third
+ * option reading `llama-3.3-70b-versatile` beside the two real groups (measured:
+ * `modelDisplayName` has no label for it and returns the slug), and the chat
+ * ignored the saved default entirely.
+ */
+const LEGACY_MODEL_IDS: Record<string, ModelId> = {
+  "llama-3.3-70b-versatile": "complex_reasoning",
+  "meta-llama/llama-3.3-70b-instruct:free": "complex_reasoning",
+  "deepseek-r1-distill-llama-70b": "complex_reasoning",
+  "llama-3.1-8b-instant": "fast_chat",
+  "meta-llama/llama-3.1-8b-instruct:free": "fast_chat",
+  "compound-mini": "fast_chat",
+};
+
+/**
+ * Resolve any stored model string to a selectable group id, or `undefined` when
+ * it is not one we know how to map. Unknown stays unknown on purpose: a value
+ * this app cannot place should be shown as stored rather than silently rewritten
+ * into a different model.
+ */
+export function canonicalModelId(
+  model: string | undefined | null,
+): ModelId | undefined {
+  if (!model) return undefined;
+  const known = MODELS.find((m) => m.id === model);
+  if (known) return known.id;
+  const bare = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
+  return LEGACY_MODEL_IDS[model] ?? LEGACY_MODEL_IDS[bare];
+}
+
 export function modelDisplayName(model: string | undefined): string | undefined {
   if (!model) return undefined;
   const group = MODELS.find((m) => m.id === model);

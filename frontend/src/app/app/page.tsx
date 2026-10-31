@@ -47,13 +47,14 @@ import {
   useConversations,
   useArtifacts,
   usePlans,
+  useSettingsQuery,
   conversationKeys,
   artifactKeys,
   planKeys,
   type CachedArtifact,
 } from "@/lib/queries";
 import { useNexusChat, NexusMessage } from "@/hooks/useNexusChat";
-import { DEFAULT_MODEL_ID } from "@/lib/models";
+import { DEFAULT_MODEL_ID, canonicalModelId } from "@/lib/models";
 import { resolveConversationMode } from "@/lib/chatMode";
 
 /**
@@ -174,6 +175,9 @@ function AppPageInner() {
   const [activeTab, setActiveTab] = useState<"chat" | "files" | "projects" | "usage" | "settings" | "admin">("chat");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [currentModel, setCurrentModel] = useState<string>(DEFAULT_MODEL_ID);
+  // Set the moment the user (or the command palette) picks a model in this
+  // session, so the saved default can never overwrite a deliberate choice.
+  const [modelChosenHere, setModelChosenHere] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   // A conversation's messages are fetched by the chat hook, not here. See the
@@ -258,6 +262,22 @@ function AppPageInner() {
 
   const plansQuery = usePlans(activeConversationId, mounted && !isAuthOpen);
   const planHistory = plansQuery.data ?? [];
+
+  // The settings page saves a "Default model", and nothing read it: the picker
+  // always started at DEFAULT_MODEL_ID, so changing the default changed nothing.
+  // Apply it once, on hydration, and only while the user has not picked a model
+  // themselves. A legacy stored slug is canonicalised to its router group.
+  const settingsQuery = useSettingsQuery(mounted && !isAuthOpen);
+  useEffect(() => {
+    if (modelChosenHere) return;
+    const saved = canonicalModelId(settingsQuery.data?.default_model);
+    if (saved) setCurrentModel(saved);
+  }, [settingsQuery.data, modelChosenHere]);
+
+  const chooseModel = useCallback((model: string) => {
+    setModelChosenHere(true);
+    setCurrentModel(model);
+  }, []);
 
   const chat = useNexusChat({
     conversationId: activeConversationId || undefined,
@@ -938,7 +958,7 @@ function AppPageInner() {
         activeTab={effectiveTab}
         setActiveTab={setActiveTab}
         currentModel={currentModel}
-        onChangeModel={setCurrentModel}
+        onChangeModel={chooseModel}
         onSignOut={handleSignOut}
         showAdmin={isAdmin}
         onOpenCommandPalette={() => setPaletteOpen(true)}
@@ -951,7 +971,7 @@ function AppPageInner() {
         onSelectConversation={handleSelectConversation}
         onNewChat={handleNewChat}
         setActiveTab={setActiveTab}
-        onChangeModel={setCurrentModel}
+        onChangeModel={chooseModel}
         currentModel={currentModel}
         onSignOut={handleSignOut}
         showAdmin={isAdmin}
