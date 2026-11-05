@@ -80,6 +80,28 @@ function resolveOAuthError(search: string): string | null {
   return OAUTH_ERROR_MESSAGES[code] ?? code;
 }
 
+/**
+ * Where to send the user after a successful sign-in.
+ *
+ * `?next=` is how a protected page — and the organization invite link — gets the
+ * user back to what they were doing. Without it, every such link dead-ends at
+ * `/app` and the invite token the user clicked is silently dropped.
+ *
+ * Only same-origin paths are honoured. A browser treats `//evil.com` and
+ * `https://evil.com` as absolute, so passing either through would make this
+ * login page an open redirect that an attacker can use to bounce freshly
+ * authenticated users onto their own site. Backslashes are rejected too, since
+ * WHATWG URL parsing normalises `\\evil.com` into a scheme-relative host.
+ */
+export function resolveNextPath(search: string): string {
+  const raw = new URLSearchParams(search).get("next");
+  if (!raw) return "/app";
+  if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) {
+    return "/app";
+  }
+  return raw;
+}
+
 export default function SignInPage() {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -102,6 +124,8 @@ export default function SignInPage() {
   // Read the redirect's query string without an effect (see `resolveOAuthError`).
   const searchString = useSyncExternalStore(SUBSCRIBE, getSnapshot, getServerSnapshot);
   const urlError = resolveOAuthError(searchString);
+  // Same search string, one more question asked of it: where to land afterwards.
+  const nextPath = resolveNextPath(searchString);
   // A message from the redirect URL is the initial one; a locally produced error
   // supersedes it for good.
   const errorMessage = error === undefined ? urlError : error;
@@ -110,7 +134,7 @@ export default function SignInPage() {
     // The access cookie is httpOnly, so session presence is verified against
     // the backend rather than by reading document.cookie.
     void checkAuth().then((authed) => {
-      if (authed) router.replace("/app");
+      if (authed) router.replace(nextPath);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -132,7 +156,7 @@ export default function SignInPage() {
       // /api/auth/login writes the httpOnly session cookies; this page just
       // navigates once the server confirms the session was created.
       await loginUser({ email, password });
-      router.replace("/app");
+      router.replace(nextPath);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");
     } finally {
