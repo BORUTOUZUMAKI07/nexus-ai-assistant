@@ -126,15 +126,30 @@ async def test_summarize_agent_history_returns_summary():
     out = await comp.summarize_agent_history(
         [FakeMessage("hello", "human"), FakeMessage("hi", "ai")]
     )
-    assert out == "dense recap"
+    # The model's prose comes first, then the deterministic state tail. The tail
+    # exists because a prose summary drops exactly the facts a resumed turn
+    # needs (the open question, artifacts, the last failure) -- see
+    # `_state_tail` in context_compiler.
+    assert out.startswith("dense recap")
+    assert "[State carried over" in out
+    assert "last user question: hello" in out
     assert client.calls, "summarisation must actually call the model"
 
 
 async def test_summarize_agent_history_fails_open_on_provider_error():
-    """A summarisation failure must return "" — never raise into the hot path."""
+    """A summarisation failure must never raise into the hot path.
+
+    It used to return "" and that was the whole contract. It now returns the
+    state tail instead: the tail is built from the messages, not from the
+    provider, so a failed summary still carries the part a resumed turn needs,
+    and dropping it would discard the only state that survived.
+    """
     comp = _compiler(FakeClient(fail=True))
     out = await comp.summarize_agent_history([FakeMessage("hello")])
-    assert out == ""
+    assert "[State carried over" in out
+    assert "last user question: hello" in out
+    # Nothing was invented: the provider said nothing, so no prose appears.
+    assert "dense recap" not in out
 
 
 async def test_summarize_agent_history_empty_is_noop():
