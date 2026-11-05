@@ -187,6 +187,52 @@ describe("/api/chat SSE translation", () => {
     }
   })
 
+  it("forwards the backend's progress stage as an annotation, not as text", async () => {
+    // The frame exists because the synthesizer only streams its *finished*,
+    // guardrailed text, so an agent-mode run emits nothing for most of a
+    // minute: measured live, first frame at 53 s of an 80 s run. Without this
+    // branch the backend's progress frames are dropped here -- the transcript
+    // shows "Thinking…" with nothing behind it and the run reads as hung.
+    //
+    // It must be an annotation and never a `0:` text frame: a stage name inside
+    // the answer would be persisted into the assistant's reply.
+    const restore = stubBackend(
+      'data: {"type":"status","stage":"critic_grader","label":"Checking evidence"}' +
+        "\n\n"
+    )
+    try {
+      const POST = await chatRoute()
+      const res = await POST(request(), {})
+      // One read: the body can only be consumed once, so the annotation is
+      // parsed out of the frames already collected instead of re-reading.
+      const all = await frames(res)
+      expect(all.some((l) => l.startsWith("0:"))).toBe(false)
+      const annFrame = all.find((l) => l.startsWith("8:"))
+      expect(annFrame).toBeDefined()
+      const ann = JSON.parse((annFrame as string).slice(2))[0]
+      expect(ann.type).toBe("status")
+      expect(ann.data).toEqual({
+        stage: "critic_grader",
+        label: "Checking evidence",
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  it("ignores a status frame with no label rather than inventing one", async () => {
+    // A frame with no readable stage is not progress. Emitting an empty
+    // annotation would blank the client's progress line and leave it blank.
+    const restore = stubBackend('data: {"type":"status","stage":"router"}' + "\n\n")
+    try {
+      const POST = await chatRoute()
+      const res = await POST(request(), {})
+      expect(await frames(res)).toEqual([])
+    } finally {
+      restore()
+    }
+  })
+
   it("translates the evidence-quality score into an annotation", async () => {
     // `evidence_gate_passed: false` is the one that matters to a user: it is
     // the run saying its own answer was thin on evidence. Defaulting it to

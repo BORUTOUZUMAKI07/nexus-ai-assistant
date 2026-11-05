@@ -176,6 +176,21 @@ function translateFrame(
     ])}\n`;
   }
 
+  if (eventType === "status" && typeof parsed.label === "string") {
+    // Node-start progress, emitted by services/run_executor.py::iter_graph_frames.
+    //
+    // Without this branch the frame is dropped on the floor and the transcript
+    // shows a static "Thinking…" for the whole run — which, because the
+    // synthesizer only streams its *finished* (guardrailed) text, is every
+    // agent-mode turn: measured 53 s of silence on a live run. The label is a
+    // string the backend owns; this side only forwards it, so a renamed stage
+    // cannot turn into a wrong claim here.
+    const stage = typeof parsed.stage === "string" ? parsed.stage : "";
+    return `8:${JSON.stringify([
+      { type: "status", data: { stage, label: parsed.label } },
+    ])}\n`;
+  }
+
   if (eventType === "error") {
     const errorMsg = parsed.message ?? parsed.error ?? "An error occurred";
     return `3:${JSON.stringify(errorMsg)}\n`;

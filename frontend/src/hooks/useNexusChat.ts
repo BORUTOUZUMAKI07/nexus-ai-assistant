@@ -266,6 +266,10 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   // AFTER the assistant message row is written, so there is no id to key on --
   // the same constraint artifact identity hits in artifact_node.py.
   const [turnVerdict, setTurnVerdict] = useState<TurnVerdict | null>(null);
+  // The stage the backend says it is on ("Checking evidence", "Writing the
+  // answer"). Cleared with the verdict at the start of every turn, because a
+  // label from the previous run would describe work that is not happening.
+  const [statusLabel, setStatusLabel] = useState<string | null>(null);
   // User turns submitted while a run was in flight. The ref is the synchronous
   // source of truth -- the drain reads it in the same tick the run's `finally`
   // releases the slot, before React has committed a state update -- and the
@@ -530,6 +534,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       // Cleared per turn, not per mount: a verdict left over from the previous
       // run would be displayed against this run's answer.
       setTurnVerdict(null);
+      setStatusLabel(null);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -647,6 +652,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           onArtifactSaved: (artifact) =>
             onArtifactSavedRef.current?.(artifact),
           onTurnVerdict: setTurnVerdict,
+          onStatus: setStatusLabel,
           onModelResolved: (resolvedModel) => {
             // Report the model that actually answered, not the picker's label:
             // a provider fallback must be visible in the transcript rather than
@@ -800,6 +806,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       // or it floats over whatever the transcript shows next -- down to the
       // empty welcome screen.
       setTurnVerdict(null);
+      setStatusLabel(null);
       // A client-only id was never persisted, so removing it locally is the
       // whole job. For a server id, re-read so the reply the cascade removed
       // disappears too.
@@ -997,6 +1004,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     setPendingHITL(null);
     pendingHITLRef.current = null;
     setTurnVerdict(null);
+    setStatusLabel(null);
     setError(null);
   }, [updateMessages, clearQueued]);
 
@@ -1124,6 +1132,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           onArtifactSaved: (artifact) =>
             onArtifactSavedRef.current?.(artifact),
           onTurnVerdict: setTurnVerdict,
+          onStatus: setStatusLabel,
           onModelResolved: (resolvedModel) =>
             updateMessages((prev) =>
               prev.map((m) =>
@@ -1439,6 +1448,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     pendingHITL,
     resolveHITL,
     turnVerdict,
+    statusLabel,
     queuedMessages,
     cancelQueued,
     clearQueued,

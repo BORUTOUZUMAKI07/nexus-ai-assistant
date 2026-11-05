@@ -77,6 +77,16 @@ export interface ChatStreamSink {
    * both would show nothing when only one was sent.
    */
   onTurnVerdict?: (verdict: TurnVerdict) => void;
+  /**
+   * The stage the backend is currently working on, as a human label.
+   *
+   * The synthesizer streams only its finished, guardrailed text, so an
+   * agent-mode turn emits nothing for a long time before its first token. These
+   * frames are the progress signal in that window (`status` frames from
+   * services/run_executor.py). A consumer that ignores this is not broken — it
+   * just has no progress to show.
+   */
+  onStatus?: (label: string) => void;
 }
 
 export interface ChatStreamResult {
@@ -188,6 +198,11 @@ export async function consumeChatStream(
               ? d.evidence_gate_passed
               : null;
           publishVerdict();
+          continue;
+        }
+        if (verdict.type === "status") {
+          const d = verdict.data ?? {};
+          if (typeof d.label === "string" && d.label) sink.onStatus?.(d.label);
           continue;
         }
         if (verdict.type === "model_info") {
