@@ -50,7 +50,7 @@ from backend.app.services.run_log import (
     RunWriter,
     tail_run,
 )
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
 from tests.fakes import (
     FakeResult,
@@ -683,6 +683,11 @@ async def test_the_frame_sequence_is_unchanged_by_the_refactor():
     fallback must not re-emit the final message once tokens have already
     streamed — that bug shipped once and produced the answer three times. And an
     unrecognised custom event must not be forwarded.
+
+    The leading ``status`` frame is deliberate and new: a node starting now
+    announces itself (see ``_NODE_STATUS_LABELS``), because the synthesizer
+    emits only finished text and an agent-mode run would otherwise be silent for
+    close to a minute.
     """
     frames = [
         frame
@@ -692,6 +697,7 @@ async def test_the_frame_sequence_is_unchanged_by_the_refactor():
     ]
 
     assert [f["type"] for f in frames] == [
+        "status",                # bootstrap starting
         "text_delta",            # "Hello"
         "text_delta",            # " there"
         "tool_call",
@@ -702,11 +708,70 @@ async def test_the_frame_sequence_is_unchanged_by_the_refactor():
         # nothing consumed them and the BFF dropped them, so each invocation is
         # now exactly one `tool_call` frame and one `tool_result` frame.
     ]
-    assert frames[0] == {"type": "text_delta", "content": "Hello"}
-    assert frames[2]["tool_call_id"] == "r1"
-    assert frames[2]["tool_input"] == {"q": "x"}
-    assert frames[3]["result"] == "found"
-    assert frames[4] == {"type": "citation", "source": "s1"}
+    assert frames[0] == {
+        "type": "status",
+        "stage": "bootstrap",
+        "label": "Preparing the conversation",
+    }
+    assert frames[1] == {"type": "text_delta", "content": "Hello"}
+    # Index-shifted by the status frame above; pinned by tool_call_id rather
+    # than by position so a later frame insertion fails on the right assertion.
+    tool_call_frame = next(f for f in frames if f["type"] == "tool_call")
+    assert tool_call_frame["tool_call_id"] == "r1"
+    assert tool_call_frame["tool_input"] == {"q": "x"}
+    assert next(f for f in frames if f["type"] == "tool_result")["result"] == "found"
+    assert next(f for f in frames if f["type"] == "citation") == {
+        "type": "citation",
+        "source": "s1",
+    }
+    assert "not_forwarded" not in [f.get("type") for f in frames]
+
+
+async def test_a_node_start_announces_a_status_frame_exactly_once():
+    """A node starting is the only progress signal before the first token.
+
+    The synthesizer emits its *finished* text (guardrails run on the whole
+    answer), so an agent-mode run produces no frame until the graph is done --
+    measured live at 53 s of silence. These frames are what turn that silence
+    into "Checking evidence" / "Writing the answer".
+
+    A retried node must not re-announce: the client shows the latest label, and
+    a duplicate would rewrite it to a stage it is no longer on. A nested
+    runnable inside a node carries its own name and must emit nothing at all --
+    a guessed label describes work that is not happening.
+    """
+    events = [
+        {"event": "on_chain_start", "name": "planner", "data": {}},
+        {"event": "on_chain_start", "name": "planner", "data": {}},
+        {"event": "on_chain_start", "name": "RunnableSequence", "data": {}},
+        {"event": "on_chain_start", "name": "synthesizer", "data": {}},
+    ]
+    pairs = [
+        pair
+        async for pair in iter_graph_frames(FakeGraph(events), config=CONFIG, graph_input={})
+    ]
+
+    assert [frame for frame, _ in pairs] == [
+        {"type": "status", "stage": "planner", "label": "Planning the answer"},
+        {"type": "status", "stage": "synthesizer", "label": "Writing the answer"},
+    ]
+    # A status frame is never answer text: flipping this flag would make the
+    # executor accumulate a label into the persisted reply.
+    assert all(is_text is False for _, is_text in pairs)
+
+
+async def test_every_graph_node_has_a_status_label():
+    """The labels are a map, so an unnamed node fails silently.
+
+    A node renamed or added without an entry here still runs; it just never
+    announces itself, and the progress line goes quiet mid-run with nothing to
+    point at. Checked against the graph itself so the two cannot drift.
+    """
+    from backend.app.agents.orchestrator.graph import _build_workflow
+    from backend.app.services.run_executor import _NODE_STATUS_LABELS
+
+    registered = set(_build_workflow().nodes)
+    assert set(_NODE_STATUS_LABELS) == registered
 
 
 async def test_a_custom_text_delta_event_is_marked_as_text():
@@ -732,11 +797,26 @@ async def test_tool_output_is_truncated_before_it_reaches_the_log():
 
 
 async def test_the_non_streaming_fallback_still_emits_the_final_message():
-    """When no token stream arrives (the ToT node), the answer must still appear."""
+    """When no token stream arrives (the ToT node), the answer must still appear.
+
+    The fallback is the ToT node's only delivery path. The synthesizer's is the
+    writer, and it is excluded from this fallback on purpose -- see
+    test_the_writer_owner_never_delivers_its_answer_twice.
+    """
     pairs = [
         pair
         async for pair in iter_graph_frames(
-            FakeGraph([GOLDEN_EVENTS[-1]]), config=CONFIG, graph_input={}
+            FakeGraph(
+                [
+                    {
+                        "event": "on_chain_end",
+                        "name": "tree_of_thoughts",
+                        "data": {"output": {"messages": [_msg("Hello there")]}},
+                    }
+                ]
+            ),
+            config=CONFIG,
+            graph_input={},
         )
     ]
     assert pairs == [({"type": "text_delta", "content": "Hello there"}, True)]
@@ -767,7 +847,7 @@ async def test_a_real_ai_message_in_a_state_delta_is_still_the_answer():
     """The role guard must not suppress the case the fallback exists for."""
     event = {
         "event": "on_chain_end",
-        "name": "synthesizer",
+        "name": "tree_of_thoughts",
         "data": {"output": {"messages": [AIMessage(content="the answer")]}},
     }
     pairs = [
@@ -775,6 +855,44 @@ async def test_a_real_ai_message_in_a_state_delta_is_still_the_answer():
         async for pair in iter_graph_frames(FakeGraph([event]), config=CONFIG, graph_input={})
     ]
     assert pairs == [({"type": "text_delta", "content": "the answer"}, True)]
+
+
+async def test_a_synthesizer_token_stream_is_not_forwarded_twice():
+    """The synthesizer's raw draft must never be the delivered answer.
+
+    It is emitted before PII redaction and the confidence hedge run, and the
+    sanitised text arrives a moment later through the writer's `text_delta` drip.
+    Forwarding both put the answer on the wire twice: measured live as two
+    identical `text_delta` frames in one run, and a regenerated reply persisted
+    as "sweep one editedsweep one edited". The provider only streams on some
+    runs, which is why it looked intermittent rather than broken.
+    """
+    event = {
+        "event": "on_chat_model_stream",
+        "name": "ChatLiteLLM",
+        "metadata": {"langgraph_node": "synthesizer"},
+        "data": {"chunk": AIMessageChunk(content="raw unredacted draft")},
+    }
+    frames = [
+        frame
+        async for frame, _ in iter_graph_frames(FakeGraph([event]), config=CONFIG, graph_input={})
+    ]
+    assert frames == []
+
+
+async def test_a_token_stream_from_another_node_is_still_forwarded():
+    """The suppression is scoped to the synthesizer, not to model streaming."""
+    event = {
+        "event": "on_chat_model_stream",
+        "name": "ChatLiteLLM",
+        "metadata": {"langgraph_node": "tree_of_thoughts"},
+        "data": {"chunk": AIMessageChunk(content="branch")},
+    }
+    pairs = [
+        pair
+        async for pair in iter_graph_frames(FakeGraph([event]), config=CONFIG, graph_input={})
+    ]
+    assert pairs == [({"type": "text_delta", "content": "branch"}, True)]
 
 
 async def test_the_stream_subscribes_to_custom_events_in_string_form():
@@ -824,6 +942,47 @@ async def test_a_streamed_custom_delta_suppresses_the_full_message_fallback():
     assert frames == [{"type": "text_delta", "content": "Hello"}]
 
 
+async def test_the_writer_owner_never_delivers_its_answer_twice():
+    """The defect this pins: one answer, two `text_delta` frames.
+
+    The synthesizer's `on_chain_end` output carries the final `AIMessage`, and
+    its writer payload arrives as a separate root `on_chain_stream`. Which of the
+    two the event loop dispatches first is scheduling, not design, so the
+    `messages` fallback used to fire *before* the writer chunk on some runs:
+    the flag was still False, the whole answer went out, and the writer chunk
+    then sent it again. Persisted as `"del onedel one"` / `"turn twoturn two"`;
+    reproduced in 2 of 8 parallel runs and 0 of 26 serial ones, which is exactly
+    why it read as a flaky client bug for a week.
+
+    Both orders are asserted because the racy one is the whole point: a fix that
+    only holds when the writer wins would leave the bug in place.
+    """
+    writer_chunk = {
+        "event": "on_chain_stream",
+        "name": "LangGraph",
+        "data": {"chunk": {"type": "text_delta", "content": "del one"}},
+    }
+    synthesizer_end = {
+        "event": "on_chain_end",
+        "name": "synthesizer",
+        "data": {"output": {"messages": [_msg("del one")]}},
+    }
+
+    for label, events in (
+        ("writer first", [writer_chunk, synthesizer_end]),
+        ("on_chain_end first", [synthesizer_end, writer_chunk]),
+    ):
+        frames = [
+            frame
+            async for frame, _ in iter_graph_frames(
+                FakeGraph(events), config=CONFIG, graph_input={}
+            )
+        ]
+        assert frames == [{"type": "text_delta", "content": "del one"}], (
+            f"{label}: expected one delivery of the answer, got {frames!r}"
+        )
+
+
 async def test_a_non_text_custom_frame_does_not_suppress_the_answer():
     """`is_text_delta` decides whether the reply is accumulated, so a status
     frame must be relayed without being mistaken for the answer and without
@@ -834,7 +993,15 @@ async def test_a_non_text_custom_frame_does_not_suppress_the_answer():
             "name": "LangGraph",
             "data": {"chunk": {"type": "thinking", "content": "composing"}},
         },
-        GOLDEN_EVENTS[-1],  # on_chain_end synthesizer -> the full message
+        # A node that does not write through the stream: the `messages`
+        # fallback is *its* delivery path (the synthesizer's is the writer, and
+        # it is deliberately excluded -- see
+        # test_the_writer_owner_never_delivers_its_answer_twice).
+        {
+            "event": "on_chain_end",
+            "name": "tree_of_thoughts",
+            "data": {"output": {"messages": [_msg("Hello there")]}},
+        },
     ]
     pairs = [
         pair
