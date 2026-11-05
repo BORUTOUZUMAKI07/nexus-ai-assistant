@@ -15,10 +15,17 @@ import { proxy, config } from "@/proxy";
  */
 const ORIGIN = "https://nexus.example";
 
-function request(pathname: string, cookieValue?: string): NextRequest {
+function request(
+  pathname: string,
+  cookieValue?: string,
+  refreshCookie?: string,
+): NextRequest {
   const req = new NextRequest(`${ORIGIN}${pathname}`);
   if (cookieValue !== undefined) {
     req.cookies.set("nexus_access_token", cookieValue);
+  }
+  if (refreshCookie !== undefined) {
+    req.cookies.set("nexus_refresh_token", refreshCookie);
   }
   return req;
 }
@@ -43,6 +50,22 @@ describe("edge session gate", () => {
     // `?.value` is a falsy check precisely so this case redirects. Worth pinning:
     // switching to a `!== undefined` test would let it through.
     const res = proxy(request("/app", ""));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/signin");
+  });
+
+  it("lets a tab through on a refresh cookie alone", () => {
+    // Measured defect: the access token lives one hour, the refresh token thirty
+    // days. Gating on the access cookie alone meant a tab was redirected to
+    // /signin an hour into a perfectly valid session, and the probe that would
+    // have healed it never ran. This is the case that fix depends on.
+    const res = proxy(request("/app", undefined, "r.e.f"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("still redirects when the only cookie has an empty value", () => {
+    const res = proxy(request("/app", "", ""));
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toContain("/signin");
   });
@@ -99,6 +122,11 @@ describe("edge session gate", () => {
     // landing page require a session, which is the single most damaging way this
     // file could be misconfigured.
     expect(config.matcher).toEqual(["/app", "/app/:path*"]);
+  });
+
+  it("keeps the refresh cookie name in sync with the auth module", async () => {
+    const { REFRESH_COOKIE } = await import("@/lib/auth");
+    expect(REFRESH_COOKIE).toBe("nexus_refresh_token");
   });
 
   it("keeps the cookie name in sync with the auth module", async () => {

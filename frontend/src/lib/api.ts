@@ -1017,18 +1017,37 @@ export interface CurrentUser {
  * httpOnly access cookie, so this server-side probe is the source of truth for
  * "am I signed in" and which UI sections (e.g. Admin) are visible.
  */
-export async function fetchCurrentUser(): Promise<{
+export type SessionProbe = {
   authenticated: boolean;
   user?: CurrentUser;
-}> {
-  const res = await fetch(`${API_BASE}/auth/me`, { method: "GET" });
-  if (!res.ok) return { authenticated: false };
-  const data = (await res.json().catch(() => null)) as {
-    authenticated?: boolean;
-    user?: CurrentUser;
-  } | null;
-  if (!data) return { authenticated: res.ok };
-  return { authenticated: Boolean(data.authenticated), user: data.user };
+  /**
+   * The probe could not reach the backend, so `authenticated` is *not* a
+   * verdict. `/api/auth/me` answers 503 in that case (a cold start, a timeout)
+   * rather than claiming signed-out, and the caller must retry instead of
+   * showing the login form.
+   */
+  unavailable?: boolean;
+};
+
+export async function fetchCurrentUser(): Promise<SessionProbe> {
+  try {
+    const res = await fetch(`${API_BASE}/auth/me`, {
+      method: "GET",
+      cache: "no-store",
+    });
+    if (res.status === 503) return { authenticated: false, unavailable: true };
+    if (!res.ok) return { authenticated: false };
+    const data = (await res.json().catch(() => null)) as {
+      authenticated?: boolean;
+      user?: CurrentUser;
+    } | null;
+    // A 200 this route cannot be parsed is a broken response, not a session
+    // answer; say so instead of guessing.
+    if (!data) return { authenticated: false, unavailable: true };
+    return { authenticated: Boolean(data.authenticated), user: data.user };
+  } catch {
+    return { authenticated: false, unavailable: true };
+  }
 }
 
 export async function registerUser(payload: {
@@ -1705,13 +1724,22 @@ export async function inviteOrganizationMember(
   return res.json();
 }
 
-export async function acceptOrganizationInvite(token: string): Promise<void> {
+export interface AcceptedInvite {
+  status: string;
+  organization_id: string;
+  name: string;
+}
+
+export async function acceptOrganizationInvite(token: string): Promise<AcceptedInvite> {
   const res = await nexusFetch(`${API_BASE}/orgs/invites/accept`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ token }),
   });
   if (!res.ok) throw await parseError(res, "Invite could not be accepted");
+  // The route returns the org it joined; the invite page names it in the
+  // confirmation instead of saying a bare "joined" the user cannot verify.
+  return (await res.json().catch(() => ({}))) as AcceptedInvite;
 }
 
 // ─── Outbound webhooks ─────────────────────────────────────────────────────

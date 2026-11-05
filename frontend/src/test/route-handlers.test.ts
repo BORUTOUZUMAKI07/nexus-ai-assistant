@@ -962,3 +962,144 @@ describe("auth cookie lifetimes follow the tokens they carry", () => {
     expect(ACCESS_TOKEN_MAX_AGE).toBeLessThan(REFRESH_TOKEN_MAX_AGE)
   })
 })
+
+/**
+ * The session probe has to survive the one case the app actually hits every
+ * hour: an access token that expired while a valid 30-day refresh token sits
+ * beside it in the cookie jar.
+ *
+ * Before this, `/api/auth/me` reported the 401 as `authenticated: false` and the
+ * client swapped the whole workspace for the sign-in modal — even though the
+ * session was one refresh away from being live. The client cannot fix that
+ * itself: `isAuthRoute()` deliberately keeps the probe out of `nexusFetch`'s
+ * refresh-then-retry (a probe that called `clearSession()` would broadcast a
+ * false expiry to every tab), so the healing has to happen inside the route.
+ *
+ * These tests pin the three outcomes, because every one of them is a different
+ * thing the user sees: a session that resumes, a modal, or a retry.
+ */
+describe("/api/auth/me heals an expired access token", () => {
+  const ME = "/api/auth/me"
+
+  function ok(body: unknown, status = 200) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    })
+  }
+
+  function setCookies(res: Response): string[] {
+    return [
+      ...(res.headers.getSetCookie?.() ?? []),
+      res.headers.get("set-cookie") ?? "",
+    ].filter(Boolean)
+  }
+
+  function maxAgeOf(res: Response, name: string): number {
+    const hit = setCookies(res).find((h) => h.startsWith(`${name}=`))
+    if (!hit) throw new Error(`no Set-Cookie for ${name}: ${setCookies(res).join(" | ")}`)
+    return Number(/Max-Age=(\d+)/i.exec(hit)?.[1])
+  }
+
+  beforeEach(() => {
+    backendFetch.mockReset()
+    vi.resetModules()
+    vi.doMock("next/headers", () => ({
+      cookies: async () => cookieStore(SESSION),
+      headers: async () => ({ get: () => undefined }),
+    }))
+  })
+
+  it("refreshes once and reports the session instead of signing the user out", async () => {
+    backendFetch
+      .mockResolvedValueOnce(ok({ detail: "not_authenticated" }, 401))
+      .mockResolvedValueOnce(
+        ok({
+          access_token: "fresh-access",
+          refresh_token: "fresh-refresh",
+          expires_in: 3600,
+          refresh_expires_in: 2592000,
+        }),
+      )
+      // The re-probe is answered for the *new* token; if the route verified the
+      // stale one it would 401 and the session would still be lost.
+      .mockResolvedValueOnce(ok({ id: "u1", email: "a@b.c" }))
+
+    const mod = await loadRoute(ROUTES.find((r) => r.route === ME)!.file)
+    const res = await mod.GET!(nextRequest(ME), routeContext(ME))
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toEqual({
+      authenticated: true,
+      user: { id: "u1", email: "a@b.c" },
+    })
+    expect(backendFetch.mock.calls.map((c) => c[0])).toEqual([
+      "/auth/me",
+      "/auth/refresh",
+      "/auth/me",
+    ])
+    expect(backendFetch.mock.calls[2][2]).toEqual({ accessToken: "fresh-access" })
+    expect(maxAgeOf(res, TOKEN_COOKIE)).toBe(3600)
+    expect(maxAgeOf(res, REFRESH_COOKIE)).toBe(2592000)
+    expect(res.headers.get("Cache-Control")).toBe("no-store")
+  })
+
+  it("keeps the refresh cookie's lifetime when the backend does not rotate it", async () => {
+    backendFetch
+      .mockResolvedValueOnce(ok({}, 401))
+      .mockResolvedValueOnce(ok({ access_token: "fresh-access" }))
+      .mockResolvedValueOnce(ok({ id: "u1" }))
+
+    const mod = await loadRoute(ROUTES.find((r) => r.route === ME)!.file)
+    const res = await mod.GET!(nextRequest(ME), routeContext(ME))
+
+    expect(res.status).toBe(200)
+    // Re-baking an unrotated token with a fresh 30 days would let the cookie
+    // outlive the JWT inside it — the bug the cookie-lifetime suite exists for.
+    expect(setCookies(res).some((h) => h.startsWith(`${REFRESH_COOKIE}=`))).toBe(false)
+  })
+
+  it("reports signed out when the refresh token is rejected too", async () => {
+    backendFetch
+      .mockResolvedValueOnce(ok({}, 401))
+      .mockResolvedValueOnce(ok({ detail: "Invalid refresh token" }, 401))
+
+    const mod = await loadRoute(ROUTES.find((r) => r.route === ME)!.file)
+    const res = await mod.GET!(nextRequest(ME), routeContext(ME))
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toEqual({ authenticated: false })
+    // One attempt only: a rejected refresh token must not start a retry loop.
+    expect(backendFetch).toHaveBeenCalledTimes(2)
+  })
+
+  it("does not call the refresh endpoint when there is no refresh cookie", async () => {
+    vi.doMock("next/headers", () => ({
+      cookies: async () => cookieStore({ nexus_access_token: "stale" }),
+      headers: async () => ({ get: () => undefined }),
+    }))
+    backendFetch.mockResolvedValueOnce(ok({}, 401))
+
+    const mod = await loadRoute(ROUTES.find((r) => r.route === ME)!.file)
+    const res = await mod.GET!(nextRequest(ME), routeContext(ME))
+
+    await expect(res.json()).resolves.toEqual({ authenticated: false })
+    expect(backendFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it("answers 503 rather than signed-out when the backend cannot be reached mid-refresh", async () => {
+    backendFetch
+      .mockResolvedValueOnce(ok({}, 401))
+      .mockResolvedValueOnce(ok({ detail: "backend_unavailable" }, 503))
+
+    const mod = await loadRoute(ROUTES.find((r) => r.route === ME)!.file)
+    const res = await mod.GET!(nextRequest(ME), routeContext(ME))
+
+    expect(res.status).toBe(503)
+    await expect(res.json()).resolves.toEqual({
+      detail: "auth_unavailable",
+      upstream_status: 503,
+    })
+    expect(res.headers.get("Cache-Control")).toBe("no-store")
+  })
+})

@@ -18,8 +18,9 @@
  * from an expired or forged one without the signing secret, so:
  *
  *   * a request that carries a stale cookie still renders the shell, and the
- *     client-side probe then shows the sign-in modal — the previous behaviour,
- *     which remains the source of truth;
+ *     client-side probe decides: a live refresh token heals the session in
+ *     `/api/auth/me`, and only a real rejection shows the sign-in modal — the
+ *     previous behaviour, which remains the source of truth;
  *   * every API route is already authorised server-side in `lib/proxy.ts`, which
  *     forwards the cookie to FastAPI for verification.
  *
@@ -32,8 +33,9 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 
-/** Must match TOKEN_COOKIE in `src/lib/auth.ts`. */
+/** Must match TOKEN_COOKIE / REFRESH_COOKIE in `src/lib/auth.ts`. */
 const ACCESS_COOKIE = "nexus_access_token";
+const REFRESH_COOKIE = "nexus_refresh_token";
 
 /** Where an unauthenticated visitor is sent. */
 const SIGNIN_PATH = "/signin";
@@ -41,9 +43,20 @@ const SIGNIN_PATH = "/signin";
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // The access cookie is httpOnly, so this runs server-side where it is
-  // readable. Its mere presence is all we check — see the scope note above.
-  if (!request.cookies.get(ACCESS_COOKIE)?.value) {
+  // The cookies are httpOnly, so this runs server-side where they are
+  // readable. Their mere presence is all we check — see the scope note above.
+  //
+  // Either one counts, and that is not a loosening: the access token lives one
+  // hour while the refresh token lives thirty days, so gating on the access
+  // cookie alone bounced a normal working day to /signin — measured: a tab with
+  // a valid 30-day refresh cookie was redirected to /signin an hour after
+  // signing in, and stayed there even though `/api/auth/me` would have healed
+  // the session on the next request. Any cookie present means "a session may
+  // exist", which is exactly what an optimistic gate should ask; whether it is
+  // valid is decided by the probe, and by the backend for every real API call.
+  const hasAccess = Boolean(request.cookies.get(ACCESS_COOKIE)?.value);
+  const hasRefresh = Boolean(request.cookies.get(REFRESH_COOKIE)?.value);
+  if (!hasAccess && !hasRefresh) {
     const signin = new URL(SIGNIN_PATH, request.url);
     // Preserve where they were heading so signin could return them there.
     // signin currently always lands on /app, so this is informational; keeping

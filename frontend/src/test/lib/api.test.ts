@@ -6,6 +6,7 @@ import {
   createConversation,
   deleteConversation,
   loginUser,
+  fetchCurrentUser,
   fetchUsage,
   fetchKnowledgeFiles,
   sendHITLFeedback,
@@ -470,5 +471,47 @@ describe("OAuth provider discovery", () => {
 
     expect(calls).toBe(1)
     expect(result).toEqual([])
+  })
+})
+
+describe("fetchCurrentUser", () => {
+  it("reports an authenticated session with its user", async () => {
+    server.use(
+      http.get(`${API}/auth/me`, () =>
+        HttpResponse.json({ authenticated: true, user: { id: "u1", email: "a@b.c" } })
+      )
+    )
+    await expect(fetchCurrentUser()).resolves.toMatchObject({
+      authenticated: true,
+      user: { id: "u1" },
+    })
+  })
+
+  it("treats an upstream rejection as a real signed-out verdict", async () => {
+    server.use(
+      http.get(`${API}/auth/me`, () => HttpResponse.json({ authenticated: false }))
+    )
+    await expect(fetchCurrentUser()).resolves.toEqual({ authenticated: false })
+  })
+
+  it("marks a 503 as unavailable rather than signed out", async () => {
+    // The measured defect: during a backend cold start the probe answered
+    // `authenticated: false` for a valid session and the app replaced the
+    // workspace with the sign-in modal. "Cannot verify" is not "signed out".
+    server.use(
+      http.get(`${API}/auth/me`, () =>
+        HttpResponse.json({ detail: "auth_unavailable" }, { status: 503 })
+      )
+    )
+    const probe = await fetchCurrentUser()
+    expect(probe.authenticated).toBe(false)
+    expect(probe.unavailable).toBe(true)
+  })
+
+  it("marks a failed probe as unavailable", async () => {
+    server.use(http.get(`${API}/auth/me`, () => HttpResponse.error()))
+    const probe = await fetchCurrentUser()
+    expect(probe.authenticated).toBe(false)
+    expect(probe.unavailable).toBe(true)
   })
 })

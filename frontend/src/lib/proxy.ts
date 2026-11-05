@@ -81,9 +81,19 @@ async function isCrossOriginRequest(requestHeaders: Headers): Promise<boolean> {
   return originHost !== host;
 }
 
-export async function backendFetch(path: string, init?: RequestInit) {
+export async function backendFetch(
+  path: string,
+  init?: RequestInit,
+  options: { accessToken?: string } = {},
+) {
   const cookieStore = await cookies();
-  const accessToken = cookieStore.get(TOKEN_COOKIE)?.value;
+  // An explicit token exists for exactly one caller: `/api/auth/me` heals an
+  // expired access token by refreshing, and then has to verify the *new* token
+  // against the backend before it reports a session. The browser has not
+  // received that token yet at that point (it only learns about it from this
+  // response's Set-Cookie), so the cookie store still holds the stale value and
+  // the re-probe would 401 for the wrong reason.
+  const accessToken = options.accessToken ?? cookieStore.get(TOKEN_COOKIE)?.value;
 
   const method = (init?.method ?? "GET").toUpperCase();
   if (MUTATING_METHODS.has(method)) {
