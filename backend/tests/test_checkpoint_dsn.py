@@ -192,3 +192,96 @@ def test_redaction_is_a_noop_without_credentials():
 
 def test_redaction_handles_an_empty_string():
     assert redact_dsn("") == ""
+
+
+# ── the fallback when the session-mode port does not exist ──────────────────
+
+
+def test_candidates_offer_the_transaction_dsn_as_fallback(with_settings):
+    with_settings("postgresql+asyncpg://u:pw@aws-0-x.pooler.supabase.com:6543/postgres")
+
+    preferred, fallback = graph_mod._resolve_checkpoint_dsn_candidates()
+
+    assert ":5432/" in preferred
+    # The fallback is the untouched original, not a second rewrite.
+    assert fallback == "postgresql://u:pw@aws-0-x.pooler.supabase.com:6543/postgres"
+
+
+def test_candidates_never_second_guess_an_explicit_dsn(with_settings):
+    # Pinning LANGGRAPH_CHECKPOINT_DSN is how an operator says "this is the
+    # endpoint; do not improvise". A fallback here would override that.
+    with_settings(
+        "postgresql+asyncpg://u:pw@aws-0-x.pooler.supabase.com:6543/postgres",
+        explicit="postgresql://u:pw@direct.example.com:5432/postgres",
+    )
+
+    preferred, fallback = graph_mod._resolve_checkpoint_dsn_candidates()
+
+    assert preferred == "postgresql://u:pw@direct.example.com:5432/postgres"
+    assert fallback is None
+
+
+def test_candidates_offer_no_fallback_for_a_direct_database(with_settings):
+    with_settings("postgresql+asyncpg://u:pw@localhost:55600/nexus_dev")
+
+    preferred, fallback = graph_mod._resolve_checkpoint_dsn_candidates()
+
+    assert preferred == "postgresql://u:pw@localhost:55600/nexus_dev"
+    assert fallback is None
+
+
+async def test_lifespan_retries_the_transaction_pooler_when_session_mode_fails(
+    monkeypatch, with_settings
+):
+    """A pooler with no session-mode endpoint must still boot the API.
+
+    The incident: the checkpointer upgrade to :5432 timed out, production
+    refused to degrade, and the whole API failed to start although every other
+    consumer of DATABASE_URL was healthy.
+    """
+    with_settings("postgresql+asyncpg://u:pw@h.pooler.supabase.com:6543/postgres")
+    monkeypatch.setattr(graph_mod.settings, "ENVIRONMENT", "production", raising=False)
+
+    attempted: list[str] = []
+
+    class _FakeCheckpointer:
+        def __init__(self, dsn: str) -> None:
+            self.dsn = dsn
+
+        async def aclose(self) -> None:
+            return None
+
+    async def _fake_open(dsn: str):
+        attempted.append(dsn)
+        if len(attempted) == 1:
+            raise OSError("connection timeout expired")
+        return _FakeCheckpointer(dsn)
+
+    class _Workflow:
+        def compile(self, checkpointer):
+            assert isinstance(checkpointer, _FakeCheckpointer)
+            return object()
+
+    monkeypatch.setattr(graph_mod, "_open_checkpointer", _fake_open)
+    monkeypatch.setattr(graph_mod, "_build_workflow", lambda: _Workflow())
+
+    async with graph_mod.lifespan_graph():
+        pass
+
+    assert ":5432/" in attempted[0]
+    assert ":6543/" in attempted[1]
+
+
+async def test_production_still_fails_fast_when_both_dsns_fail(monkeypatch, with_settings):
+    """The fix must not become a silent MemorySaver fallback in production."""
+    with_settings("postgresql+asyncpg://u:pw@h.pooler.supabase.com:6543/postgres")
+    monkeypatch.setattr(graph_mod.settings, "ENVIRONMENT", "production", raising=False)
+
+    async def _always_fails(dsn: str):
+        raise OSError("nope")
+
+    monkeypatch.setattr(graph_mod, "_open_checkpointer", _always_fails)
+
+    with pytest.raises(RuntimeError, match="refusing to silently degrade"):
+        async with graph_mod.lifespan_graph():
+            pass

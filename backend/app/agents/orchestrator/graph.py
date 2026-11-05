@@ -336,6 +336,68 @@ def _resolve_checkpoint_dsn() -> str:
     return dsn
 
 
+def _resolve_checkpoint_dsn_candidates() -> tuple[str, str | None]:
+    """Return ``(preferred_dsn, transaction_mode_fallback)``.
+
+    ``_resolve_checkpoint_dsn`` upgrades a transaction-mode pooler port (6543)
+    to the session-mode port (5432) because the checkpointer holds one
+    long-lived connection. That upgrade assumes the session-mode endpoint is
+    actually reachable, and on some managed poolers it is not: Supabase's
+    Supavisor closes session-mode connections immediately for projects that do
+    not expose that mode. Measured on this project — ``:6543`` accepts the
+    checkpointer's exact connection settings (``prepare_threshold=None``,
+    autocommit) and runs DDL, while ``:5432`` on the same host times out.
+
+    In development the failed upgrade falls back to ``InMemorySaver``; in
+    production it aborted startup, so a project with only a transaction-mode
+    pooler could not boot the API at all even though every other consumer of
+    ``DATABASE_URL`` worked. The fallback is therefore the *original* DSN, and
+    it is only offered when the port was rewritten automatically — an explicit
+    ``LANGGRAPH_CHECKPOINT_DSN`` is never second-guessed.
+
+    The transaction-mode pooler is allowed to reap that connection; that is
+    exactly what ``ResilientPostgresSaver`` exists to survive, and
+    ``prepare_threshold=None`` keeps it from fighting the pooler over prepared
+    statements.
+    """
+    preferred = _resolve_checkpoint_dsn()
+    if settings.LANGGRAPH_CHECKPOINT_DSN:
+        return preferred, None
+
+    database_url = settings.DATABASE_URL or os.environ.get(
+        "DATABASE_URL", "postgresql://nexus:nexus@localhost:5432/nexus_dev"
+    )
+    original = database_url.replace("postgresql+asyncpg://", "postgresql://")
+    if ":6543/" in original and ":5432/" in preferred:
+        return preferred, original
+    return preferred, None
+
+
+async def _open_checkpointer(dsn: str) -> Any:
+    """Connect, wrap and ``setup()`` a checkpointer, releasing the socket on failure.
+
+    A failed ``setup()`` leaves an open psycopg connection, which would leak a
+    pooler slot on every retry of the session-mode attempt.
+    """
+    conn = await AsyncConnection.connect(
+        dsn,
+        autocommit=True,
+        prepare_threshold=None,
+        row_factory=dict_row,
+    )
+    checkpointer = ResilientPostgresSaver(
+        dsn=dsn,
+        conn=conn,
+        saver_factory=AsyncPostgresSaver,
+    )
+    try:
+        await checkpointer.setup()
+    except Exception:
+        await checkpointer.aclose()
+        raise
+    return checkpointer
+
+
 @asynccontextmanager
 async def lifespan_graph() -> AsyncIterator[None]:
     """
@@ -364,7 +426,7 @@ async def lifespan_graph() -> AsyncIterator[None]:
     """
     global _compiled_graph
 
-    pg_dsn = _resolve_checkpoint_dsn()
+    pg_dsn, pooler_fallback_dsn = _resolve_checkpoint_dsn_candidates()
 
     logger.info(
         "langgraph_checkpointer_initializing",
@@ -378,29 +440,30 @@ async def lifespan_graph() -> AsyncIterator[None]:
 
     if AsyncPostgresSaver is not None:
         try:
-            # A dedicated AsyncConnection (langgraph's from_conn_string helper is
-            # unusable with transaction-mode poolers — it hardcodes
-            # prepare_threshold=0, colliding with still-live prepared statements
-            # on a reused backend session after a hard restart).
-            # `prepare_threshold=None` disables server-side PREPARE for poolers.
-            checkpointer_conn = await AsyncConnection.connect(
-                pg_dsn,
-                autocommit=True,
-                prepare_threshold=None,
-                row_factory=dict_row,
-            )
+            # `_open_checkpointer` owns the connection details (autocommit,
+            # `prepare_threshold=None` for poolers, releasing the socket when
+            # `setup()` fails) and the ResilientPostgresSaver wrapper — see its
+            # docstring for why each of those is load-bearing.
             try:
-                # Recreating the saver is the only way to recover: the graph
-                # captures the checkpointer object at compile() time and never
-                # looks it up again, so the wrapper (not the saver) has to own
-                # the connection and swap it in place.
-                checkpointer = ResilientPostgresSaver(
-                    dsn=pg_dsn,
-                    conn=checkpointer_conn,
-                    saver_factory=AsyncPostgresSaver,
+                checkpointer = await _open_checkpointer(pg_dsn)
+            except Exception as upgraded_exc:
+                if pooler_fallback_dsn is None:
+                    raise
+                logger.warning(
+                    "langgraph_checkpointer_session_mode_unreachable_retrying_transaction_mode",
+                    dsn=redact_dsn(pooler_fallback_dsn),
+                    error=str(upgraded_exc)[:300],
+                    detail=(
+                        "The session-mode port (5432) of this pooler is not "
+                        "reachable, so the checkpointer is using the "
+                        "transaction-mode DSN from DATABASE_URL instead. "
+                        "ResilientPostgresSaver reconnects if the pooler reaps "
+                        "the socket. Set LANGGRAPH_CHECKPOINT_DSN to a "
+                        "session-mode or direct DSN to remove this fallback."
+                    ),
                 )
-                # Create checkpoint tables if they don't exist yet
-                await checkpointer.setup()
+                checkpointer = await _open_checkpointer(pooler_fallback_dsn)
+            try:
                 logger.info("langgraph_checkpoint_tables_ready")
 
                 # NOTE: no `store=` here on purpose. LangGraph's BaseStore is

@@ -56,6 +56,30 @@ def _create_database(sync_url: str, dbname: str) -> None:
         conn.close()
 
 
+def _point_settings_at_container(async_url: str) -> None:
+    """Repoint the already-constructed settings singleton at the container.
+
+    ``os.environ`` alone is not enough, and the failure is invisible: the app
+    reads ``settings.DATABASE_URL``, which pydantic-settings froze when
+    ``app.core.config`` was first imported (from ``backend/.env``). A tier that
+    only sets the environment variable therefore leaves the *checkpointer*
+    connected to whatever hosted database the developer's ``.env`` names — the
+    e2e live tier was creating ``checkpoint*`` tables in Supabase, and when
+    that hosted session-mode port was unreachable the API refused to start at
+    all. Setting the attribute mutates the same object every consumer holds.
+    """
+    try:
+        from backend.app.core.config import settings
+    except Exception:  # pragma: no cover - settings import is always available in tests
+        return
+    settings.DATABASE_URL = async_url
+    # An explicit checkpoint DSN outranks DATABASE_URL, so it has to move too.
+    if getattr(settings, "LANGGRAPH_CHECKPOINT_DSN", None):
+        settings.LANGGRAPH_CHECKPOINT_DSN = async_url.replace(
+            "postgresql+asyncpg://", "postgresql://"
+        )
+
+
 def get_postgres_url(name: str = "nexus_test") -> str:
     """Lazily start a Postgres container (once per ``name``) and return its
     ``postgresql+asyncpg://`` URL.
@@ -88,6 +112,7 @@ def get_postgres_url(name: str = "nexus_test") -> str:
 
         os.environ["DATABASE_URL"] = async_url
         _state[name] = (pg, async_url)
+        _point_settings_at_container(async_url)
         return async_url
 
 
