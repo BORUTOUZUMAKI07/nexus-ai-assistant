@@ -21,7 +21,7 @@ test.describe("Authentication", () => {
     await app.login("test@nexus.ai", "password123")
 
     await expect(page.getByRole("heading", { name: "Welcome back" })).toBeHidden({ timeout: 10000 })
-    await expect(page.getByText("Project kickoff")).toBeVisible()
+    await expect(page.getByRole("complementary").getByText("Project kickoff")).toBeVisible()
     await expect(page.getByText("NEXUS AI")).toBeVisible()
   })
 
@@ -44,7 +44,7 @@ test.describe("Authentication", () => {
     const app = new NexusAppPage(page)
     await app.goto()
 
-    await expect(page.getByText("Project kickoff")).toBeVisible()
+    await expect(page.getByRole("complementary").getByText("Project kickoff")).toBeVisible()
     await page.getByTitle("Sign out").click()
 
     await page.waitForURL("/")
@@ -72,7 +72,7 @@ test.describe("Authentication", () => {
     await app.login("test@nexus.ai", "password123")
 
     await page.waitForURL(/\/app/)
-    await expect(page.getByText("Project kickoff")).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole("complementary").getByText("Project kickoff")).toBeVisible({ timeout: 10000 })
   })
 
   test("sign-in page redirects to the app when already authenticated", async ({ page }) => {

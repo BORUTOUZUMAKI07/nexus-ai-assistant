@@ -11,7 +11,7 @@ test.describe("Chat & Workspace", () => {
     const app = new NexusAppPage(page)
     await app.goto()
 
-    await expect(page.getByText("Project kickoff")).toBeVisible()
+    await expect(page.getByRole("complementary").getByText("Project kickoff")).toBeVisible()
     await app.sendMessage("Hello!")
 
     await expect(page.getByText("Hello from Nexus.")).toBeVisible()

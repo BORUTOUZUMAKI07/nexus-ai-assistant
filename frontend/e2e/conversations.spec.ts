@@ -25,7 +25,7 @@ test.describe("Conversation management", () => {
 
     const app = new NexusAppPage(page)
     await app.goto()
-    await expect(page.getByText("Project kickoff")).toBeVisible()
+    await expect(page.getByRole("complementary").getByText("Project kickoff")).toBeVisible()
 
     await page.getByRole("button", { name: /New conversation/ }).click()
 
@@ -65,6 +65,6 @@ test.describe("Conversation management", () => {
       .click()
 
     await expect(page.getByText("Security review")).not.toBeVisible()
-    await expect(page.getByText("Project kickoff")).toBeVisible()
+    await expect(page.getByRole("complementary").getByText("Project kickoff")).toBeVisible()
   })
 })
