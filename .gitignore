@@ -71,3 +71,4 @@ frontend/revert_messages.py
 backend/revert_gaps.py
 backend/revert_messages.py
 backend/revert_strix.py
+.cloud-attachments/
