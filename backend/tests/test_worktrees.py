@@ -35,6 +35,13 @@ def test_worktree_isolation_is_verified():
         cwd=ROOT,
         capture_output=True,
         text=True,
+        # Windows decodes captured subprocess output with the ANSI code page
+        # (cp1252 here), so the first non-ASCII byte the script prints kills
+        # the reader thread with a UnicodeDecodeError and `stdout` silently
+        # comes back empty -- a passing test that cannot show you why a *real*
+        # failure happened. bash emits UTF-8.
+        encoding="utf-8",
+        errors="replace",
         timeout=180,
     )
     assert result.returncode == 0, (
@@ -50,6 +57,13 @@ def test_worktree_script_rejects_an_unknown_subcommand():
         cwd=ROOT,
         capture_output=True,
         text=True,
+        # Windows decodes captured subprocess output with the ANSI code page
+        # (cp1252 here), so the first non-ASCII byte the script prints kills
+        # the reader thread with a UnicodeDecodeError and `stdout` silently
+        # comes back empty -- a passing test that cannot show you why a *real*
+        # failure happened. bash emits UTF-8.
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
     assert result.returncode == 1
@@ -62,6 +76,13 @@ def test_no_probe_worktrees_are_left_behind():
         cwd=ROOT,
         capture_output=True,
         text=True,
+        # Windows decodes captured subprocess output with the ANSI code page
+        # (cp1252 here), so the first non-ASCII byte the script prints kills
+        # the reader thread with a UnicodeDecodeError and `stdout` silently
+        # comes back empty -- a passing test that cannot show you why a *real*
+        # failure happened. bash emits UTF-8.
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
     assert ".isolation-probe" not in result.stdout
