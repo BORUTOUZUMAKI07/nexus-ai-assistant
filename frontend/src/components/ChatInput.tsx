@@ -84,6 +84,42 @@ const SLASH_COMMANDS = [
   { command: "/research", label: "Research Brief", desc: "Structured multi-perspective analysis", icon: "📋" },
 ];
 
+/**
+ * Is this transcript a hallucination Whisper invents for silence?
+ *
+ * Whisper does not return an empty string for an empty recording; it returns
+ * something plausible-sounding. Measured on this project: a capture from a
+ * machine with no microphone transcribed as "you you" and was inserted into the
+ * composer as though the user had said it. The list is deliberately short and
+ * exact -- matching on "short" or "unlikely" would throw away real single-word
+ * commands like "yes", "no" or "stop".
+ */
+export function isLikelySilenceHallucination(text: string): boolean {
+  // Compare on letters and digits only: Whisper writes the same silence as
+  // "You.", "you you", "Thank you!" or "[BLANK_AUDIO]", and matching on the
+  // exact punctuation would let each spelling through.
+  const compact = text.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (!compact) return true;
+  const SILENCE_TRANSCRIPTS = new Set([
+    "you",
+    "youyou",
+    "youyouyou",
+    "thankyou",
+    "thankyouthankyou",
+    "thanks",
+    "thankyouforwatching",
+    "blankaudio",
+    "silence",
+  ]);
+  return SILENCE_TRANSCRIPTS.has(compact);
+}
+
+/** Shorter than this and the clip is a mis-click, not speech. */
+const MIN_RECORDING_MS = 700;
+/** An empty/silent opus capture compresses to a few hundred bytes. */
+const MIN_RECORDING_BYTES = 1024;
+
+
 export const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
   isLoading,
@@ -119,8 +155,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  /** Why the last recording produced no text, or null once it has been read. */
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const recordingStartedAtRef = useRef<number>(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -289,10 +328,18 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
       });
       if (!res.ok) throw new Error("Transcription failed");
       const data = (await res.json()) as { text: string };
-      if (data.text) {
-        setContent((prev) =>
-          prev ? `${prev} ${data.text}` : data.text
-        );
+      const text = (data.text ?? "").trim();
+      if (!text || isLikelySilenceHallucination(text)) {
+        // Silence is not "no speech", it is a transcript Whisper invents for it.
+        // Measured live: a capture from a machine with no microphone came back
+        // as "you you" and was inserted into the composer as if the user had
+        // said it. Inserting a hallucination is worse than inserting nothing.
+        setVoiceNotice("No speech detected — hold the mic button while you speak.");
+        return;
+      }
+      if (text) {
+        setContent((prev) => (prev ? `${prev} ${text}` : text));
+        setVoiceNotice(null);
         // expand textarea
         setTimeout(() => {
           if (textareaRef.current) {
@@ -331,10 +378,21 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        const durationMs = Date.now() - recordingStartedAtRef.current;
+        if (blob.size < MIN_RECORDING_BYTES || durationMs < MIN_RECORDING_MS) {
+          // Nothing worth paying a transcription call for, and a silent clip is
+          // exactly the input that produces a hallucinated transcript.
+          setVoiceNotice(
+            "Recording too short — hold the mic button while you speak."
+          );
+          return;
+        }
         await transcribeBlob(blob);
       };
       recorder.start(250); // collect chunks every 250 ms
+      recordingStartedAtRef.current = Date.now();
       mediaRecorderRef.current = recorder;
+      setVoiceNotice(null);
       setIsRecording(true);
     } catch {
       alert("Microphone access denied. Please allow microphone access in your browser.");
@@ -523,6 +581,24 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
           disabled={isTranscribing}
           className="w-full bg-transparent resize-none text-[var(--text-primary)] placeholder-[var(--text-faint)] text-[0.9375rem] px-2 py-2 outline-none focus:ring-0 leading-relaxed max-h-52 overflow-y-auto tracking-[-0.006em]"
         />
+
+        {/* Voice feedback. A capture with no speech must say so: the previous
+            behaviour was to append whatever Whisper invented for silence. */}
+        {voiceNotice && (
+          <div
+            role="status"
+            className="flex items-center justify-between gap-2 px-2 pt-1.5 text-[11px] text-[var(--text-muted)]"
+          >
+            <span>{voiceNotice}</span>
+            <button
+              onClick={() => setVoiceNotice(null)}
+              className="text-[var(--text-faint)] hover:text-[var(--text-primary)]"
+              aria-label="Dismiss voice message"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {/* Bottom Toolbar & Controls */}
         <div className="flex items-center justify-between pt-2 px-1 border-t border-[var(--border-subtle)] mt-1">

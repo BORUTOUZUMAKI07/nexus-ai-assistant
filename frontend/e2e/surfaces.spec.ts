@@ -170,7 +170,9 @@ test.describe("Command palette", () => {
 
   test("opens on Ctrl+K and navigates to Knowledge", async ({ page }) => {
     await page.goto("/app")
-    await expect(page.getByText(TEST_CONVERSATION.title)).toBeVisible()
+    await expect(
+      page.getByRole("complementary").getByText(TEST_CONVERSATION.title)
+    ).toBeVisible()
 
     await page.keyboard.press("Control+k")
     const search = page.getByPlaceholder("Search conversations, or type a command…")
@@ -328,6 +330,35 @@ test.describe("Audio", () => {
     )
     await mocks.setup()
 
+    // A silent fake capture never reaches the transcriber: the composer skips
+    // clips under 700 ms / 1 KB, because a silent clip is exactly the input that
+    // makes Whisper hallucinate. This test used to click stop the instant
+    // recording started, so the guard (added later) silently swallowed the
+    // request. The double below emits a clip that clears the size floor and the
+    // wait clears the duration floor -- the assertion still proves the real
+    // client path (record -> guard passes -> transcribe -> transcript),
+    // it just supplies input worth transcribing instead of nothing.
+    await page.addInitScript(() => {
+      class FakeMediaRecorder {
+        static isTypeSupported = () => true
+        ondataavailable: ((event: { data: Blob }) => void) | null = null
+        onstop: (() => void) | null = null
+        constructor(public stream: MediaStream) {}
+        start() {}
+        stop() {
+          this.ondataavailable?.({
+            data: new Blob([new Uint8Array(8192)], { type: "audio/webm" }),
+          })
+          this.onstop?.()
+        }
+      }
+      Object.defineProperty(window, "MediaRecorder", {
+        configurable: true,
+        writable: true,
+        value: FakeMediaRecorder,
+      })
+    })
+
     await page.goto("/app")
 
     await page.getByTitle("Voice input (Groq Whisper)").click()
@@ -336,6 +367,7 @@ test.describe("Audio", () => {
     const transcribed = page.waitForRequest(
       (r) => r.method() === "POST" && r.url().includes("/api/audio/transcribe")
     )
+    await page.waitForTimeout(900)
     await page.getByTitle("Stop recording").click()
     await transcribed
 
