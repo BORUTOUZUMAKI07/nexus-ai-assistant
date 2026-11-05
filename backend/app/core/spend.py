@@ -77,6 +77,11 @@ class SpendMeter:
     seeded_steps: int = 0
     #: Why the ceiling first stopped the run, for the log line and the client.
     stop_reason: str = ""
+    #: Provider-reported prompt tokens, and how many of them were served from
+    #: the provider's prefix cache. Reported rather than estimated: the whole
+    #: point is to find out whether the prompt prefix is actually being reused.
+    prompt_tokens_reported: int = 0
+    cached_tokens: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     # -- charging ------------------------------------------------------------
@@ -96,6 +101,35 @@ class SpendMeter:
         with self._lock:
             self.tokens += amount
             self.calls += 1
+
+    def record_provider_usage(self, *, prompt_tokens: int, cached_tokens: int) -> None:
+        """Record what a provider said it billed, cache split included.
+
+        Separate from :meth:`charge_tokens` on purpose. Charging is an estimate
+        that must never fail a generation; this is an observation whose value is
+        that it is exact. Kept additive across calls so a run reports the cache
+        behaviour of everything it spent, not just its last model call.
+        """
+        try:
+            prompt = int(prompt_tokens)
+            cached = int(cached_tokens)
+        except (TypeError, ValueError):
+            return
+        with self._lock:
+            self.prompt_tokens_reported += max(0, prompt)
+            self.cached_tokens += max(0, cached)
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """Share of the reported prompt tokens that came from the prefix cache.
+
+        Zero when nothing was reported (a streamed call cannot report usage
+        without changing the request shape, see ``litellm_client.astream``),
+        which reads as "not measured" rather than as "cache working perfectly".
+        """
+        if self.prompt_tokens_reported <= 0:
+            return 0.0
+        return round(self.cached_tokens / self.prompt_tokens_reported, 4)
 
     def charge_step(self) -> None:
         """Record one unit of agent work (a revision, a re-query, a dispatch)."""
@@ -159,6 +193,9 @@ class SpendMeter:
             "steps_remaining": self.steps_remaining,
             "exhausted": self.exhausted,
             "stop_reason": self.stop_reason,
+            "prompt_tokens_reported": self.prompt_tokens_reported,
+            "cached_tokens": self.cached_tokens,
+            "cache_hit_rate": self.cache_hit_rate,
         }
 
     def merge_from(self, tokens: int, steps: int) -> None:
@@ -223,6 +260,19 @@ def current_spend_meter() -> SpendMeter | None:
 
 def clear_spend_meter() -> None:
     _meter.set(None)
+
+
+def record_provider_usage(*, prompt_tokens: int, cached_tokens: int) -> None:
+    """Attribute a provider's reported usage to the active run. No meter, no-op."""
+    meter = _meter.get()
+    if meter is not None:
+        meter.record_provider_usage(prompt_tokens=prompt_tokens, cached_tokens=cached_tokens)
+
+
+def cached_tokens_seen() -> int:
+    """Cached prompt tokens observed by this run so far (0 when unmeasured)."""
+    meter = _meter.get()
+    return meter.cached_tokens if meter is not None else 0
 
 
 def charge_tokens(tokens: int) -> None:

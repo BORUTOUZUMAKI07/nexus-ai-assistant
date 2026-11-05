@@ -283,7 +283,10 @@ def test_snapshot_is_loggable_and_carries_no_content():
     assert snap["tokens_remaining"] == 50
     assert snap["steps_remaining"] == 1
     assert snap["exhausted"] is False
-    assert all(isinstance(v, (int, str, bool)) for v in snap.values())
+    # Floats are allowed because `cache_hit_rate` is one: the assertion's point
+    # is that every value is a scalar the log line can carry, not that the
+    # snapshot never grows a measured ratio.
+    assert all(isinstance(v, (int, float, str, bool)) for v in snap.values())
 
 
 def test_snapshot_serialises():

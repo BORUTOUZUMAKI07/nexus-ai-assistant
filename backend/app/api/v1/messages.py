@@ -16,6 +16,7 @@ from backend.app.api.deps import (
     get_usage_service,
 )
 from backend.app.core.exceptions import ResourceNotFoundError
+from backend.app.core.spend import cached_tokens_seen
 from backend.app.domain.conversation.schemas import (
     MessageCreate,
     MessageEdit,
@@ -225,6 +226,11 @@ async def send_message_sync(
             model=recorded_model,
             prompt_tokens=prompt_tok,
             completion_tokens=comp_tok,
+            # Prefix-cache hits as the provider reported them, clamped to the
+            # prompt they belong to. `cache_hit` below is the *app's* response
+            # cache answering from Redis; this is the provider's prompt cache,
+            # and conflating the two would hide which one is saving tokens.
+            cached_tokens=min(cached_tokens_seen(), prompt_tok),
             latency_ms=duration_ms,
             cost_usd=cost_usd,
             metadata_json={
@@ -351,6 +357,7 @@ async def send_message_stream(
                     model=recorded_model,
                     prompt_tokens=prompt_tok,
                     completion_tokens=comp_tok,
+                    cached_tokens=min(cached_tokens_seen(), prompt_tok),
                     latency_ms=duration_ms,
                     cost_usd=cost_usd,
                     metadata_json={"quality": quality},

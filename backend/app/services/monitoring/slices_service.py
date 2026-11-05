@@ -39,6 +39,23 @@ class _UsageSlice:
     errors: int = 0
     latency: list[float] = field(default_factory=list)
     cost: float = 0.0
+    #: Provider-reported cache split, summed over the slice's requests. Both are
+    #: needed: a hit count alone cannot express a rate, and a rate alone cannot
+    #: say whether the sample is big enough to act on.
+    prompt_tokens: int = 0
+    cached_tokens: int = 0
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """Share of reported prompt tokens served from the provider's cache.
+
+        0.0 when the provider reported no prompt tokens for this slice, which is
+        the honest reading of "this slice never told us" rather than a
+        measurement of a cache that does not work.
+        """
+        if self.prompt_tokens <= 0:
+            return 0.0
+        return round(self.cached_tokens / self.prompt_tokens, 4)
 
     @property
     def error_rate(self) -> float:
@@ -69,6 +86,8 @@ class SliceService:
                 sl.errors += 1
             sl.latency.append(float(row.latency_ms or 0.0))
             sl.cost += float(row.cost_usd or 0.0)
+            sl.prompt_tokens += int(row.prompt_tokens or 0)
+            sl.cached_tokens += int(row.cached_tokens or 0)
 
         # Feedback helpful rates per model (message-level thumbs).
         helpful: dict[str, list[int]] = {}
@@ -113,6 +132,14 @@ class SliceService:
                     "error_rate": round(sl.error_rate, 4),
                     "avg_latency_ms": round(sl.avg_latency_ms, 1),
                     "cost_usd": round(sl.cost, 4),
+                    # Whether the static-first prompt is actually being cached
+                    # by the provider, per model. This is the number that decides
+                    # whether switching models mid-conversation is costing money:
+                    # providers key their prefix cache per model, so a slice
+                    # with a low rate is paying full price for a prefix it keeps
+                    # re-sending.
+                    "cache_hit_rate": sl.cache_hit_rate,
+                    "cached_tokens": sl.cached_tokens,
                     "helpful_rate": helpful_rate,
                     "flags": flags,
                 }
@@ -130,6 +157,15 @@ class SliceService:
                 "helpful_rate": round(overall_helpful, 4) if overall_helpful is not None else None,
                 "avg_latency_ms": round(sum(sl.avg_latency_ms for sl in slices.values()) / len(slices), 1) if slices else 0.0,
                 "combined_cost_usd": round(sum(sl.cost for sl in slices.values()), 4),
+                "cache_hit_rate": (
+                    round(
+                        sum(sl.cached_tokens for sl in slices.values())
+                        / sum(sl.prompt_tokens for sl in slices.values()),
+                        4,
+                    )
+                    if sum(sl.prompt_tokens for sl in slices.values())
+                    else 0.0
+                ),
             },
             "slices": slice_rows,
             "popularity_flags": popularity_flags,

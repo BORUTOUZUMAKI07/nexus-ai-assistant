@@ -6,7 +6,7 @@ from typing import Any
 import litellm
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
-from backend.app.core.spend import charge_tokens
+from backend.app.core.spend import charge_tokens, record_provider_usage
 from backend.app.infrastructure.resilience.guards import CircuitBreaker, InFlightLimiter
 from backend.app.services.byok import get_byok_key
 from backend.app.services.llm_text_cleanup import strip_model_artifacts
@@ -197,11 +197,18 @@ model_list = [
         "model_name": "gemini_free",
         "litellm_params": {
             # The one free text group that is not Groq and not OpenRouter: Gemini
-            # flash-lite on the free tier. It exists because those two are the
-            # only other free layers and they fail together for environmental
-            # reasons -- Groq is denied at the egress (VPN) and OpenRouter's
-            # `free-models-per-day` cap is account-wide and can be exhausted --
+            # flash-lite on the free tier. It exists because those two layers can
+            # fail together for environmental reasons -- OpenRouter's
+            # `free-models-per-day` cap is account-wide and can be exhausted, and
+            # a Groq request can fail transiently (rate limit, provider 5xx) --
             # which leaves a text-only request with no reachable group at all.
+            #
+            # It used to say Groq was "denied at the egress (VPN)". Measured on
+            # 2026-11-01 with the configured key: both Groq groups answer
+            # (`openai/gpt-oss-120b`, `qwen/qwen3.8-27b`), so that was a claim
+            # about one machine's network that read as a permanent property of
+            # the deployment -- and it hid the real event, a transient fallback
+            # (now logged as `llm_provider_fallback`).
             # `vision_analysis` also runs on Gemini but leads with the larger
             # flash, which 503s under load; lite is the slug that keeps
             # answering, so it is the last real fallback before the 2.6B model.
@@ -428,6 +435,43 @@ def resolve_answer_model(requested: str | None) -> str:
         return DEFAULT_ANSWER_GROUP
     group = resolve_model_group(requested)
     return group if group in ANSWER_MODEL_GROUPS else DEFAULT_ANSWER_GROUP
+
+
+def _extract_cached_tokens(usage: Any) -> int:
+    """Cached prompt tokens from whichever shape the provider reported them in.
+
+    Three spellings are in use and they are not interchangeable field names for
+    the same value, they are three different accounting models:
+
+    * OpenAI-compatible (Groq, OpenAI, Gemini via litellm):
+      ``usage.prompt_tokens_details.cached_tokens`` -- a *subset* of
+      ``prompt_tokens`` that was served from the prefix cache.
+    * Anthropic: ``usage.cache_read_input_tokens`` -- also a subset, plus a
+      separate ``cache_creation_input_tokens`` for the write side, which is not
+      folded in here because it is a cost, not a hit.
+    * DeepSeek-style: ``usage.prompt_cache_hit_tokens``.
+
+    Returns 0 when the provider said nothing, which is the honest answer for a
+    free tier that does not report it: a missing number is "not measured", and
+    treating it as 0 would report a 0% hit rate for a cache that may be working.
+    Callers must not distinguish those two -- the run-level counter does, by
+    only computing a rate once something was reported.
+    """
+    if usage is None:
+        return 0
+
+    details = getattr(usage, "prompt_tokens_details", None)
+    for value in (
+        getattr(details, "cached_tokens", None) if details is not None else None,
+        getattr(usage, "cache_read_input_tokens", None),
+        getattr(usage, "prompt_cache_hit_tokens", None),
+    ):
+        try:
+            if value:
+                return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
 
 
 def group_primary_model(group: str) -> str:
@@ -761,6 +805,14 @@ class LiteLLMService:
             logger.warning("completion_cost_lookup_failed", model=getattr(response, "model", ""))
         input_tokens = response.usage.prompt_tokens if response.usage else 0
         output_tokens = response.usage.completion_tokens if response.usage else 0
+        # Prefix-cache accounting. Until this existed the app recorded prompt and
+        # completion tokens only, so the one number that says whether the
+        # static-first prompt design is actually paying off -- how much of the
+        # prompt the provider served from its cache -- was thrown away at the only
+        # place that ever sees it. `prompt_compiler` and `litellm_client` both
+        # document that lever at length; nothing measured it.
+        cached_tokens = _extract_cached_tokens(response.usage)
+        record_provider_usage(prompt_tokens=input_tokens, cached_tokens=cached_tokens)
         # Feed the per-run spend meter. Done here, at the only place that
         # already knows a call's token usage, so every model call in the
         # process is counted without any call site having to remember to --
@@ -769,6 +821,23 @@ class LiteLLMService:
         # undercount precisely when a new node is added and nobody updates it.
         # Discarded fallback attempts are included (see above).
         charge_tokens(_discarded_tokens + input_tokens + output_tokens)
+        # A fallback that nobody records is indistinguishable from the group the
+        # picker asked for answering. That is how a request for `complex_reasoning`
+        # (GPT-OSS on Groq) resolved to `gemini-3.5-flash-lite` on every run of a
+        # live session and left no trace in the log beyond a model name nobody
+        # was reading -- the UI reported a "(fallback)" it could not explain and
+        # the routing looked broken when the provider had merely hiccuped.
+        # Warned, not raised: the answer is real, it just came from elsewhere.
+        _resolved_name = getattr(response, "model", "") or ""
+        _resolved_group = resolve_model_group(_resolved_name) if _resolved_name else ""
+        if _resolved_group in _GROUP_NAMES and _resolved_group != group:
+            logger.warning(
+                "llm_provider_fallback",
+                model=group,
+                resolved=_resolved_name,
+                resolved_group=_resolved_group,
+            )
+
         logger.info(
             "llm_completion_ok",
             model=group,
@@ -776,6 +845,7 @@ class LiteLLMService:
             duration_ms=_duration_ms,
             tokens_input=input_tokens,
             tokens_output=output_tokens,
+            cached_tokens=cached_tokens,
         )
 
         # Content was already extracted and stripped of protocol markup at the
@@ -788,6 +858,9 @@ class LiteLLMService:
             "model": response.model,
             "tokens_input": input_tokens,
             "tokens_output": output_tokens,
+            # Always present, 0 when the provider does not report it. Callers
+            # can then record it without a `.get()` that silently drops it.
+            "cached_tokens": cached_tokens,
             "cost_usd": cost or 0.0,
             # None unless asked for AND the provider supplied them. Always
             # present so callers do not need a `.get()` guard that silently
