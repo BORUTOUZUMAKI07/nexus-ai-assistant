@@ -22,6 +22,7 @@ The checks below are about agreement between tables, so they are cheap and need
 no network, no API key, and no database.
 """
 
+import pytest
 from backend.app.infrastructure.ai import litellm_client as lc
 
 GROUPS = [entry["model_name"] for entry in lc.model_list]
@@ -206,3 +207,67 @@ def test_gemini_free_runs_the_available_free_slug():
     slug silently makes the whole fallback layer dead again.
     """
     assert _model_of("gemini_free") == "gemini/gemini-3.5-flash-lite"
+
+
+# ── A fallback must leave a trace ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_provider_fallback_is_logged_rather_than_inferred(monkeypatch):
+    """The router falls back inside litellm, where this module cannot see it.
+
+    Observed live on 2026-11-01: every run of a session logged
+    ``model=complex_reasoning resolved=gemini-3.5-flash-lite`` -- the picker's
+    Groq group never answering -- and nothing in the log said a fallback had
+    happened. The only evidence was a model name in a field nobody was reading,
+    so it read as a routing bug rather than a transient provider failure. The
+    warning below is that missing signal.
+
+    A fallback is not an error: the answer is real, it just came from elsewhere,
+    so this must log and still return the content.
+    """
+
+    class _Usage:
+        prompt_tokens = 3
+        completion_tokens = 4
+
+    class _Msg:
+        content = "from gemini"
+        tool_calls = None
+
+    class _Choice:
+        message = _Msg()
+
+    class _Resp:
+        model = "gemini/gemini-3.5-flash-lite"
+        usage = _Usage()
+        choices = [_Choice()]
+
+    async def _fake(**_kwargs):
+        return _Resp()
+
+    events: list[tuple[str, dict]] = []
+
+    class _Logger:
+        def warning(self, event, **kw):
+            events.append((event, kw))
+
+        def info(self, event, **kw):
+            events.append((event, kw))
+
+    monkeypatch.setattr(lc, "logger", _Logger())
+    monkeypatch.setattr(lc, "charge_tokens", lambda _n: None)
+    monkeypatch.setattr(lc, "completion_cost", lambda **_kw: 0.0)
+    monkeypatch.setattr(lc.router, "acompletion", _fake)
+
+    result = await lc.ai_client.complete(
+        messages=[{"role": "user", "content": "hi"}],
+        model="complex_reasoning",
+        max_tokens=16,
+    )
+
+    assert result["content"] == "from gemini"
+    fallbacks = [kw for name, kw in events if name == "llm_provider_fallback"]
+    assert fallbacks, "a fallback to another group must be logged"
+    assert fallbacks[0]["model"] == "complex_reasoning"
+    assert fallbacks[0]["resolved_group"] == "gemini_free"

@@ -257,15 +257,22 @@ class Settings(BaseSettings):
     #
     # Both are logical model names, resolved to a Router model_group by
     # litellm_client.resolve_model_group — the provider prefix is stripped, so
-    # "groq/llama-3.1-8b-instant" and "llama-3.1-8b-instant" both land in
-    # fast_chat.
+    # "groq/qwen/qwen3.8-27b" and "qwen/qwen3.8-27b" both land in fast_chat.
+    #
+    # The defaults name the models each group actually runs (see
+    # `_GROUP_TO_MODEL` in litellm_client). They used to point at
+    # `llama-3.3-70b-versatile` / `llama-3.1-8b-instant`, which live in
+    # `_LEGACY_MODEL_ALIASES` — "a model we used to deploy". Calls still resolved
+    # to live groups, so nothing failed, but a fresh install had no signal about
+    # the intended current model, and the pinning in the chat route stored a
+    # retired slug on new conversations.
     #
     # FAST_MODEL backs the cheap calls (planner, Tree-of-Thought, the coder /
     # critic / researcher subagents, RAGAS judging). It was previously unused:
     # those six call sites each hardcoded the literal "llama-3.1-8b-instant", so
     # pointing FAST_MODEL at a different fast model changed nothing.
-    DEFAULT_MODEL: str = Field(default="groq/llama-3.3-70b-versatile")
-    FAST_MODEL: str = Field(default="groq/llama-3.1-8b-instant")
+    DEFAULT_MODEL: str = Field(default="groq/openai/gpt-oss-120b")
+    FAST_MODEL: str = Field(default="groq/qwen/qwen3.8-27b")
 
     # ── Embeddings ─────────────────────────────────────────────────────────────
     EMBEDDING_MODEL: str = Field(default="models/gemini-embedding-001")
@@ -297,7 +304,7 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str | None = None
     FIRECRAWL_API_KEY: str | None = None
     MEM0_API_KEY: str | None = None
-    MEMORY_EXTRACTION_MODEL: str = Field(default="groq/llama-3.1-8b-instant")
+    MEMORY_EXTRACTION_MODEL: str = Field(default="groq/qwen/qwen3.8-27b")
 
     # ── Object Storage (Supabase Storage — uses SUPABASE_URL + SERVICE_ROLE_KEY) ─
     # Storage goes through the Supabase REST API (infrastructure/storage/

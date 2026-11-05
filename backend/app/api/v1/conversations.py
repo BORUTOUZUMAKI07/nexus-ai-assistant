@@ -438,6 +438,30 @@ async def stream_conversation(
     # longer stops the run. That is the entire point, and it means a run is now
     # bounded by the per-node timeout/retry policy and the per-run token/step
     # ceiling, not by whether a browser stayed on the page.
+    # ── Session affinity for the answer model ─────────────────────────────
+    #
+    # A provider keys its prompt cache per model, so flipping the answer model
+    # between turns of one conversation throws away the cached prefix on every
+    # flip — the exact cost the routing literature warns about. The fix is not a
+    # smarter router but a *stable* one: the conversation's own `model` is the
+    # pin, chosen once when the conversation is created, and an explicit
+    # per-request `body.model` still wins because that is the user changing their
+    # mind, not the system drifting.
+    #
+    # Before this, `body.model` was forwarded only when the client sent it, and
+    # the client normally does not — so every conversation silently ran on
+    # `DEFAULT_ANSWER_GROUP` while its stored `model` column was ignored. Turns
+    # stayed consistent by accident (one default), which is why nothing looked
+    # broken; a conversation explicitly created on `fast_chat` was answered by
+    # `complex_reasoning` regardless.
+    pinned_model = body.model or getattr(conv, "model", None)
+    logger.info(
+        "answer_model_pinned",
+        conversation_id=thread_id,
+        model=pinned_model or "",
+        source="request" if body.model else ("conversation" if pinned_model else "default"),
+    )
+
     async with async_session_factory() as session:
         run = await RunService(session).start_run(
             conversation_id=convo_uuid,
@@ -464,7 +488,7 @@ async def stream_conversation(
             graph_input={
                 "messages": graph_messages,
                 "mode": body.mode,
-                **({"model": body.model} if body.model else {}),
+                **({"model": pinned_model} if pinned_model else {}),
                 **({"system_prompt": compiled_system_prompt} if compiled_system_prompt else {}),
                 **({"active_skills": [s.name for s in active_skills]} if active_skills else {}),
             },
