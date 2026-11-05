@@ -18,6 +18,7 @@ import PlanHistory from "@/components/PlanHistory";
 import SavedArtifacts from "@/components/SavedArtifacts";
 import { CitationInspector } from "@/components/CitationInspector";
 import { AuthModal } from "@/components/AuthModal";
+import { Menu } from "lucide-react";
 import { toast } from "sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import {
@@ -174,6 +175,11 @@ function AppPageInner() {
   const [activeConversationId, setActiveConversationId] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"chat" | "files" | "projects" | "usage" | "settings" | "admin">("chat");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // The sidebar is a 288px column on desktop and an overlay drawer below `md`.
+  // One boolean drives both: the wrapper is always rendered (so the desktop
+  // layout is unchanged) and only translates off-canvas under `md`.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
   const [currentModel, setCurrentModel] = useState<string>(DEFAULT_MODEL_ID);
   // Set the moment the user (or the command palette) picks a model in this
   // session, so the saved default can never overwrite a deliberate choice.
@@ -338,12 +344,35 @@ function AppPageInner() {
     // setState here runs on the first microtask after mount (inside the async
     // body, matching the react-hooks/set-state-in-effect rule) and flips the
     // hydration guard off once we know the real auth state.
+    let cancelled = false;
     void (async () => {
       setMounted(true);
-      const probe = await fetchCurrentUser();
-      setIsAuthOpen(!probe.authenticated);
-      setCurrentUser(probe.user ?? null);
+      // A probe that could not reach the backend is `unavailable`, not
+      // "signed out": treating it as the latter replaced a live session with
+      // the sign-in modal during a backend cold start (measured: /api/auth/me
+      // answered `authenticated: false` while the cookie was still valid, and
+      // the app stayed signed out until a manual reload). Retry instead, and
+      // if the backend never answers, keep the workspace rather than a login
+      // form the user cannot use anyway.
+      const backoffMs = [400, 1200, 3000, 6000, 10000];
+      for (let attempt = 0; !cancelled; attempt += 1) {
+        const probe = await fetchCurrentUser();
+        if (cancelled) return;
+        if (!probe.unavailable) {
+          setIsAuthOpen(!probe.authenticated);
+          setCurrentUser(probe.user ?? null);
+          return;
+        }
+        if (attempt >= backoffMs.length) {
+          setIsAuthOpen(false);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, backoffMs[attempt]));
+      }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Listen for session expiry from api.ts. This is the only path into the auth
@@ -944,25 +973,55 @@ function AppPageInner() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-main)] text-[var(--text-primary)]">
-      {/* Sidebar Navigation */}
+      {/* Mobile backdrop: only exists under `md`, and closes the drawer. */}
+      {sidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={closeSidebar}
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+        />
+      )}
+
+      {/* Sidebar Navigation. Fixed off-canvas below `md`, static column above it. */}
+      <div
+        // `w-72` is load-bearing, not decorative: `-translate-x-full` resolves
+        // against this element's own width, and a fixed box with only `left-0`
+        // shrinks to zero — which makes 100% a translation of nothing and leaves
+        // the drawer permanently on screen. The width matches the aside inside.
+        className={`fixed inset-y-0 left-0 z-40 w-72 transition-transform duration-200 ease-out md:static md:z-auto md:w-auto md:translate-x-0 ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
-        onSelectConversation={handleSelectConversation}
-        onNewChat={handleNewChat}
+        onSelectConversation={(id) => {
+          handleSelectConversation(id);
+          // Choosing something is the signal that the drawer has done its job.
+          closeSidebar();
+        }}
+        onNewChat={() => {
+          handleNewChat();
+          closeSidebar();
+        }}
         onDeleteConversation={handleDeleteConversation}
         onForkConversation={handleForkConversation}
         onShareConversation={handleShareConversation}
         onRenameConversation={handleRenameConversation}
         onPinConversation={handlePinConversation}
         activeTab={effectiveTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={(tab) => {
+          setActiveTab(tab);
+          closeSidebar();
+        }}
         currentModel={currentModel}
         onChangeModel={chooseModel}
         onSignOut={handleSignOut}
         showAdmin={isAdmin}
         onOpenCommandPalette={() => setPaletteOpen(true)}
       />
+      </div>
 
       <CommandPalette
         open={paletteOpen}
@@ -988,6 +1047,20 @@ function AppPageInner() {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+        {/* Mobile-only bar: without it the drawer has no handle on small screens. */}
+        <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 md:hidden">
+          <button
+            type="button"
+            aria-label="Open navigation"
+            onClick={() => setSidebarOpen(true)}
+            className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)]"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          {/* The brand lives in the drawer; repeating it here gave the page two
+              identical "Nexus AI" nodes inside <main>, which broke exact-text
+              assertions (e2e/auth.spec.ts) and duplicated the app name on screen. */}
+        </div>
         {effectiveTab === "chat" && (
           <div className="flex-1 flex h-full overflow-hidden relative">
             {/* Chat Column */}
@@ -1004,6 +1077,7 @@ function AppPageInner() {
                 <ChatArea
                   messages={messages}
                   isLoading={chat.isLoading}
+                  statusLabel={chat.statusLabel}
                   error={chat.error?.message ?? null}
                   onRetry={chat.error ? chat.reload : undefined}
                   pendingHITL={
@@ -1019,6 +1093,10 @@ function AppPageInner() {
                   }
                   onResolveHITL={chat.resolveHITL}
                   turnVerdict={chat.turnVerdict}
+                  conversationTitle={
+                    conversations.find((c) => c.id === activeConversationId)
+                      ?.title ?? null
+                  }
                   onFeedback={handleFeedback}
                   onOpenArtifact={handleOpenArtifact}
                   onSelectCitation={setActiveCitation}

@@ -20,7 +20,7 @@ import {
   Search,
   Share2,
 } from "lucide-react";
-import { MODELS } from "@/lib/models";
+import { MODEL_CATALOG } from "@/lib/models";
 
 export interface ConversationItem {
   id: string;
@@ -84,7 +84,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   showAdmin = false,
   onOpenCommandPalette,
 }: SidebarProps) => {
-  const models = MODELS;
+  const models = MODEL_CATALOG;
 
   const [chatFilter, setChatFilter] = React.useState("");
   const [chatSort, setChatSort] = React.useState<"newest" | "oldest" | "az">("newest");
@@ -336,8 +336,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-secondary)] px-2.5 py-1.5 outline-none focus:border-[var(--accent)] transition-colors"
           >
             {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name} ({m.provider})
+              // The automatic tiers are shown so the picker tells the whole
+              // truth about routing, but disabled: the backend only resolves
+              // the two group ids, so a selectable entry would be a lie.
+              <option key={m.id} value={m.id} disabled={!m.selectable}>
+                {m.name} ({m.provider}){m.selectable ? "" : " — automatic"}
               </option>
             ))}
           </select>

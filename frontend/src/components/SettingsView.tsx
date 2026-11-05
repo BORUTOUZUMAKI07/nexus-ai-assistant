@@ -32,7 +32,7 @@ import {
 } from "@/lib/queries";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
-import { MODELS, canonicalModelId, modelDisplayName } from "@/lib/models";
+import { AUTOMATIC_MODEL_TIERS, MODELS, canonicalModelId, modelDisplayName } from "@/lib/models";
 
 export const SettingsView: React.FC = () => {
   const queryClient = useQueryClient();
@@ -63,10 +63,20 @@ export const SettingsView: React.FC = () => {
   // kept as an extra option (labelled as legacy), so a default is never
   // rendered blank or silently rewritten into a different model.
   const modelOptions = useMemo(() => {
-    const known = MODELS.map((m) => ({
-      id: m.id as string,
-      name: `${m.name} · ${m.provider}`,
-    }));
+    const known = [
+      ...MODELS.map((m) => ({
+        id: m.id as string,
+        name: `${m.name} · ${m.provider}`,
+        selectable: true,
+      })),
+      // Same catalogue the sidebar picker renders, so the two never disagree
+      // about how many models exist. Automatic tiers stay visible-but-disabled.
+      ...AUTOMATIC_MODEL_TIERS.map((m) => ({
+        id: m.id,
+        name: `${m.name} · ${m.provider} (automatic)`,
+        selectable: false,
+      })),
+    ];
     const stored = settings?.default_model;
     if (stored && !canonicalModelId(stored)) {
       return [
@@ -74,6 +84,7 @@ export const SettingsView: React.FC = () => {
         {
           id: stored,
           name: `${modelDisplayName(stored) ?? stored} (legacy)`,
+          selectable: true,
         },
       ];
     }
@@ -253,9 +264,9 @@ export const SettingsView: React.FC = () => {
   });
 
   return (
-    <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="w-full flex-1 overflow-y-auto max-w-4xl mx-auto space-y-8 p-4 sm:p-8">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h2 className="text-xl font-semibold tracking-tight text-[var(--text-primary)] flex items-center gap-2">
             <Sliders className="w-5 h-5 text-[var(--accent-ink)]" /> Settings
           </h2>
@@ -304,7 +315,7 @@ export const SettingsView: React.FC = () => {
               className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
             >
               {modelOptions.map((m) => (
-                <option key={m.id} value={m.id}>
+                <option key={m.id} value={m.id} disabled={!m.selectable}>
                   {m.name}
                 </option>
               ))}

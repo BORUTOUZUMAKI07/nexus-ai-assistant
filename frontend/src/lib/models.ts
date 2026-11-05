@@ -27,6 +27,51 @@ export const MODELS = [
 
 export type ModelId = (typeof MODELS)[number]["id"];
 
+/**
+ * Tiers the router uses without being asked — shown wherever the two selectable
+ * groups are shown, so the picker and the product's own "Model routing" story
+ * do not disagree about how many models exist.
+ *
+ * These are deliberately **not selectable**. The backend whitelists exactly the
+ * two group ids above (`resolve_answer_model`); a vision entry in the picker
+ * would be a control that changes nothing, which is the same cosmetic-picker
+ * trap the group ids replaced.
+ */
+export const AUTOMATIC_MODEL_TIERS = [
+  {
+    id: "vision",
+    name: "Nexus Vision",
+    provider: "Gemini 3.5 Flash · Google",
+    reason: "Chosen automatically when you attach an image",
+  },
+] as const;
+
+export interface ModelOption {
+  id: string;
+  name: string;
+  provider: string;
+  selectable: boolean;
+  /** Why it cannot be picked; only present on the automatic tiers. */
+  reason?: string;
+}
+
+/** Everything the UI may show in a model picker: selectable groups + automatic tiers. */
+export const MODEL_CATALOG: ModelOption[] = [
+  ...MODELS.map((m) => ({
+    id: m.id as string,
+    name: m.name,
+    provider: m.provider,
+    selectable: true,
+  })),
+  ...AUTOMATIC_MODEL_TIERS.map((m) => ({
+    id: m.id,
+    name: m.name,
+    provider: m.provider,
+    selectable: false,
+    reason: m.reason,
+  })),
+];
+
 /** The model a fresh session starts on (previously the hardcoded synthesis default). */
 export const DEFAULT_MODEL_ID: ModelId = "complex_reasoning";
 

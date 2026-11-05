@@ -27,6 +27,36 @@ describe("ChatArea", () => {
     expect(screen.getByText("How can Nexus help you today?")).toBeInTheDocument()
   })
 
+  it("says an open conversation is empty instead of showing the new-chat hero", () => {
+    // Measured live: selecting a conversation whose turns had all been deleted
+    // rendered the *new chat* screen, so the selection looked like it did
+    // nothing at all.
+    render(
+      <ChatArea messages={[]} isLoading={false} conversationTitle="Sweep renamed chat" />
+    )
+    expect(screen.getByText("Sweep renamed chat")).toBeInTheDocument()
+    expect(
+      screen.getByText(/No messages in this conversation yet/i)
+    ).toBeInTheDocument()
+    expect(screen.queryByText("How can Nexus help you today?")).not.toBeInTheDocument()
+  })
+
+  it("does not show a run verdict when there is no answer to describe", () => {
+    // A branched conversation holds the user turn only, but the parent's
+    // verdict was still rendered underneath it (live defect D5).
+    render(
+      <ChatArea
+        messages={[{ id: "u1", role: "user", content: "branch base" }]}
+        isLoading={false}
+        conversationTitle="branch base (Branch: Forked Branch)"
+        turnVerdict={{ revision_count: 0, evidence_score: 0.3, evidence_gate_passed: true }}
+      />
+    )
+    expect(
+      screen.queryByText("Answer passed review on first draft")
+    ).not.toBeInTheDocument()
+  })
+
   it("renders user and assistant bubbles", () => {
     render(
       <ChatArea
@@ -90,6 +120,45 @@ describe("ChatArea", () => {
     )
     expect(screen.getByText("Thinking…")).toBeInTheDocument()
     expect(screen.queryByText("Writing…")).not.toBeInTheDocument()
+  })
+
+  it("shows the backend's current stage instead of a static Thinking", () => {
+    // The synthesizer streams only its finished text, so an agent-mode run is
+    // silent for most of a minute. The stage label is the only progress the
+    // screen can show in that window; without it the chip below reads
+    // "Thinking…" for the whole run and looks like a hung request.
+    render(
+      <ChatArea
+        messages={[{ id: "a4", role: "assistant" as const, content: "" }]}
+        isLoading={true}
+        statusLabel="Checking evidence"
+      />
+    )
+    expect(screen.getByText("Checking evidence")).toBeInTheDocument()
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument()
+  })
+
+  it("falls back to Thinking when no stage has been reported", () => {
+    render(
+      <ChatArea
+        messages={[{ id: "a5", role: "assistant" as const, content: "" }]}
+        isLoading={true}
+        statusLabel={null}
+      />
+    )
+    expect(screen.getByText("Thinking…")).toBeInTheDocument()
+  })
+
+  it("stops showing the stage once the answer starts arriving", () => {
+    render(
+      <ChatArea
+        messages={[{ id: "a6", role: "assistant" as const, content: "Partial" }]}
+        isLoading={true}
+        statusLabel="Writing the answer"
+      />
+    )
+    expect(screen.getByText("Writing…")).toBeInTheDocument()
+    expect(screen.queryByText("Writing the answer")).not.toBeInTheDocument()
   })
 
   it("labels a streaming assistant bubble with content as Writing", () => {

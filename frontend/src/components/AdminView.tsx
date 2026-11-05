@@ -335,7 +335,7 @@ export const AdminView: React.FC = () => {
     <button
       key={tab}
       onClick={() => selectTab(tab)}
-      className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+      className={`shrink-0 whitespace-nowrap flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
         activeTab === tab
           ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
           : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] border border-transparent"
@@ -347,9 +347,9 @@ export const AdminView: React.FC = () => {
   );
 
   return (
-    <div className="h-full flex flex-col p-6 overflow-y-auto max-w-6xl mx-auto space-y-6">
+    <div className="w-full h-full flex flex-col overflow-y-auto max-w-6xl mx-auto space-y-6 p-4 sm:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--border-subtle)] pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-4">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] text-[var(--accent-ink)]">
             <ShieldCheck className="h-4 w-4" />
@@ -374,7 +374,10 @@ export const AdminView: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1.5 border-b border-[var(--border-subtle)] pb-2">
+      {/* The strip scrolls on its own at narrow widths: seven tabs are 718px wide, and a
+          plain `flex` row inside a clipped container pushed "Optimization" and
+          "Compliance" off a 390px screen with no way to reach them (measured). */}
+      <div className="flex gap-1.5 overflow-x-auto border-b border-[var(--border-subtle)] pb-2">
         {tabButton("users", "Users", Users)}
         {tabButton("health", "System health", Activity)}
         {tabButton("audit", "Audit logs", FileCheck)}
@@ -459,7 +462,7 @@ export const AdminView: React.FC = () => {
             </span>
           </div>
 
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-x-auto">
             {filteredUsers.length === 0 ? (
               <div className="p-8 text-center text-xs text-[var(--text-muted)]">
                 {users.length === 0 ? "No users found." : "No users match your filters."}
@@ -648,7 +651,7 @@ export const AdminView: React.FC = () => {
             </span>
           </div>
 
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-x-auto">
             {filteredAuditLogs.length === 0 ? (
               <div className="p-8 text-center text-xs text-[var(--text-muted)]">
                 {auditLogs.length === 0 ? "No audit events recorded." : "No events match your filters."}
@@ -809,7 +812,7 @@ export const AdminView: React.FC = () => {
           </div>
 
           {/* Policy list */}
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-x-auto">
             {hooks.length === 0 && !error ? (
               <div className="p-8 text-center text-xs text-[var(--text-muted)]">
                 No hook policies yet — create one above to start governing tool execution.
@@ -957,7 +960,7 @@ export const AdminView: React.FC = () => {
             </div>
           )}
 
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-x-auto">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
               <div className="p-4 border-b lg:border-b-0 lg:border-r border-[var(--border-subtle)]">
                 <h3 className="text-sm font-medium text-[var(--text-primary)] mb-1 flex items-center gap-2">
@@ -1161,7 +1164,7 @@ export const AdminView: React.FC = () => {
             </div>
           </div>
 
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-x-auto">
             <div className="p-4 border-b border-[var(--border-subtle)]">
               <h3 className="text-sm font-medium text-[var(--text-primary)]">Optimization evidence trail</h3>
               <p className="text-[11px] text-[var(--text-muted)]">

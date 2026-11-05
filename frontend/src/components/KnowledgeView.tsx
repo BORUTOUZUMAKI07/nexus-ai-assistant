@@ -70,9 +70,15 @@ export const KnowledgeView: React.FC = () => {
     void filesQuery.refetch();
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const file = e.target.files[0];
+  const [isDragging, setIsDragging] = React.useState(false);
+
+  /**
+   * One upload path for both entry points: the file picker and a drop on the
+   * upload card. They share validation, the cache write and the error surface,
+   * so a dropped oversized PDF is rejected with the same message as a picked
+   * one instead of the two paths drifting apart.
+   */
+  const uploadOne = async (file: File) => {
     // Reject locally first: the upload is inline and every byte crosses the
     // BFF, so a 40MB PDF means a slow request that ends in a 413 anyway. Telling
     // the user now costs nothing and names the actual size.
@@ -103,6 +109,12 @@ export const KnowledgeView: React.FC = () => {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await uploadOne(file);
   };
 
   const handleDeleteFile = async (id: string) => {
@@ -178,7 +190,7 @@ export const KnowledgeView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto space-y-8">
+    <div className="w-full flex-1 overflow-y-auto max-w-4xl mx-auto space-y-8 p-4 sm:p-8">
       {/* Header */}
       <div>
         <h2 className="text-xl font-semibold tracking-tight text-[var(--text-primary)] flex items-center gap-2">
@@ -190,7 +202,28 @@ export const KnowledgeView: React.FC = () => {
       </div>
 
       {/* Upload Box */}
-      <div className="rounded-xl border border-dashed border-[var(--border-subtle)] hover:border-[var(--border-strong)] p-8 text-center transition-colors bg-[var(--bg-surface)]">
+      <div
+        // Dropping onto the card is the affordance the dashed border already
+        // promises. No `dragenter` counter is needed here: the card has no
+        // children that fire `dragleave`, which is the bug that makes a naive
+        // counter flicker in the composer.
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (!isDragging) setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setIsDragging(false);
+          const dropped = e.dataTransfer.files?.[0];
+          if (dropped) void uploadOne(dropped);
+        }}
+        className={`rounded-xl border border-dashed p-6 text-center transition-colors sm:p-8 ${
+          isDragging
+            ? "border-[var(--accent)] bg-[var(--accent)]/5"
+            : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]"
+        }`}
+      >
         <input
           type="file"
           ref={fileInputRef}
@@ -203,7 +236,7 @@ export const KnowledgeView: React.FC = () => {
           Upload a document
         </h3>
         <p className="text-xs text-[var(--text-muted)] mb-4">
-          PDF, Markdown, TXT, JSON, or source code
+          PDF, Markdown, TXT, JSON, or source code — or drag a file here
         </p>
         <button
           onClick={() => fileInputRef.current?.click()}

@@ -57,7 +57,7 @@ export const UsageView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto space-y-8">
+    <div className="w-full flex-1 overflow-y-auto max-w-4xl mx-auto space-y-8 p-4 sm:p-8">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-semibold tracking-tight text-[var(--text-primary)] flex items-center gap-2">

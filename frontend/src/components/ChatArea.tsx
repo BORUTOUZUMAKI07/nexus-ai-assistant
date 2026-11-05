@@ -17,6 +17,7 @@ import {
   ShieldAlert,
   CheckCircle2,
   XCircle,
+  MessageSquare,
   MessageSquareWarning,
   RotateCw,
   ExternalLink,
@@ -95,11 +96,31 @@ export interface TurnVerdict {
 export interface ChatAreaProps {
   messages: MessageItem[];
   isLoading: boolean;
+  /**
+   * What the backend reports it is doing right now ("Checking evidence",
+   * "Writing the answer"), or null before it has said anything.
+   *
+   * The synthesizer streams only its finished, guardrailed text, so an
+   * agent-mode turn can run for most of a minute without emitting a token.
+   * Without this the chip below reads "Thinking…" the whole time, which is
+   * indistinguishable from a request that never started.
+   */
+  statusLabel?: string | null;
   error?: string | null;
   onRetry?: () => void;
   pendingHITL?: PendingHITLRequest | null;
   /** Critic verdict + evidence score for the run that just completed. */
   turnVerdict?: TurnVerdict | null;
+  /**
+   * Title of the open conversation, or null for a brand-new chat.
+   *
+   * An empty transcript has two very different meanings: a new chat (show the
+   * hero) and a conversation that is open but holds no messages -- every turn
+   * deleted, or a conversation created before the first question. Both used to
+   * render the hero, so selecting a conversation looked like nothing happened.
+   * The title is what tells them apart.
+   */
+  conversationTitle?: string | null;
   onResolveHITL?: (
     action: "approve" | "reject" | "modify",
     data?: Record<string, unknown>
@@ -686,11 +707,13 @@ function formatInline(text: string): React.ReactNode {
 export const ChatArea: React.FC<ChatAreaProps> = ({
   messages,
   isLoading,
+  statusLabel = null,
   error,
   onRetry,
   pendingHITL,
   onResolveHITL,
   turnVerdict,
+  conversationTitle,
   onFeedback,
   onOpenArtifact,
   onSaveArtifact,
@@ -933,22 +956,41 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       onScroll={handleScroll}
       className="flex-1 overflow-y-auto px-4 py-8 md:px-8 space-y-2"
     >
-      {messages.length === 0 && (
-        <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto py-24 space-y-5">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[var(--accent-soft)] to-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center shadow-sm">
-            <Sparkles className="w-7 h-7 text-[var(--accent-ink)]" />
+      {messages.length === 0 &&
+        (conversationTitle ? (
+          // An open conversation with nothing in it. Saying so is the whole
+          // point: the hero below is the *new chat* screen, and showing it here
+          // made a selected conversation indistinguishable from a fresh one.
+          <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto py-24 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] flex items-center justify-center">
+              <MessageSquare className="w-6 h-6 text-[var(--text-faint)]" />
+            </div>
+            <div className="space-y-1.5">
+              <h2 className="text-lg font-semibold tracking-tight text-[var(--text-primary)] break-words">
+                {conversationTitle}
+              </h2>
+              <p className="text-sm text-[var(--text-muted)]">
+                No messages in this conversation yet. Ask something below to
+                start it.
+              </p>
+            </div>
           </div>
-          <div className="space-y-2">
-            <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
-              How can Nexus help you today?
-            </h2>
-            <p className="text-[0.9375rem] text-[var(--text-muted)] leading-relaxed max-w-sm mx-auto">
-              Research the live web, query your knowledge base, write and run
-              code, and keep human approvals for sensitive actions.
-            </p>
+        ) : (
+          <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto py-24 space-y-5">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[var(--accent-soft)] to-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center shadow-sm">
+              <Sparkles className="w-7 h-7 text-[var(--accent-ink)]" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
+                How can Nexus help you today?
+              </h2>
+              <p className="text-[0.9375rem] text-[var(--text-muted)] leading-relaxed max-w-sm mx-auto">
+                Research the live web, query your knowledge base, write and run
+                code, and keep human approvals for sensitive actions.
+              </p>
+            </div>
           </div>
-        </div>
-      )}
+        ))}
 
       {/* Stream error banner */}
       {error && (
@@ -1220,7 +1262,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           <span className="stream-dot" />
                           <span className="stream-dot" />
                         </span>
-                        {msg.content ? "Writing…" : "Thinking…"}
+                        {msg.content
+                          ? "Writing…"
+                          : (statusLabel ?? "Thinking…")}
                       </div>
                     )}
                   </>
@@ -1457,7 +1501,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           The block did not exist at all originally: the backend emitted both
           frames on every finished run, the BFF route dropped them, and the user
           was never told. */}
-      {turnVerdict && (
+      {turnVerdict && messages.some((m) => m.role === "assistant") && (
         <div className="max-w-3xl mx-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3.5 mt-2">
           <button
             onClick={() => setVerdictOpen((v) => !v)}
