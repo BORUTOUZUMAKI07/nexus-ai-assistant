@@ -43,7 +43,7 @@ from backend.app.services.structured_output import (
 from backend.app.services.structured_parse import validate_object
 from backend.app.services.tools.evidence_gate import evidence_gate
 from backend.app.services.tools.tool_gateway import tool_gateway
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.config import get_config, get_stream_writer
 from pydantic import BaseModel
 
@@ -443,6 +443,54 @@ async def _emit_answer_stream(response_text: str) -> None:
         await asyncio.sleep(pause)
 
 
+def _starts_new_turn(state: AgentState) -> bool:
+    """True when this invocation begins a new user turn rather than resuming one.
+
+    A HITL resume re-enters `bootstrap_node` with the interrupted turn's state,
+    and that state is exactly what the resumed node needs (the approved tool's
+    output lives in `tool_results`). A new turn arrives with the user's message
+    last, so the role of the final message is the discriminator.
+    """
+    messages = state.get("messages") or []
+    return bool(messages) and isinstance(messages[-1], HumanMessage)
+
+
+def per_turn_reset() -> dict[str, Any]:
+    """Fields that describe THIS turn, reset before it starts.
+
+    The checkpoint is per conversation, so without this every finding of the
+    previous turn is still in state when the next one runs. That is not
+    hypothetical: `citations` is spliced into the synthesizer prompt under
+    "Answer from the block above", so a Web-mode question about the newest
+    Python release was answered with the *previous* turn's document phrase, and
+    a vision turn listed that same document as its own grounding source. Both
+    were reproduced live (see docs/live-verification.md, D8 and D9).
+    """
+    return {
+        "citations": [],
+        "tool_results": [],
+        "subagent_dispatches": [],
+        "subagent_outputs": {},
+        "tot_candidates": [],
+        "tot_synthesis": "",
+        "evidence_score": 0.0,
+        "evidence_gate_passed": None,
+        "revision_count": 0,
+        "critique": None,
+        "rag_relevance_score": 0.0,
+        "grader_verdict": "relevant",
+        "grader_confidence": 0.0,
+        "needs_web_search": False,
+        "answer_model": "",
+        "artifact_id": None,
+        "artifact_title": "",
+        "artifact_version": 0,
+        "artifact_created": False,
+        "artifact_reason": "",
+        "prompt_snapshot": None,
+    }
+
+
 async def bootstrap_node(state: AgentState) -> dict[str, Any]:
     """
     Step 0: Materialises session identity (user_id, conversation_id) and
@@ -480,7 +528,6 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
         "subagent_outputs": state.get("subagent_outputs") or {},
         "tot_candidates": state.get("tot_candidates") or [],
         "tot_synthesis": state.get("tot_synthesis") or "",
-        "citations": state.get("citations") or [],
         "evidence_score": state.get("evidence_score", 0.0),
         "evidence_gate_passed": (
             # None means "not evaluated" and must survive bootstrap as-is:
@@ -499,6 +546,22 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
         "needs_web_search": bool(state.get("needs_web_search", False)),
         "retry_count": state.get("retry_count", 0),
         "error": state.get("error"),
+        # Per-turn findings do NOT carry over, and that is a measured bug, not
+        # tidiness. The checkpoint is per conversation, so every field the last
+        # turn set was still in state when the next one started: the synthesizer
+        # splices `citations` into its prompt under "Answer from the block
+        # above" (see the RAG block below), so a Web-mode question about the
+        # newest Python release was answered with the *previous* turn's document
+        # phrase, and a vision turn listed that same document as its grounding
+        # source. Both were reproduced live.
+        #
+        # Scoped to a NEW user turn. A HITL resume re-enters this node with the
+        # interrupted turn's findings on purpose -- dropping `tool_results` there
+        # would discard the approved tool's output and re-run the graph as if
+        # nothing had been authorised. The last message being a HumanMessage is
+        # what distinguishes the two: a resume continues from the assistant/tool
+        # side of the turn it paused in.
+        **(per_turn_reset() if _starts_new_turn(state) else {"citations": state.get("citations") or []}),
         "loop_steps": _coerce_int(state.get("loop_steps"), 0),
         "tokens_used": _coerce_int(state.get("tokens_used"), 0),
         "spend_stop_reason": str(state.get("spend_stop_reason") or ""),

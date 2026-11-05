@@ -38,7 +38,7 @@ from uuid import UUID
 import structlog
 from backend.app.core.config import settings
 from backend.app.core.logging import bind_request_context, clear_request_context
-from backend.app.core.spend import clear_spend_meter
+from backend.app.core.spend import cached_tokens_seen, clear_spend_meter
 from backend.app.domain.run.service import RunService
 from backend.app.domain.usage.schemas import UsageLogCreate
 from backend.app.infrastructure.ai.litellm_client import ai_client, resolve_provider
@@ -75,6 +75,50 @@ _MID_RUN_FRAME_TYPES = frozenset(
         "error",
     }
 )
+
+# Nodes whose answer arrives through `get_stream_writer()` rather than through a
+# state delta. The `messages` fallback below exists for nodes that do *not*
+# stream (tree_of_thoughts is the known one); for these it is a second delivery
+# of the same text, so it is skipped for them.
+#
+# Measured, and the reason the duplicate answer survived its first "fix": the
+# synthesizer's `on_chain_end` carries `{"messages": [AIMessage(answer)]}`, and
+# its writer payload arrives as a separate root `on_chain_stream`. The two are
+# dispatched in an order that depends on scheduling, so on some runs the
+# `on_chain_end` came first -- `_streamed_tokens` was still False, the fallback
+# emitted the whole answer, and the writer chunk then emitted it again. Two
+# identical `text_delta` frames, one persisted reply ("del onedel one",
+# "turn twoturn two", "sweep one editedsweep one edited"). Reproduced in 2 of 8
+# parallel runs; 0 of 26 serial runs, which is why it looked intermittent.
+_WRITER_ANSWER_NODES = frozenset({"synthesizer"})
+
+# Human label for each graph node, emitted as a `status` frame when that node
+# starts.
+#
+# Why this exists: the synthesizer deliberately does not stream raw tokens (see
+# `nodes._emit_answer_stream` -- PII redaction and the confidence hedge act on
+# the finished text, so an unfiltered draft must never reach the screen), which
+# means the *first* frame of an agent-mode run arrives only once the graph has
+# finished. Measured on a live run: response opened, first frame at 53 s, stream
+# closed at 80 s. The transcript sat on "Thinking…" for 53 s with nothing behind
+# it, which reads as a hung request -- and was reported as one.
+#
+# A node start is observable from `astream_events` without touching a single
+# node, so this is one hook instead of nine edits, and a node added later
+# announces itself as long as it is named here. An unnamed node emits nothing
+# rather than a guessed label: a wrong stage name is worse than no progress
+# signal, because it describes work that is not happening.
+_NODE_STATUS_LABELS = {
+    "bootstrap": "Preparing the conversation",
+    "planner": "Planning the answer",
+    "tree_of_thoughts": "Weighing alternative plans",
+    "orchestrator": "Choosing an approach",
+    "subagent_dispatcher": "Delegating to a specialist",
+    "tool_node": "Running tools",
+    "critic_grader": "Checking evidence",
+    "synthesizer": "Writing the answer",
+    "artifact": "Saving the document",
+}
 
 # Strong references to in-flight run tasks. asyncio only holds a weak reference,
 # so a task nobody keeps can be garbage collected mid-run — which, for a task
@@ -421,6 +465,10 @@ async def iter_graph_frames(
     nothing), and add its ``type`` to ``_MID_RUN_FRAME_TYPES``.
     """
     _streamed_tokens = False
+    # Nodes already announced, so a retried node is not announced twice into the
+    # client's progress line. Not a frame cache: the frame is still persisted on
+    # the first announcement, which is the only one a reader sees.
+    _announced: set[str] = set()
     async for event in graph.astream_events(
         input=graph_input,
         config=config,
@@ -435,7 +483,29 @@ async def iter_graph_frames(
     ):
         kind = event.get("event")
 
+        # A node starting is the only progress signal available before the
+        # synthesizer's first (already-final) chunk. `name` is the node's own
+        # registration name; nested runnables inside a node carry their own
+        # names, and the label lookup is what filters them out.
+        if kind == "on_chain_start":
+            node_name = event.get("name")
+            label = _NODE_STATUS_LABELS.get(node_name) if isinstance(node_name, str) else None
+            if label and node_name not in _announced:
+                _announced.add(node_name)
+                yield {"type": "status", "stage": node_name, "label": label}, False
+
         if kind == "on_chat_model_stream":
+            # The synthesizer's own token stream is the one thing this function
+            # must not forward: its raw draft is not yet redacted or hedged (see
+            # `nodes._emit_answer_stream`) and the sanitised text arrives through
+            # the writer a moment later. Forwarding both put the answer on the
+            # wire twice, which is measured: two identical `text_delta` frames
+            # ("sweep one edited") in one run, and a regenerated reply persisted
+            # as "sweep one editedsweep one edited". The provider only streams on
+            # some runs, which is why it looked intermittent.
+            streaming_node = (event.get("metadata") or {}).get("langgraph_node")
+            if streaming_node == "synthesizer":
+                continue
             chunk = event.get("data", {}).get("chunk")
             if chunk and hasattr(chunk, "content") and chunk.content:
                 _streamed_tokens = True
@@ -447,9 +517,7 @@ async def iter_graph_frames(
 
             # A writer payload arrives as an `on_chain_stream` on the ROOT run
             # when custom streaming is on. It is discriminated by its own shape
-            # (a node's state delta and a frame are both plain dicts here). A
-            # `text_delta` flips `_streamed_tokens`, so the `messages` fallback
-            # below cannot re-emit the answer it already streamed.
+            # (a node's state delta and a frame are both plain dicts here).
             if (
                 kind == "on_chain_stream"
                 and event.get("name") == "LangGraph"
@@ -460,6 +528,13 @@ async def iter_graph_frames(
                 if is_text:
                     _streamed_tokens = True
                 yield chunk, is_text
+                continue
+
+            # The writer's owner already delivered this text, or is about to:
+            # its `on_chain_end` output and its writer payload are the same
+            # answer, and which one arrives first is a scheduling detail. See
+            # `_WRITER_ANSWER_NODES` for the measured double delivery.
+            if event.get("name") in _WRITER_ANSWER_NODES:
                 continue
 
             # Fallback for nodes that do not stream token-by-token (the ToT node
@@ -647,6 +722,85 @@ def _message_text(message: Any) -> str:
     return "" if raw is None else str(raw)
 
 
+# Webhook deliveries run outside the request and outside the run: the payload is
+# already durable in `messages`, so a slow endpoint is never allowed to hold the
+# assistant's reply hostage. A strong reference is kept because asyncio only
+# holds a weak one, and a task that owns a delivery must not be collected
+# mid-flight.
+_WEBHOOK_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _spawn_webhook_dispatch(
+    *,
+    user_id: UUID,
+    conversation_id: UUID,
+    message_id: UUID,
+    model: str,
+    content: str,
+) -> None:
+    task = asyncio.create_task(
+        _dispatch_message_completed(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            model=model,
+            content=content,
+        ),
+        name=f"nexus-webhook-{message_id}",
+    )
+    _WEBHOOK_TASKS.add(task)
+    task.add_done_callback(_WEBHOOK_TASKS.discard)
+
+
+async def _dispatch_message_completed(
+    *,
+    user_id: UUID,
+    conversation_id: UUID,
+    message_id: UUID,
+    model: str,
+    content: str,
+) -> None:
+    """Deliver `message.completed` for a reply the run path just persisted.
+
+    The non-streaming `POST /conversations/{id}/messages` endpoint has dispatched
+    this event all along; the run path -- the one the app actually chats through
+    -- never did, so every endpoint a user registered stayed silent and
+    `webhook_deliveries` stayed empty after real turns. Measured live: one
+    endpoint, zero deliveries. The payload mirrors that endpoint's, because a
+    subscriber must not be able to tell which transport produced the turn.
+    """
+    try:
+        # Imported here, not at module scope: `run_executor` is imported by the
+        # app's startup path and this keeps the webhook layer (and its HTTP
+        # client) out of that import graph.
+        from backend.app.services.webhook_service import WebhookService
+
+        async with async_session_factory() as session:
+            delivered = await WebhookService(session).dispatch_event(
+                event="message.completed",
+                payload={
+                    "conversation_id": str(conversation_id),
+                    "message_id": str(message_id),
+                    "role": "assistant",
+                    "model": model,
+                    "content": content[:2000],
+                },
+                user_id=user_id,
+            )
+        logger.info(
+            "webhook_dispatch_completed",
+            conversation_id=str(conversation_id),
+            message_id=str(message_id),
+            endpoints=delivered,
+        )
+    except Exception as exc:  # best-effort: a webhook must never fail a turn
+        logger.warning(
+            "webhook_dispatch_failed",
+            conversation_id=str(conversation_id),
+            error=str(exc),
+        )
+
+
 async def _persist_reply(
     *,
     conversation_id: UUID,
@@ -687,6 +841,14 @@ async def _persist_reply(
             prompt_text = " ".join(_message_text(m) for m in user_messages)
             prompt_tok = ai_client.count_tokens(prompt_text, response_model)
             comp_tok = ai_client.count_tokens(emitted_text, response_model)
+            # How much of what the providers actually billed came from their
+            # prefix cache. Clamped to the prompt count because the two are
+            # measured differently -- the cache total comes from provider usage
+            # across every model call in the run (including the planner and the
+            # critic), while `prompt_tok` is a local estimate of this reply's
+            # prompt -- and a cached count larger than the prompt it belongs to
+            # is not a number anyone can act on.
+            cached_tok = min(cached_tokens_seen(), prompt_tok)
             cost_usd = cost_tracking_service.calculate_cost(
                 response_model, prompt_tok, comp_tok
             )
@@ -721,13 +883,21 @@ async def _persist_reply(
                     provider=resolve_provider(response_model),
                     prompt_tokens=prompt_tok,
                     completion_tokens=comp_tok,
+                    cached_tokens=cached_tok,
                     # The non-stream path passes `duration_ms` here; omitting it
                     # left every streamed run at 0, which is why
                     # `average_latency_ms` read 0 for them. `latency_ms` is in
                     # scope on the call above (`evaluate_response_quality`).
                     latency_ms=latency_ms,
                     cost_usd=cost_usd,
-                    metadata_json={"quality": quality},
+                    metadata_json={
+                        "quality": quality,
+                        # Recorded, not inferred: 0.0 here means "the provider
+                        # reported no cache hit", which is the number that
+                        # decides whether the static-first prompt is paying off.
+                        "cached_tokens": cached_tok,
+                        "cache_hit_rate": round(cached_tok / prompt_tok, 4) if prompt_tok else 0.0,
+                    },
                 )
             )
             await cost_tracking_service.record_cost_log(
@@ -740,6 +910,15 @@ async def _persist_reply(
                 completion_tokens=comp_tok,
             )
             await session.commit()
+            # Fire-and-forget: an endpoint that is slow, down or retrying must
+            # not delay the `done` frame the user is waiting on.
+            _spawn_webhook_dispatch(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                message_id=assistant_msg.id,
+                model=response_model,
+                content=emitted_text,
+            )
             return assistant_msg.id
     except Exception as exc:
         logger.warning(
