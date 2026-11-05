@@ -13,6 +13,14 @@ from app.domain.file.schemas import RAGCitation
 logger = structlog.get_logger(__name__)
 
 
+# A citation marker is a bracketed source number. Two forms occur in practice:
+# the `[1]` this service formats into the prompt, and the `【1†file.md】` style
+# some models emit unprompted. Recognising only the first scored a correctly
+# cited, 100%-relevance answer as "LOW EVIDENCE 30%" in the UI - the badge was
+# measuring the marker's typography, not the answer's grounding.
+_CITATION_MARKER_RE = re.compile(r"[\[【]\s*(\d+)")
+
+
 class CitationService:
     """
     Handles inline citation insertion, citation mapping,
@@ -64,7 +72,7 @@ class CitationService:
             # trust score.
             return 0.0
 
-        citation_markers = re.findall(r"\[(\d+)\]", response_text)
+        citation_markers = _CITATION_MARKER_RE.findall(response_text)
         if not citation_markers:
             logger.warning("response_has_no_citation_markers_despite_context")
             return 0.3

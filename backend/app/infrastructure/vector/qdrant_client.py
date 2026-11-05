@@ -145,9 +145,22 @@ class QdrantService(IVectorStore):
         Executes native hybrid search with multi-stage Prefetch and
         server-side Reciprocal Rank Fusion (RRF).
 
-        ``score_threshold`` is enforced after fusion: RRF-normalised scores vary
-        by bucket size, so a client-side cutoff on the fused score is the only
-        cross-collection-consistent place to filter low-confidence hits.
+        ``score_threshold`` is a **cosine similarity** floor and is applied to
+        the dense prefetch, before fusion.
+
+        It used to be applied to the fused result, which was wrong on the score
+        scale: Qdrant's RRF scores are ``1/(2+rank)`` (measured: 0.5, 0.333,
+        0.25, 0.2, 0.167 for ranks 1-5), so a 0.35 cutoff silently dropped every
+        single-bucket hit below rank 2 - that is a rank cutoff wearing a
+        relevance cutoff's name, and it discarded genuinely relevant chunks
+        that landed third while keeping rank-1 chunks of any quality. RRF scores
+        are not comparable across queries, so no absolute cutoff on them is
+        meaningful.
+
+        The sparse bucket is deliberately left unfiltered: BM25 scores are
+        unbounded and an exact lexical match (a name, an error code) is worth
+        keeping even when the semantic similarity is low. That is the point of
+        hybrid search.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer between 1 and 100")
@@ -199,6 +212,7 @@ class QdrantService(IVectorStore):
                 filter=payload_filter,
                 params=search_params,
                 limit=limit * 3,
+                score_threshold=score_threshold,
             ),
             models.Prefetch(
                 query=models.SparseVector(
@@ -238,8 +252,9 @@ class QdrantService(IVectorStore):
                 hit_item["dense_vector"] = dense_vec
             hits.append(hit_item)
 
-        if score_threshold is not None:
-            hits = [h for h in hits if h["score"] >= score_threshold]
+        # No post-fusion cutoff here — see this method's docstring. Relevance
+        # filtering happens on the cosine scale above, and again on the
+        # reranker's own scale in RerankingService.rerank.
         return hits
 
     async def upsert_points(self, points: list[dict[str, Any]]) -> None:

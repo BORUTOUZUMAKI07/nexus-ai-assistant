@@ -469,6 +469,20 @@ class Settings(BaseSettings):
     RAG_TOP_K: int = Field(default=20)
     RAG_RERANK_TOP_N: int = Field(default=5)
 
+    # Minimum cross-encoder relevance for a chunk to be allowed into the
+    # synthesis context. Retrieval has a similarity floor, but reranking
+    # replaces the score with a FlashRank relevance in [0, 1], and until this
+    # existed nothing filtered that number: a top_n of 5 always returned 5
+    # chunks, so an unrelated passage (measured at 0.00002) was attached to the
+    # answer as a "grounding source" and shown to the user as 0% relevance.
+    #
+    # 0.05 is deliberately low. FlashRank's ms-marco scores run 0.5+ for a real
+    # match and near 0 for an unrelated one, and the cost of the two mistakes is
+    # asymmetric: dropping good evidence makes the model disclaim knowledge it
+    # has, while keeping one weak chunk only wastes context. Set to 0 to
+    # restore the old keep-everything behaviour.
+    RAG_MIN_RERANK_SCORE: float = Field(default=0.05)
+
     # HyDE (Hypothetical Document Embeddings). "llm" asks the model to imagine
     # the answer and searches THAT, which is the whole point: a real answer
     # contains the vocabulary a question does not ("how do I stop the model

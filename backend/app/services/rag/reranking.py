@@ -202,6 +202,25 @@ class RerankingService(IReranker):
             rerank_request = RerankRequest(query=query, passages=passages)
             reranked = await asyncio.to_thread(_rerank_sync, ranker, rerank_request, top_n, candidates)
 
+            # Relevance floor. `top_n` is a budget, not a promise: without this,
+            # a 5-chunk budget always returned 5 chunks, so an unrelated passage
+            # (measured at rerank score 0.00002) reached the synthesizer as
+            # evidence and was rendered to the user as a 0%-relevance citation.
+            # Applied only here, where the score is a cross-encoder relevance in
+            # [0, 1]; the fusion scores upstream live on a different scale and
+            # must not be compared to this number.
+            floor = settings.RAG_MIN_RERANK_SCORE
+            if floor > 0:
+                kept = [c for c in reranked if float(c.get("rerank_score", 0.0)) >= floor]
+                if len(kept) != len(reranked):
+                    logger.info(
+                        "rerank_relevance_floor_applied",
+                        kept=len(kept),
+                        dropped=len(reranked) - len(kept),
+                        floor=floor,
+                    )
+                reranked = kept
+
             logger.info("flashrank_rerank_complete", original_count=len(candidates), reranked_count=len(reranked))
             return reranked
 
