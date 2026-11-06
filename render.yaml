@@ -138,11 +138,22 @@ services:
       - key: METRICS_TOKEN
         sync: false
       # Observability: forward logs/metrics/traces to the collector above.
-      # Render internal network: use the service name `nexus-otel-collector`.
+      #
+      # The PUBLIC URL, not the internal one. Render's private network is
+      # send-only for Free web services — "Free web services can send private
+      # network requests, but they can't receive them" — so a Free collector is
+      # unreachable at nexus-otel-collector:4318 and every export fails with
+      # NameResolutionError. The receiver already requires HTTP basic auth
+      # (OTLP_AUTH_*), which is exactly what makes a public OTLP endpoint safe
+      # to use here. Replace the host with the URL Render shows for the service.
+      #
+      # `NEW_RELIC_ENABLED: false` until that service exists: with no collector,
+      # true is only a startup warning (otel.py probes the host first), never a
+      # retry storm.
       - key: NEW_RELIC_ENABLED
-        value: "true"
+        value: "false"
       - key: NEW_RELIC_OTLP_ENDPOINT
-        value: http://nexus-otel-collector:4318
+        value: https://nexus-otel-collector.onrender.com
       - key: OTLP_AUTH_USER
         sync: false
       - key: OTLP_AUTH_PASSWORD
