@@ -100,6 +100,19 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",
+        # Decoding off is what makes a plain CORS_ORIGINS value usable. With it
+        # on (the default) pydantic-settings JSON-decodes every env var whose
+        # field is a list BEFORE any validator runs, so the documented
+        # "comma-separated allow-list" form dies inside the settings source with
+        # `SettingsError: error parsing value for field "CORS_ORIGINS"` -- and
+        # because that happens at `settings = Settings()` during import, the API
+        # never starts. Measured on a Render deploy: the container exited on
+        # boot and the platform reported only "deploy failed". With decoding
+        # off, the raw string reaches `parse_cors` (mode="before"), which
+        # accepts both `["https://a"]` and `https://a,https://b`. The only other
+        # complex field here is TRUSTED_PROXY_IPS, which now has its own
+        # before-validator for the same reason.
+        enable_decoding=False,
     )
 
     # ── App Identity ───────────────────────────────────────────────────────────
@@ -183,6 +196,27 @@ class Settings(BaseSettings):
     # wildcard here (or a deployment that forwards XFF without stripping it)
     # is what makes a client-chosen rate-limit key possible.
     TRUSTED_PROXY_IPS: list[str] = Field(default_factory=list)
+
+    @field_validator("TRUSTED_PROXY_IPS", mode="before")
+    @classmethod
+    def parse_trusted_proxies(cls, v: str | list[str]) -> list[str]:
+        """Accept a comma-separated list as well as a JSON array.
+
+        Sibling of `parse_cors`: `enable_decoding=False` means the raw env
+        string arrives here, so a value like `10.0.0.1,10.0.0.0/8` must be split
+        rather than rejected as a non-list.
+        """
+        if isinstance(v, str):
+            import json
+
+            try:
+                parsed = json.loads(v)
+            except Exception:
+                return [item.strip() for item in v.split(",") if item.strip()]
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed]
+            return [v.strip()] if v.strip() else []
+        return v
 
     # ── Database ───────────────────────────────────────────────────────────────
     DATABASE_URL: str = Field(
