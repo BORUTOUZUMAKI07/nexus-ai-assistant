@@ -482,3 +482,85 @@ async def test_the_http_middleware_records_request_metrics(monkeypatch):
     assert collector._counts["http_requests_total"] >= 1
     assert collector._latencies["http_request"]
     assert "http_request" in collector.get_summary()["latency_stats"]
+
+
+# ── collector reachability: a missing service must not retry forever ─────────
+
+
+def test_unresolvable_collector_host_disables_all_three_signals(monkeypatch):
+    """A collector that was never deployed must not build exporters at all.
+
+    Regression for a Render deploy whose `NEW_RELIC_OTLP_ENDPOINT` pointed at a
+    service that did not exist: the SDK accepted the exporter, then retried
+    every batch three times with backoff — `Transient error ...
+    NameResolutionError` for logs, traces and metrics every 30s, plus a stall
+    on shutdown — instead of saying once that the host does not resolve.
+    """
+    import socket as socket_mod
+
+    original_enabled = settings.NEW_RELIC_ENABLED
+    original_endpoint = settings.NEW_RELIC_OTLP_ENDPOINT
+
+    def _nxdomain(*_args, **_kwargs):
+        raise socket_mod.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(socket_mod, "getaddrinfo", _nxdomain)
+    try:
+        _set("NEW_RELIC_ENABLED", True)
+        _set("NEW_RELIC_OTLP_ENDPOINT", "http://nexus-otel-collector:4318")
+        assert otel.collector_endpoint_resolvable() is False
+        assert otel.setup_otlp_tracing() is False
+        assert otel.setup_otlp_metrics() is False
+        assert otel.get_tracer("x") is None
+        assert otel.get_meter("x") is None
+        assert otlp_logs.setup_otlp_log_handler() is None
+    finally:
+        _set("NEW_RELIC_ENABLED", original_enabled)
+        _set("NEW_RELIC_OTLP_ENDPOINT", original_endpoint)
+        otel.shutdown_otel()
+
+
+@requires_otel
+def test_resolvable_collector_still_wires(monkeypatch):
+    """The probe must not turn a reachable collector into a no-op.
+
+    `localhost` resolves without network access, so the existing wiring tests'
+    endpoint keeps exercising the real SDK path.
+    """
+    original_enabled = settings.NEW_RELIC_ENABLED
+    original_endpoint = settings.NEW_RELIC_OTLP_ENDPOINT
+    try:
+        _set("NEW_RELIC_ENABLED", True)
+        _set("NEW_RELIC_OTLP_ENDPOINT", "http://localhost:4318")
+        assert otel.collector_endpoint_resolvable() is True
+        assert otel.setup_otlp_tracing() is True
+        assert otel.setup_otlp_metrics() is True
+    finally:
+        _set("NEW_RELIC_ENABLED", original_enabled)
+        _set("NEW_RELIC_OTLP_ENDPOINT", original_endpoint)
+
+
+def test_probe_is_cached_and_reset_by_shutdown(monkeypatch):
+    """One DNS lookup per process, and shutdown_otel() clears it for re-wiring."""
+    import socket as socket_mod
+
+    original_endpoint = settings.NEW_RELIC_OTLP_ENDPOINT
+    calls: list[tuple] = []
+
+    def _counting(host, port, *args, **kwargs):
+        calls.append((host, port))
+        return [(socket_mod.AF_INET, socket_mod.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
+
+    monkeypatch.setattr(socket_mod, "getaddrinfo", _counting)
+    try:
+        _set("NEW_RELIC_OTLP_ENDPOINT", "http://collector.internal:4318")
+        assert otel.collector_endpoint_resolvable() is True
+        assert otel.collector_endpoint_resolvable() is True
+        assert calls == [("collector.internal", 4318)]
+
+        otel.shutdown_otel()
+        assert otel.collector_endpoint_resolvable() is True
+        assert len(calls) == 2
+    finally:
+        _set("NEW_RELIC_OTLP_ENDPOINT", original_endpoint)
+        otel.shutdown_otel()

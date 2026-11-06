@@ -51,4 +51,18 @@ EXPOSE 8000
 # so bind to $PORT and fall back to 8000 for a plain `docker run`. The Windows
 # ProactorEventLoop workaround (`--loop ...event_loop_factory`) is a Windows-only
 # requirement and is deliberately not used here — the image is Linux.
-CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+#
+# --workers ${WEB_CONCURRENCY:-1}: the platform sets WEB_CONCURRENCY from the
+# instance's CPU count, which is 1 on the free plan and >1 once the service is
+# scaled up. Reading it means vertical scaling uses the extra cores without a
+# code change, while a single process stays the default (this app's per-process
+# state — checkpointer pool, in-process caches — was sized for one worker).
+#
+# --timeout-graceful-shutdown 20: uvicorn's default is unbounded. A rolling
+# deploy that closes the SSE chat stream would then hold the old container open
+# until the platform kills it, so in-flight tokens are lost; 20s lets the stream
+# finish and makes replacements overlap predictably.
+#
+# `exec` keeps uvicorn as PID 1 so SIGTERM reaches it directly instead of being
+# swallowed by the shell, which is what triggers that graceful path at all.
+CMD ["sh", "-c", "exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-1} --timeout-graceful-shutdown 20"]

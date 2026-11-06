@@ -26,7 +26,10 @@ from typing import Any
 
 import structlog
 from backend.app.core.config import settings
-from backend.app.services.observability.otel import otlp_auth_headers
+from backend.app.services.observability.otel import (
+    collector_endpoint_resolvable,
+    otlp_auth_headers,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -56,6 +59,11 @@ def setup_otlp_log_handler(log_level: int = logging.INFO) -> logging.Handler | N
         return None
     endpoint = _otlp_logs_endpoint()
     if endpoint is None:
+        return None
+    # Same one-time probe otel.py uses: an endpoint whose host does not resolve
+    # (collector never created) would otherwise retry every batch forever and
+    # bury the real logs in `Transient error ... NameResolutionError`.
+    if not collector_endpoint_resolvable():
         return None
     try:
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter

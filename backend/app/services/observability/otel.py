@@ -24,7 +24,9 @@ Design rules, identical to `logs.py` so the two stay predictable:
 from __future__ import annotations
 
 import base64
+import socket
 from typing import Any
+from urllib.parse import urlsplit
 
 import structlog
 from backend.app.core.config import settings
@@ -35,6 +37,11 @@ logger = structlog.get_logger(__name__)
 # (and a re-entrant startup) can wire the providers again.
 _tracer_provider: Any = None
 _meter_provider: Any = None
+
+# Cached result of the one-time collector host resolution (see
+# `collector_endpoint_resolvable`). None means "not probed yet"; reset by
+# shutdown_otel() alongside the providers.
+_collector_resolved: bool | None = None
 
 
 def _base_endpoint() -> str | None:
@@ -81,8 +88,61 @@ def _resource() -> Any:
     )
 
 
+def collector_endpoint_resolvable() -> bool:
+    """Whether the OTLP endpoint's host resolves. Probed once per process.
+
+    A collector service that was never created — the usual first-deploy
+    mistake, where the backend points at ``http://nexus-otel-collector:4318``
+    but only the backend exists — is not a transient export failure the SDK
+    shrugs off. Every batch is retried three times with backoff and then
+    dropped, and that storm repeats on each export interval for the life of
+    the process: `Transient error ... NameResolutionError` for logs, traces and
+    metrics every 30s, plus a multi-second stall at shutdown while the last
+    batch gives up.
+
+    So the host is resolved once, *before* any exporter is constructed. When it
+    does not resolve, all three signals stay off behind a single warning and
+    startup pays one DNS lookup.
+
+    Only the "no such service" case is caught: a collector that resolves but is
+    down (or slept) is still retried by the SDK, because that is a real outage
+    worth seeing. Fail-open, like every other telemetry seam here — a probe bug
+    must never break startup.
+    """
+    global _collector_resolved
+    if _collector_resolved is not None:
+        return _collector_resolved
+    base = _base_endpoint()
+    if base is None:
+        _collector_resolved = False
+        return False
+    parts = urlsplit(base if "//" in base else f"//{base}")
+    host = parts.hostname
+    if not host:
+        _collector_resolved = False
+        return False
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    try:
+        socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        _collector_resolved = True
+    except OSError as exc:  # socket.gaierror is an OSError
+        logger.warning(
+            "otlp_collector_host_unresolvable_export_disabled",
+            host=host,
+            port=port,
+            error_type=type(exc).__name__,
+            detail="create the collector service or unset NEW_RELIC_ENABLED",
+        )
+        _collector_resolved = False
+    return _collector_resolved
+
+
 def _enabled() -> bool:
-    return bool(settings.NEW_RELIC_ENABLED) and _base_endpoint() is not None
+    return (
+        bool(settings.NEW_RELIC_ENABLED)
+        and _base_endpoint() is not None
+        and collector_endpoint_resolvable()
+    )
 
 
 def setup_otlp_tracing() -> bool:
@@ -203,11 +263,12 @@ def shutdown_otel() -> None:
     Idempotent and safe to call when nothing was ever wired. Flushing here is
     what stops the last batch of spans/metrics being lost on a clean shutdown.
     """
-    global _tracer_provider, _meter_provider
+    global _tracer_provider, _meter_provider, _collector_resolved
     tracer_provider = _tracer_provider
     meter_provider = _meter_provider
     _tracer_provider = None
     _meter_provider = None
+    _collector_resolved = None
     _shutdown_provider("otlp_trace_provider_shutdown_failed", tracer_provider)
     _shutdown_provider("otlp_meter_provider_shutdown_failed", meter_provider)
 
