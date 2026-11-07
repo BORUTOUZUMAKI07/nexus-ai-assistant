@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ─── Nexus AI Assistant – Local Development Stack ────────────────────────────
 # Brings up all infrastructure services required for local development.
 # The backend and frontend are run separately via npm/uvicorn for hot reload.
@@ -73,10 +71,9 @@ services:
   # batches, and forwards them to New Relic (Layer-3 sink) using
   # NEW_RELIC_LICENSE_KEY. The receiver requires HTTP basic auth
   # (OTLP_AUTH_USER/PASSWORD), which the app also sends. See
-  # docker/otel-collector-config.yaml for the full flow. Set before starting
-  # (PowerShell):
-  #   $env:NEW_RELIC_LICENSE_KEY = "xxxx"
-  #   $env:OTLP_AUTH_USER = "nexus"; $env:OTLP_AUTH_PASSWORD = "a-real-secret"
+  # docker/otel-collector-config.yaml for the full flow. All three values come
+  # from the repo's single env file, backend/.env — nothing to export in the
+  # shell before starting, and no second .env to keep in sync.
   otel-collector:
     build:
       context: ./docker
@@ -93,12 +90,22 @@ services:
       # image the volume is root-owned and the collector exits at startup with
       # `open .../exporter_otlphttp_newrelic_logs: permission denied`.
       - otel_storage:/var/lib/otelcol/storage
+    # One env file for the whole repo: backend/.env. It is the file the app
+    # already loads by absolute path (core/config.py) and the file every guard
+    # and test reads, so there is no second copy to drift.
+    #
+    # The collector needs exactly three of those keys — NEW_RELIC_LICENSE_KEY
+    # and OTLP_AUTH_USER/OTLP_AUTH_PASSWORD — and `env_file` injects the rest of
+    # the app's variables too. The collector ignores them; the alternative was a
+    # root .env whose only purpose was to feed ${...} interpolation here, which
+    # is the duplicate this replaces. Do not interpolate these from the shell:
+    # with no root .env, `${NEW_RELIC_LICENSE_KEY:-not-set}` silently becomes
+    # `not-set` and every export is a 403.
+    env_file:
+      - ./backend/.env
     environment:
-      - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY:-not-set}
-      - ENVIRONMENT=${ENVIRONMENT:-development}
-      - SERVICE_VERSION=${SERVICE_VERSION:-dev}
-      - OTLP_AUTH_USER=${OTLP_AUTH_USER:-nexus}
-      - OTLP_AUTH_PASSWORD=${OTLP_AUTH_PASSWORD:-nexus}
+      - ENVIRONMENT=development
+      - SERVICE_VERSION=dev
     ports:
       - "4317:4317"   # OTLP/gRPC
       - "4318:4318"   # OTLP/HTTP — what the app pushes logs/metrics/traces to

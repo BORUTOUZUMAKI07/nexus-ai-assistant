@@ -174,11 +174,17 @@ react 19.2.8, typescript 5, vitest 4, playwright.
 ## 6. Local infrastructure (docker-compose)
 
 ```bash
-docker compose up -d       # postgres (pgvector/pg16), redis, qdrant
+docker compose up -d       # postgres (pgvector/pg16), redis, qdrant, otel-collector
 # Object storage is Supabase Storage (hosted) — configure SUPABASE_URL /
 # SUPABASE_SERVICE_ROLE_KEY / STORAGE_BUCKET in backend/.env, no local container.
 docker compose down -v     # stop + remove volumes (destructive)
 ```
+
+`backend/.env` is the only env file: compose reads it for the collector
+(`env_file`), and `core/config.py` loads it by absolute path for the app. Do not
+add a root `.env` back — a second copy of the same secrets is what drifts, and
+because compose would then interpolate `${NEW_RELIC_LICENSE_KEY}` from it, an
+empty one silently turns every local export into a 403.
 
 Make targets: `make infra`, `make infra-down`, `make migrate`,
 `make backend`, `make worker`, `make frontend`, `make dev`.

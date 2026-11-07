@@ -6,6 +6,16 @@
 
 Sensible defaults exist for everything; `.env` overrides. Highlights:
 
+**There is exactly one runtime env file: `backend/.env`.** `core/config.py`
+loads it by absolute path (`Path(__file__).resolve().parents[2] / ".env"`), so
+it is found from any working directory, and `docker-compose.yml` gives the
+`otel-collector` service `env_file: ./backend/.env` so the collector gets
+`NEW_RELIC_LICENSE_KEY` / `OTLP_AUTH_*` from the same file. There is no root
+`.env`: its only job was feeding `${...}` interpolation into compose, and a
+second copy of the same secrets is the thing that drifts. `.env.render` is a
+gitignored *record* of production values (it holds prod `SECRET_KEY` /
+`ENCRYPTION_KEY`), never read at runtime.
+
 - `API_V1_PREFIX=/api/v1` — used for all route mounts (single source; one
   setting, not the old duplicated `API_V1_STR`).
 - `MCP_AUTH_ENABLED=True` (gate FastMCP), `MCP_API_KEY` (shared key auth).
