@@ -260,6 +260,24 @@ Steps:
    characters). If that line appears, compare the two services' values — nothing
    else will tell you.
 
+   **Two failures look alike from the app and are not.** Wrong `OTLP_AUTH_*`
+   means the collector never sees the batch (a 401 at the receiver). A wrong
+   `NEW_RELIC_LICENSE_KEY` means the collector *does* see it — its `debug`
+   exporter prints `Metrics`/`Traces`/`Logs` counts — and then logs
+   `Exporting failed. Dropping data.` with `HTTP Status Code 403,
+   Message=, Details=[]` from `otlphttp/newrelic`. That 403 is non-retryable, so
+   the batch is discarded rather than queued; fix the key and new data flows
+   within one batch interval, with nothing to replay. The usual causes are an
+   absent key, a **user** API key (`NRAK-…`) where a **license** key is needed,
+   or a value pasted with a trailing newline. The key is testable without the
+   collector: `curl` a one-span OTLP payload to `https://otlp.nr-data.net:4318/v1/traces`
+   (US) and `https://otlp.eu01.nr-data.net:4318/v1/traces` (EU) with
+   `-H "api-key: <license key>"` — 200 on one means valid and correctly
+   regional, 403 on both means the key itself is wrong. Note the New Relic
+   entity is `nexus-ai-assistant`, because the collector's `resource` processor
+   upserts `service.name`; searching APM & Services for the Render service name
+   finds nothing.
+
    **Free collector: accept cold-start gaps.** A Free web service sleeps after
    15 minutes without inbound traffic and takes about a minute to wake. The
    backend's own OTLP batches are the inbound traffic that wakes it, so after an

@@ -25,8 +25,18 @@ contain this one. Anything that only exists in chat is lost at handoff.
   `warn_if_placeholder_otlp_credentials()`, called once from
   `core/logging.py`, which says so at startup instead of failing silently
   (measured: one warning with the placeholder pair, none with a real secret).
-  **Still unverified:** whether the collector forwards to New Relic — that needs
-  its Render logs or the New Relic UI, not reachable from the repo.
+  **Verified end to end on 2026-11-07 21:27 IST:** the backend now exports to
+  the public URL and the collector receives it — its `debug` exporter prints
+  `Metrics` (4 metrics / 8 data points) and `Traces` (5 spans) batches every
+  30 s. The one remaining failure is the **forward leg**: every batch is dropped
+  with `Exporting failed. Dropping data. … HTTP Status Code 403,
+  Message=, Details=[]` from `otlphttp/newrelic` → `otlp.nr-data.net`. Measured
+  cause: the license key configured on the collector is not a working key. The
+  key in the local root `.env` returns **200** from the US OTLP endpoint and
+  **403** from the EU one, with a garbage-key control also 403, so the key is
+  valid, US-regional, and the Render value differs from it. 403 is
+  non-retryable, so nothing is queued and nothing is replayable: replacing the
+  collector's `NEW_RELIC_LICENSE_KEY` is the whole fix.
   Free-tier decision recorded: collector may sleep and drop the first batch
   after idle (option A); do not ping both services, 2 x ~730h > 750h suspends
   everything. Migrations confirmed live: Alembic, 12 revisions, single head
