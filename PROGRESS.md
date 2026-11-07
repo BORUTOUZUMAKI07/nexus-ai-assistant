@@ -25,18 +25,35 @@ contain this one. Anything that only exists in chat is lost at handoff.
   `warn_if_placeholder_otlp_credentials()`, called once from
   `core/logging.py`, which says so at startup instead of failing silently
   (measured: one warning with the placeholder pair, none with a real secret).
-  **Verified end to end on 2026-11-07 21:27 IST:** the backend now exports to
-  the public URL and the collector receives it — its `debug` exporter prints
-  `Metrics` (4 metrics / 8 data points) and `Traces` (5 spans) batches every
-  30 s. The one remaining failure is the **forward leg**: every batch is dropped
-  with `Exporting failed. Dropping data. … HTTP Status Code 403,
-  Message=, Details=[]` from `otlphttp/newrelic` → `otlp.nr-data.net`. Measured
-  cause: the license key configured on the collector is not a working key. The
-  key in the local root `.env` returns **200** from the US OTLP endpoint and
-  **403** from the EU one, with a garbage-key control also 403, so the key is
-  valid, US-regional, and the Render value differs from it. 403 is
-  non-retryable, so nothing is queued and nothing is replayable: replacing the
-  collector's `NEW_RELIC_LICENSE_KEY` is the whole fix.
+  **Verified end to end on 2026-11-07 22:10 IST — all three legs pass.**
+  Collector log from its 22:10:05 boot: `Logs` (20 records), `Metrics` (4
+  metrics / 7 data points) and `Traces` (5 spans) every 30 s, from 22:10:15 to
+  22:12:55 and continuing, with **no** `Exporting failed` line after that boot.
+  New Relic shows the entity **`nexus-ai-assistant`** with 4.80 ms app-server
+  duration, Apdex 1, ~1.9 rpm and 0 % errors. Arriving batches also prove the
+  app→collector leg: a wrong `OTLP_AUTH_*` would have been a 401 at the
+  receiver, not a rendered batch.
+
+  The defect that held this up was a **403 at New Relic**, and finding it was
+  slow for two reasons worth keeping: the collector's own logs are the only
+  place a forward-leg 403 is visible (the app sees nothing), and the account
+  had several `INGEST - LICENSE` keys while the value in Render was a
+  deactivated/deleted one. A license key is testable in isolation — a one-span
+  OTLP POST with an `api-key` header returns 200 for a live key, 403 for a dead
+  one — which is what separated "bad key" from "stale value" here.
+
+  Confirmed free-tier behaviour, measured rather than assumed: the backend
+  started 21:27:27 and logged `Shutting down` at 21:42:40 (15 min idle; its own
+  outbound OTLP pushes do not count as traffic), and the collector was
+  terminated at 22:08:31 for the same reason and **woken by the app's inbound
+  batch**, serving again at 22:10:05. That is option A behaving exactly as the
+  `render.yaml` comment predicts, including the ~90 s cold start.
+
+  **Open hygiene, not defects:** the license key pasted into chat must be
+  rotated (new key → Render → verify → delete the exposed one), and root `.env`
+  still holds a *different* 40-char key that also returns 200, so it may belong
+  to another New Relic account — point it at the production key so local and
+  deployed data land in the same account.
   Free-tier decision recorded: collector may sleep and drop the first batch
   after idle (option A); do not ping both services, 2 x ~730h > 750h suspends
   everything. Migrations confirmed live: Alembic, 12 revisions, single head
