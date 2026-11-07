@@ -12,6 +12,17 @@ contain this one. Anything that only exists in chat is lost at handoff.
 ## Current State
 
 - **Last updated:** 2026-11-07
+- **Signed-in users no longer sit on `/signin` (2026-11-07).** Copied from the
+  url-shortner, which redirects `/login` to the app when a session cookie is
+  present: Nexus matched only `/app*`, so a session could open the sign-in form
+  and press a provider button again, starting a second consent round trip on top
+  of a working session — and a provider mismatch then landed on an error page for
+  a session that was never broken. `/signin` is now matched and redirected to
+  `/app` when either cookie is present, with `code`/`error`/`oauth`/`message`
+  carved out so a failed attempt can still explain itself, and the unauthenticated
+  branch exempts the page (otherwise the redirect targets itself). 15 proxy tests
+  pass, `tsc --noEmit` clean. The first version of the change redirected
+  anonymous visitors too; the test caught it.
 - **OAuth sign-in, 2026-11-07.** Two separate faults, both confirmed live against
   `https://nexus-backend-owq5.onrender.com`:
   - **Google's 400 was console configuration, not code.** The deployed backend

@@ -116,12 +116,54 @@ describe("edge session gate", () => {
     expect(location.searchParams.get("next")).toBe("/app/settings");
   });
 
-  it("scopes the matcher to the workspace only", () => {
-    // `/` and `/signin` must stay anonymous-reachable and `/api/*` belongs to the
-    // route handlers. A matcher widened to `/:path*` would make the public
-    // landing page require a session, which is the single most damaging way this
-    // file could be misconfigured.
-    expect(config.matcher).toEqual(["/app", "/app/:path*"]);
+  it("scopes the matcher to the workspace and the sign-in page", () => {
+    // `/` must stay anonymous-reachable and `/api/*` belongs to the route
+    // handlers. A matcher widened to `/:path*` would make the public landing
+    // page require a session, which is the single most damaging way this file
+    // could be misconfigured. `/signin` is included deliberately: it is the only
+    // way a visitor who is already signed in can be sent away from the form.
+    expect(config.matcher).toEqual(["/app", "/app/:path*", "/signin"]);
+  });
+
+  it("sends a signed-in visitor away from the sign-in page", () => {
+    // With a live session, the form is a trap: pressing "Continue with
+    // Google/GitHub" starts a second consent round trip on top of a working one,
+    // and a provider mismatch lands the user on an error page for a session that
+    // was never broken. The url-shortner project redirects /login to the app for
+    // exactly this reason; this is the same rule.
+    const res = proxy(request("/signin", "a.b.c"));
+    expect(res.status).toBe(307);
+    expect(new URL(res.headers.get("location")!).pathname).toBe("/app");
+  });
+
+  it("treats a refresh cookie alone as a session on the sign-in page too", () => {
+    // The same rule as /app: plenty of valid sessions have an expired access
+    // cookie and a live refresh one, and showing them the form would push them
+    // into re-authenticating on top of a session that still works.
+    const res = proxy(request("/signin", undefined, "r.e.f"));
+    expect(res.status).toBe(307);
+    expect(new URL(res.headers.get("location")!).pathname).toBe("/app");
+  });
+
+  it("still lets a failed attempt explain itself on the sign-in page", () => {
+    // The OAuth callback and the TOTP bounce both land back on /signin with a
+    // reason attached. Bouncing those to /app would swallow the only message the
+    // user gets about a sign-in that did not work.
+    for (const purpose of ["?error=oauth_callback_failed_401", "?oauth=2fa", "?code=abc"]) {
+      const res = proxy(request(`/signin${purpose}`, "a.b.c"));
+      expect(res.status, `bounced a result of an attempt: ${purpose}`).toBe(200);
+      expect(res.headers.get("location")).toBeNull();
+    }
+  });
+
+  it("never redirects the anonymous sign-in page to itself", () => {
+    // /signin is where anonymous visitors are sent, so the unauthenticated
+    // branch has to exempt it — otherwise matching it would produce a redirect
+    // to the same URL, i.e. an infinite loop on the one page everyone sees
+    // before signing in.
+    const res = proxy(request("/signin"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
   });
 
   it("keeps the refresh cookie name in sync with the auth module", async () => {

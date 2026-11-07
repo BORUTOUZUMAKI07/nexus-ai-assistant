@@ -40,6 +40,20 @@ const REFRESH_COOKIE = "nexus_refresh_token";
 /** Where an unauthenticated visitor is sent. */
 const SIGNIN_PATH = "/signin";
 
+/** Where a visitor with a session belongs. */
+const APP_HOME = "/app";
+
+/**
+ * Query flags that must still reach /signin even when a session exists.
+ *
+ * Every one of them is a *result* the page has to render rather than the start
+ * of a new sign-in: an OAuth `code` still being exchanged, a provider or
+ * callback `error`, the TOTP bounce (`oauth=2fa`), and the expired-session flag.
+ * Bouncing those to the workspace would swallow the only explanation the user
+ * is given for a sign-in that just failed.
+ */
+const SIGNIN_RESULT_PARAMS = ["code", "error", "oauth", "message"] as const;
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -56,13 +70,30 @@ export function proxy(request: NextRequest) {
   // valid is decided by the probe, and by the backend for every real API call.
   const hasAccess = Boolean(request.cookies.get(ACCESS_COOKIE)?.value);
   const hasRefresh = Boolean(request.cookies.get(REFRESH_COOKIE)?.value);
-  if (!hasAccess && !hasRefresh) {
+  // The sign-in page itself is exempt from the redirect below: it is where an
+  // anonymous visitor is *sent*, so redirecting it to itself would be a loop.
+  if (!hasAccess && !hasRefresh && pathname !== SIGNIN_PATH) {
     const signin = new URL(SIGNIN_PATH, request.url);
     // Preserve where they were heading so signin could return them there.
     // signin currently always lands on /app, so this is informational; keeping
     // it means a future return-honouring signin needs no change here.
     if (pathname !== SIGNIN_PATH) signin.searchParams.set("next", safeNext(pathname));
     return NextResponse.redirect(signin);
+  }
+
+  // A visitor who already has a session does not get the sign-in form. Without
+  // this, pressing "Continue with Google/GitHub" while signed in starts a
+  // second consent round trip on top of a live one: the provider asks again for
+  // an account already chosen, and a provider mismatch lands the user on an
+  // error page for a session that was never broken. (`/login` behaves this way
+  // in the url-shortner project; this is the same rule, with the result params
+  // carved out so a *failed* attempt can still explain itself.)
+  const hasSession = hasAccess || hasRefresh;
+  const isResultOfAnAttempt = SIGNIN_RESULT_PARAMS.some((param) =>
+    request.nextUrl.searchParams.has(param),
+  );
+  if (hasSession && pathname === SIGNIN_PATH && !isResultOfAnAttempt) {
+    return NextResponse.redirect(new URL(APP_HOME, request.url));
   }
 
   return NextResponse.next();
@@ -99,7 +130,9 @@ function safeNext(pathname: string): string {
 }
 
 export const config = {
-  // Only the workspace. `/` and `/signin` must stay reachable anonymously, and
-  // `/api/*` is handled by the route handlers in src/app/api.
-  matcher: ["/app", "/app/:path*"],
+  // The workspace, plus the sign-in page itself: the latter is matched only so a
+  // visitor who already has a session can be sent to the workspace instead of
+  // being shown the form again — it stays reachable anonymously (the redirect
+  // above exempts it), and `/api/*` is handled by the route handlers.
+  matcher: ["/app", "/app/:path*", "/signin"],
 };
