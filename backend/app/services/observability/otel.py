@@ -137,6 +137,74 @@ def collector_endpoint_resolvable() -> bool:
     return _collector_resolved
 
 
+# Passwords that ship in this repo or its compose file, or that nobody could
+# call a secret. Their presence is not a bug — local compose uses them so that
+# `docker compose up` works with zero config — but on a public receiver they
+# mean the deployment was never finished.
+_PLACEHOLDER_OTLP_PASSWORDS = frozenset(
+    {"", "nexus", "password", "pass", "changeme", "secret", "replace_me"}
+)
+
+# Hostnames that never leave the machine or the compose network, so a weak
+# password on them is only a local concern (and is what compose ships).
+_LOCAL_COLLECTOR_HOSTS = frozenset(
+    {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "0.0.0.0",
+        "host.docker.internal",
+        "otel-collector",
+        "collector",
+    }
+)
+
+_otlp_credentials_checked = False
+
+
+def warn_if_placeholder_otlp_credentials() -> None:
+    """Say once, at startup, that the public receiver will answer 401 forever.
+
+    The receiver is public by necessity (a Free Render web service cannot
+    receive private-network traffic), so its only guard is HTTP basic auth. When
+    the app's OTLP_AUTH_USER/OTLP_AUTH_PASSWORD disagree with the collector's
+    pair, the collector rejects every push and the app keeps serving normally:
+    no crash, no failed request, no telemetry — the failure is entirely silent.
+
+    So it is stated once, in the log, at startup: the host that will reject us
+    and which variables to compare. Fail-open and best-effort, like every other
+    telemetry seam here — a probe bug must never break startup.
+    """
+    global _otlp_credentials_checked
+    if _otlp_credentials_checked:
+        return
+    base = _base_endpoint()
+    if base is None:
+        return
+    parts = urlsplit(base if "//" in base else f"//{base}")
+    host = (parts.hostname or "").lower()
+    if not host or host in _LOCAL_COLLECTOR_HOSTS:
+        return
+    _otlp_credentials_checked = True
+
+    user = (settings.OTLP_AUTH_USER or "").strip()
+    secret = (settings.OTLP_AUTH_PASSWORD or "").strip()
+    if user and secret.lower() not in _PLACEHOLDER_OTLP_PASSWORDS and len(secret) >= 8:
+        return
+    logger.warning(
+        "otlp_credentials_look_like_placeholder",
+        host=host,
+        has_user=bool(user),
+        password_length=len(secret),
+        detail=(
+            "the collector's public OTLP receiver answers 401 to this pair, so "
+            "no logs, traces or metrics will arrive; set the same "
+            "OTLP_AUTH_USER/OTLP_AUTH_PASSWORD on this service and on the "
+            "collector"
+        ),
+    )
+
+
 def _enabled() -> bool:
     return (
         bool(settings.NEW_RELIC_ENABLED)
@@ -264,11 +332,13 @@ def shutdown_otel() -> None:
     what stops the last batch of spans/metrics being lost on a clean shutdown.
     """
     global _tracer_provider, _meter_provider, _collector_resolved
+    global _otlp_credentials_checked
     tracer_provider = _tracer_provider
     meter_provider = _meter_provider
     _tracer_provider = None
     _meter_provider = None
     _collector_resolved = None
+    _otlp_credentials_checked = False
     _shutdown_provider("otlp_trace_provider_shutdown_failed", tracer_provider)
     _shutdown_provider("otlp_meter_provider_shutdown_failed", meter_provider)
 

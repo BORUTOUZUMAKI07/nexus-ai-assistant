@@ -181,6 +181,18 @@ def setup_logging() -> None:
     # the OpenTelemetry collector over OTLP/HTTP (it owns the New Relic key).
     # Fail-open — an unconfigured or broken export must never break logging.
     if settings.NEW_RELIC_ENABLED:
+        # Public receiver + wrong credentials is a silent 401: the app serves
+        # fine and nothing arrives at the collector. Say so once at startup,
+        # before any exporter is built.
+        try:
+            from backend.app.services.observability.otel import (
+                warn_if_placeholder_otlp_credentials,
+            )
+
+            warn_if_placeholder_otlp_credentials()
+        except Exception as exc:  # noqa: BLE001 - fail-open seam
+            logger.warning("otlp_credentials_check_failed", error_type=type(exc).__name__)
+
         try:
             from backend.app.services.observability.logs import setup_otlp_log_handler
 

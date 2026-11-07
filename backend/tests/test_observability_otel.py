@@ -520,6 +520,97 @@ def test_unresolvable_collector_host_disables_all_three_signals(monkeypatch):
         otel.shutdown_otel()
 
 
+# ── placeholder OTLP credentials: a 401 must not be silent ───────────────────
+
+
+def test_placeholder_credentials_on_public_collector_warn_once(monkeypatch):
+    """A public receiver rejects the shipped pair with 401 and nothing says so.
+
+    The receiver is public because a Free Render web service cannot receive
+    private-network traffic, so basic auth is its only guard. When the app's
+    pair disagrees with the collector's, every push is rejected while the app
+    serves normally — no exception, no failed request, no telemetry. The one
+    signal that can exist is a startup warning, and it must appear exactly once
+    per process (setup_logging can run more than once).
+    """
+    calls: list[tuple[str, dict]] = []
+
+    class _Capture:
+        def warning(self, event, **kwargs):
+            calls.append((event, kwargs))
+
+    original_enabled = settings.NEW_RELIC_ENABLED
+    original_endpoint = settings.NEW_RELIC_OTLP_ENDPOINT
+    original_user = settings.OTLP_AUTH_USER
+    original_password = settings.OTLP_AUTH_PASSWORD
+    try:
+        _set("NEW_RELIC_ENABLED", True)
+        _set("NEW_RELIC_OTLP_ENDPOINT", "https://nexus-otel-collector.onrender.com")
+        _set("OTLP_AUTH_USER", "nexus")
+        _set("OTLP_AUTH_PASSWORD", "nexus")
+        otel.shutdown_otel()  # clears the once-per-process flag
+
+        monkeypatch.setattr(otel, "logger", _Capture())
+        otel.warn_if_placeholder_otlp_credentials()
+        otel.warn_if_placeholder_otlp_credentials()
+
+        assert [event for event, _ in calls] == [
+            "otlp_credentials_look_like_placeholder"
+        ]
+        assert calls[0][1]["host"] == "nexus-otel-collector.onrender.com"
+        assert calls[0][1]["password_length"] == len("nexus")
+    finally:
+        _set("NEW_RELIC_ENABLED", original_enabled)
+        _set("NEW_RELIC_OTLP_ENDPOINT", original_endpoint)
+        _set("OTLP_AUTH_USER", original_user)
+        _set("OTLP_AUTH_PASSWORD", original_password)
+        otel.shutdown_otel()
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "user", "password"),
+    [
+        # A real secret on a public receiver: nothing to report.
+        ("https://nexus-otel-collector.onrender.com", "nexus", "a9f4c1e78b2d4056"),
+        # The shipped pair is fine against the local compose collector.
+        ("http://localhost:4318", "nexus", "nexus"),
+        # No user configured at all is only a concern off-localhost, and the
+        # public case below covers it.
+        ("http://otel-collector:4318", "", ""),
+    ],
+)
+def test_credentials_check_is_quiet_when_nothing_is_wrong(
+    endpoint, user, password, monkeypatch
+):
+    calls: list[str] = []
+
+    class _Capture:
+        def warning(self, event, **kwargs):
+            calls.append(event)
+
+    original_enabled = settings.NEW_RELIC_ENABLED
+    original_endpoint = settings.NEW_RELIC_OTLP_ENDPOINT
+    original_user = settings.OTLP_AUTH_USER
+    original_password = settings.OTLP_AUTH_PASSWORD
+    try:
+        _set("NEW_RELIC_ENABLED", True)
+        _set("NEW_RELIC_OTLP_ENDPOINT", endpoint)
+        _set("OTLP_AUTH_USER", user)
+        _set("OTLP_AUTH_PASSWORD", password)
+        otel.shutdown_otel()
+
+        monkeypatch.setattr(otel, "logger", _Capture())
+        otel.warn_if_placeholder_otlp_credentials()
+
+        assert calls == []
+    finally:
+        _set("NEW_RELIC_ENABLED", original_enabled)
+        _set("NEW_RELIC_OTLP_ENDPOINT", original_endpoint)
+        _set("OTLP_AUTH_USER", original_user)
+        _set("OTLP_AUTH_PASSWORD", original_password)
+        otel.shutdown_otel()
+
+
 @requires_otel
 def test_resolvable_collector_still_wires(monkeypatch):
     """The probe must not turn a reachable collector into a no-op.
