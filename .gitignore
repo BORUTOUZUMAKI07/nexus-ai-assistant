@@ -67,9 +67,16 @@ Thumbs.db
 # Parallel-agent checkouts created by scripts/worktree.sh (isolation, not source)
 .worktrees/
 
+# Agent / workspace scratch. These directories belong to the tooling that edits
+# the repo (editor worktrees, run logs), never to the project itself — committing
+# one makes every later clone carry another machine's session state.
+.kilo/
+.freebuff/
+.gate-logs/
+
 # Local verification scratch — revert harnesses and screenshots produced while
 # proving a fix is load-bearing. Deliberately not source: they exist to be
-# deleted once the revert shows red.
+deleted once the revert shows red.
 verify-current-state.png
 frontend/.verify-tmp/
 frontend/revert_messages.py
