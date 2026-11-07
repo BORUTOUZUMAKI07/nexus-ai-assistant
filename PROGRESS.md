@@ -12,6 +12,33 @@ contain this one. Anything that only exists in chat is lost at handoff.
 ## Current State
 
 - **Last updated:** 2026-11-07
+- **One env file, plus a measured cleanup (2026-11-07).** Root `.env` held a
+  single key — `NEW_RELIC_LICENSE_KEY` — whose only job was feeding compose
+  `${...}` interpolation, while `backend/.env` held the app's 52. Root `.env` is
+  deleted: the key now lives in `backend/.env`, which is the file
+  `core/config.py` already loads by absolute path and every guard reads, and
+  `docker-compose.yml` gives the `otel-collector` `env_file: ./backend/.env`
+  instead of interpolating. Verified after the change: `docker compose config`
+  valid and the collector still receives all three keys (license 40 chars,
+  auth user/password 5). `.env.render` is deliberately **kept** — it holds
+  production-only `SECRET_KEY` / `ENCRYPTION_KEY` / `METRICS_TOKEN`, and losing
+  that encryption key would make existing BYOK rows undecryptable; it is a
+  record, never read at runtime.
+  Cleanup reclaimed **456 MB** (project 1861 → 1405 MB): `frontend/.next`,
+  `.mypy_cache` (root and backend), `.ruff_cache`, `.pytest_cache`,
+  `.hypothesis`, every `__pycache__`, plus 4 untracked scratch revert harnesses
+  and a generated `egg-info`. `.gitignore` gained `.mypy_cache/`, `.ruff_cache/`
+  and `.hypothesis/`; the obsolete compose `version:` key is gone. The 9
+  remaining `revert_*.py` files are tracked and cited by `docs/harness`, so they
+  stay.
+  Gates after all of it: backend **1575 passed / 3 skipped**, `ruff` (app, tests,
+  migrations, scripts) clean, mypy allowlist clean (29 + 2 modules), frontend
+  `tsc --noEmit` clean and **462 Vitest tests passed**.
+  **Pre-existing, not caused by this pass:** frontend ESLint fails with 3 errors
+  in `src/app/app/page.tsx` (React Compiler: memoization not preserved,
+  setState in an effect) + 6 warnings; repo-wide `ruff check .` flags 13 style
+  errors inside `frontend/revert_c2.py`, a harness the gate does not scan. Both
+  are recorded here because the gates do not cover them.
 - **Render telemetry, 2026-11-07 (collector reachable, credentials unknown).**
   The collector service exists and serves: `https://nexus-otel-collector.onrender.com/v1/traces`
   answers **401** unauthenticated while a nonexistent hostname answers **404**,
