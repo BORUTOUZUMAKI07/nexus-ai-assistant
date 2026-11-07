@@ -147,11 +147,21 @@ services:
       # (OTLP_AUTH_*), which is exactly what makes a public OTLP endpoint safe
       # to use here. Replace the host with the URL Render shows for the service.
       #
-      # `NEW_RELIC_ENABLED: false` until that service exists: with no collector,
-      # true is only a startup warning (otel.py probes the host first), never a
-      # retry storm.
+      # Free-tier collector, accepted gaps (option A): the collector sleeps
+      # after 15 min without inbound traffic, and the app's own OTLP batches are
+      # what wake it. The first batch after idle hits a ~1 min cold start and is
+      # dropped by the SDK; export resumes immediately after. The app never
+      # blocks on telemetry, so this costs dropped spans, never a failed
+      # request. Do NOT keep both services awake with a pinger: 2 x ~730h
+      # exceeds the workspace's 750 free instance hours and Render suspends
+      # every Free web service until the next month.
+      #
+      # The credentials are prompted (`sync: false`) rather than committed, and
+      # must equal the collector's own OTLP_AUTH_USER/OTLP_AUTH_PASSWORD. While
+      # they are the shipped `nexus:nexus`, startup logs
+      # `otlp_credentials_look_like_placeholder` and every push is a silent 401.
       - key: NEW_RELIC_ENABLED
-        value: "false"
+        value: "true"
       - key: NEW_RELIC_OTLP_ENDPOINT
         value: https://nexus-otel-collector.onrender.com
       - key: OTLP_AUTH_USER

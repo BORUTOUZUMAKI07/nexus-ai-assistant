@@ -11,7 +11,27 @@ contain this one. Anything that only exists in chat is lost at handoff.
 
 ## Current State
 
-- **Last updated:** 2026-11-04
+- **Last updated:** 2026-11-07
+- **Render telemetry, 2026-11-07 (collector reachable, credentials unknown).**
+  The collector service exists and serves: `https://nexus-otel-collector.onrender.com/v1/traces`
+  answers **401** unauthenticated while a nonexistent hostname answers **404**,
+  so the receiver is up and its basicauth is working. Two faults remained, both
+  configuration rather than code: `NEW_RELIC_OTLP_ENDPOINT` pointed at
+  `http://nexus-otel-collector:4318`, which a Free web service cannot reach
+  (private network is send-only for Free instances), and the app's
+  `nexus:nexus` pair is rejected by the receiver (verified: that pair also
+  returns 401), so every push would fail even with the right URL. `render.yaml`
+  now carries the public URL and `NEW_RELIC_ENABLED: true`; `otel.py` gained
+  `warn_if_placeholder_otlp_credentials()`, called once from
+  `core/logging.py`, which says so at startup instead of failing silently
+  (measured: one warning with the placeholder pair, none with a real secret).
+  **Still unverified:** whether the collector forwards to New Relic — that needs
+  its Render logs or the New Relic UI, not reachable from the repo.
+  Free-tier decision recorded: collector may sleep and drop the first batch
+  after idle (option A); do not ping both services, 2 x ~730h > 750h suspends
+  everything. Migrations confirmed live: Alembic, 12 revisions, single head
+  `4289b5262252`, and the Supabase DB reports the same `alembic_version` across
+  43 tables.
 - **Live-verification defect pass (2026-11-02).** Every open defect from the
   2026-11-01 walk was fixed and re-measured live; the checklist and its evidence
   are in `docs/live-verification.md` under *Re-verification pass 2*.

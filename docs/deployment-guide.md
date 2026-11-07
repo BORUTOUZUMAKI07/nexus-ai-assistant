@@ -252,6 +252,23 @@ Steps:
    `OTLP_AUTH_*` match step 1. `ENVIRONMENT=production` aborts startup if
    `SECRET_KEY` / `ENCRYPTION_KEY` are blank or still example text — that is the
    guard working, not a bug.
+
+   A wrong `OTLP_AUTH_*` pair is not an error the app can see: the public
+   receiver answers **401** and the app keeps serving with no telemetry. Startup
+   therefore logs `otlp_credentials_look_like_placeholder` when the endpoint is
+   non-local and the pair is the shipped `nexus:nexus` (or shorter than 8
+   characters). If that line appears, compare the two services' values — nothing
+   else will tell you.
+
+   **Free collector: accept cold-start gaps.** A Free web service sleeps after
+   15 minutes without inbound traffic and takes about a minute to wake. The
+   backend's own OTLP batches are the inbound traffic that wakes it, so after an
+   idle period the first batch is dropped and export resumes on the next one.
+   That is the accepted behaviour, not a bug to chase. Do **not** keep both
+   services awake with a pinger: two always-on Free services need roughly 1,460
+   of the workspace's 750 monthly Free instance hours, and Render then suspends
+   every Free web service until the next month. Continuous telemetry needs a paid
+   instance type on the collector (the backend can stay Free).
 3. **Frontend.** On Vercel set **server-side** `BACKEND_URL` to the Render
    backend URL. The BFF route handlers proxy to it and the browser never calls
    the backend directly, so this value must **not** be `NEXT_PUBLIC_*`.
