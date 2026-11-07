@@ -12,6 +12,31 @@ contain this one. Anything that only exists in chat is lost at handoff.
 ## Current State
 
 - **Last updated:** 2026-11-07
+- **OAuth sign-in, 2026-11-07.** Two separate faults, both confirmed live against
+  `https://nexus-backend-owq5.onrender.com`:
+  - **Google's 400 was console configuration, not code.** The deployed backend
+    asked Google for `https://nexus-ai-assistant-azure.vercel.app/api/auth/oauth/google/callback`
+    (read from `GET /api/v1/auth/oauth/google`), and both that path and the
+    GitHub one answer `307 -> /signin?error=oauth_missing_params` on Vercel, so
+    the route was never the problem — the URI was simply not registered. The
+    value is now logged at startup as `oauth_redirect_uri_configured`, with
+    `oauth_redirect_uri_registration_required` when it is a placeholder, loopback
+    or non-HTTPS in production, because the provider answers the *browser* and
+    this service never sees the failed request.
+  - **Second provider could not sign in at all.** `User` stores one
+    `(oauth_provider, oauth_sub)` pair, so an account created with Google
+    refused GitHub with "This email is already linked to a different sign-in
+    method" — naming the method the user was already using, with no in-product
+    way to move the link. `oauth_login` now resolves such a login by the
+    provider-verified address and signs in **without rebinding**, logging
+    `oauth_login_via_alias_provider` so the weaker path is visible in the audit
+    trail. The old refusal test was replaced, not weakened: it now asserts both
+    that the login succeeds and that `(provider, sub)` is byte-identical, plus a
+    new case pinning that an inactive account still cannot get in this way.
+    Full identity multi-tenancy (two providers, both bound) needs its own table
+    and a prod migration — deliberately not attempted here.
+- **Verified after the OAuth change:** backend suite **1579 passed / 3 skipped**,
+  `ruff` clean, mypy allowlist clean.
 - **One env file, plus a measured cleanup (2026-11-07).** Root `.env` held a
   single key — `NEW_RELIC_LICENSE_KEY` — whose only job was feeding compose
   `${...}` interpolation, while `backend/.env` held the app's 52. Root `.env` is

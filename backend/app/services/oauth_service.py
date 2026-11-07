@@ -219,6 +219,13 @@ class OAuthProvider(Protocol):
 
     name: str
 
+    @property
+    def redirect_uri(self) -> str:
+        """The exact ``redirect_uri`` this adapter sends, both to the
+        authorize URL and to the token exchange. They must be identical or the
+        provider rejects the exchange even when consent succeeded."""
+        ...
+
     def is_configured(self) -> bool: ...
     def build_authorization_url(self, state: str, code_challenge: str) -> str: ...
     async def exchange_code(self, code: str, code_verifier: str) -> dict[str, Any]: ...
@@ -238,6 +245,10 @@ class GoogleOAuthProvider:
         self._client_id = settings.GOOGLE_OAUTH_CLIENT_ID
         self._client_secret = settings.GOOGLE_OAUTH_CLIENT_SECRET
         self._redirect_uri = settings.GOOGLE_OAUTH_REDIRECT_URI
+
+    @property
+    def redirect_uri(self) -> str:
+        return self._redirect_uri
 
     def is_configured(self) -> bool:
         return bool(self._client_id and self._client_secret)
@@ -296,6 +307,10 @@ class GitHubOAuthProvider:
         self._client_id = settings.GITHUB_OAUTH_CLIENT_ID
         self._client_secret = settings.GITHUB_OAUTH_CLIENT_SECRET
         self._redirect_uri = settings.GITHUB_OAUTH_REDIRECT_URI
+
+    @property
+    def redirect_uri(self) -> str:
+        return self._redirect_uri
 
     def is_configured(self) -> bool:
         return bool(self._client_id and self._client_secret)
@@ -439,6 +454,53 @@ class OAuthProviderRegistry:
 
 OAuthProviderRegistry.register("google", GoogleOAuthProvider)
 OAuthProviderRegistry.register("github", GitHubOAuthProvider)
+
+
+def log_oauth_redirect_uris() -> list[dict[str, str]]:
+    """Log the exact ``redirect_uri`` every configured provider will send.
+
+    A wrong value is invisible from inside this process: the provider answers
+    the *browser* (Google: "Error 400: redirect_uri_mismatch") before the
+    callback is ever reached, so the application log is the only place the real
+    value can be read. It cannot be derived and applied automatically either —
+    the console registration is per exact string per environment, and a Vercel
+    preview host is not registered — so this reports instead of repairing.
+
+    Returns the problems found, so tests can assert without parsing logs.
+    """
+    problems: list[dict[str, str]] = []
+    production = settings.ENVIRONMENT == "production"
+    for name in OAuthProviderRegistry.list_providers():
+        provider = OAuthProviderRegistry.get(name)
+        if provider is None or not provider.is_configured():
+            continue
+        uri = (provider.redirect_uri or "").strip()
+        reason = ""
+        if not uri:
+            reason = "missing"
+        elif "REPLACE_WITH" in uri.upper():
+            reason = "placeholder"
+        elif production and ("localhost" in uri or "127.0.0.1" in uri):
+            reason = "loopback_in_production"
+        elif production and not uri.startswith("https://"):
+            reason = "not_https"
+
+        logger.info("oauth_redirect_uri_configured", provider=name, redirect_uri=uri)
+        if reason:
+            problems.append({"provider": name, "redirect_uri": uri, "reason": reason})
+            logger.warning(
+                "oauth_redirect_uri_registration_required",
+                provider=name,
+                redirect_uri=uri,
+                reason=reason,
+                detail=(
+                    "the provider console must list this exact URI, character for "
+                    "character. A mismatch fails in the browser before this "
+                    "service sees the callback, so it reports as a provider error "
+                    "page rather than an application error."
+                ),
+            )
+    return problems
 
 
 class _UnconfiguredProvider:

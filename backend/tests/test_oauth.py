@@ -780,33 +780,117 @@ def test_oauth_new_account_stores_provider_identity():
     assert user.oauth_sub == "idp-subject-123"
 
 
-def test_oauth_login_refuses_email_of_an_account_already_linked_elsewhere():
-    """The email fallback must not hand over an account already bound to a
-    different provider subject.
+def test_oauth_login_via_second_provider_reuses_the_account_without_rebinding():
+    """A verified email on a second provider signs in, and the binding stands.
 
-    Previously the link was skipped but the caller was still logged in as that
-    account, so a recycled/reassigned address (or a second IdP sharing the
-    email) inherited it -- the exact takeover the subject-first order aims to
-    prevent. It must refuse instead.
+    This reverses an earlier rule that refused the login outright. That refusal
+    was correct about the danger it named -- identity must not be *rebound* by
+    email, because one column pair cannot hold two subjects and overwriting it
+    locks the first provider out -- but it punished the ordinary user who signed
+    up with Google and later pressed GitHub: the message named the method they
+    were already using, and no in-product action could move the link.
+
+    So: resolve by the verified address (the same trust a password reset
+    grants), sign in, and leave ``(provider, sub)`` exactly as stored. Both
+    halves are asserted here -- the login succeeds AND the original binding is
+    byte-identical -- because either one alone would pass under the old
+    behaviour or under a careless "just overwrite it" fix.
     """
     fake = FakeSession()
     linked = User(
         email="oauth@nexus.ai",
         username="linked",
         is_verified=True,
-        oauth_provider="other-idp",
-        oauth_sub="a-different-subject",
+        oauth_provider="google",
+        oauth_sub="google-subject",
     )
     fake.seed(User, [linked])
-    svc = AuthService(fake)
 
-    with pytest.raises(AuthenticationError, match="already linked"):
-        _await(svc.oauth_login(_identity()))
+    tokens = _await(AuthService(fake).oauth_login(_identity()))
 
-    # The existing linkage is untouched and no duplicate account is created.
-    assert linked.oauth_provider == "other-idp"
-    assert linked.oauth_sub == "a-different-subject"
+    assert isinstance(tokens, TokenResponse)
+    assert linked.oauth_provider == "google"
+    assert linked.oauth_sub == "google-subject"
     assert len(fake.rows.get(User, [])) == 1
+
+
+def test_oauth_login_via_second_provider_still_rejects_an_inactive_account():
+    """The alias path is not a bypass: deactivation still wins."""
+    fake = FakeSession()
+    linked = User(
+        email="oauth@nexus.ai",
+        username="linked",
+        is_verified=True,
+        is_active=False,
+        oauth_provider="google",
+        oauth_sub="google-subject",
+    )
+    fake.seed(User, [linked])
+
+    with pytest.raises(AuthenticationError, match="inactive"):
+        _await(AuthService(fake).oauth_login(_identity()))
+
+
+# ── redirect_uri audit: the one value a provider error page cannot tell you ──
+
+
+def test_redirect_uri_audit_accepts_a_registered_https_uri(monkeypatch):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production", raising=False)
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_ID", "id", raising=False)
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_SECRET", "secret", raising=False)
+    monkeypatch.setattr(
+        settings,
+        "GOOGLE_OAUTH_REDIRECT_URI",
+        "https://app.example.com/api/auth/oauth/google/callback",
+        raising=False,
+    )
+    monkeypatch.setattr(settings, "GITHUB_OAUTH_CLIENT_ID", None, raising=False)
+
+    assert oauth_module.log_oauth_redirect_uris() == []
+
+
+def test_redirect_uri_audit_flags_loopback_in_production(monkeypatch):
+    """A deployed service that still sends localhost gets Google's 400, and the
+    browser is the only place it shows — so startup must say so."""
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production", raising=False)
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_ID", "id", raising=False)
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_SECRET", "secret", raising=False)
+    monkeypatch.setattr(
+        settings,
+        "GOOGLE_OAUTH_REDIRECT_URI",
+        "http://localhost:3000/api/auth/oauth/google/callback",
+        raising=False,
+    )
+    # The ambient backend/.env configures GitHub too; disable it so the assert
+    # is about Google rather than about whatever this machine happens to have.
+    monkeypatch.setattr(settings, "GITHUB_OAUTH_CLIENT_ID", None, raising=False)
+
+    problems = oauth_module.log_oauth_redirect_uris()
+
+    assert [p["provider"] for p in problems] == ["google"]
+    assert problems[0]["reason"] == "loopback_in_production"
+
+
+def test_redirect_uri_audit_flags_a_placeholder_and_skips_unconfigured(monkeypatch):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production", raising=False)
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_ID", "id", raising=False)
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_SECRET", "secret", raising=False)
+    monkeypatch.setattr(
+        settings,
+        "GOOGLE_OAUTH_REDIRECT_URI",
+        "https://REPLACE_WITH_VERCEL_URL/api/auth/oauth/google/callback",
+        raising=False,
+    )
+    # Configured id with no secret = the provider is disabled, so it is neither
+    # logged as ready nor reported as broken.
+    monkeypatch.setattr(settings, "GITHUB_OAUTH_CLIENT_ID", "id", raising=False)
+    monkeypatch.setattr(settings, "GITHUB_OAUTH_CLIENT_SECRET", None, raising=False)
+
+    problems = oauth_module.log_oauth_redirect_uris()
+
+    assert [(p["provider"], p["reason"]) for p in problems] == [
+        ("google", "placeholder")
+    ]
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────

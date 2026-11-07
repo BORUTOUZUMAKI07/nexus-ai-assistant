@@ -302,6 +302,21 @@ Steps:
    `https://<frontend>/api/auth/oauth/<provider>/callback` (the same URI is
    registered in each provider's console). Also set `METRICS_TOKEN`.
 
+   **OAuth: the registration is an exact string match, and the failure is
+   invisible to the app.** The provider compares the `redirect_uri` in the
+   authorize request against its console list and answers the *browser* itself —
+   Google returns `Error 400: redirect_uri_mismatch` — so the backend never
+   receives the callback and has nothing to log. Startup therefore prints
+   `oauth_redirect_uri_configured` with the exact value per enabled provider
+   (plus `oauth_redirect_uri_registration_required` when it is a placeholder,
+   loopback, or non-HTTPS in production). Register that literal string:
+   Google Cloud Console → APIs & Services → Credentials → the OAuth 2.0 client →
+   **Authorized redirect URIs**; GitHub → the OAuth App → **Authorization
+   callback URL**. Common mismatches: a trailing slash, an unregistered preview
+   host (`*.vercel.app` deploys get a new hostname per branch), and
+   `http` vs `https`. A Google client left in **Testing** also refuses anyone
+   who is not a listed test user, which is a different page, not a mismatch.
+
 5. **No background worker is needed (or available).** Render's free instances
    cover web services (and Postgres/Key-Value), **not** background workers — so
    the app has no queue at all: an upload is chunked, embedded and indexed on

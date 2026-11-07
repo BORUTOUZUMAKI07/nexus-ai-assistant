@@ -133,7 +133,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     logger.info("nexus_ai_starting_up", version="1.0.0", env=settings.ENVIRONMENT)
 
-    # 0. Report configured-but-unusable provider credentials. Previously a
+    # 0. Log the redirect_uri each configured provider will actually send. A
+    #    mismatch is answered by the provider straight to the browser (Google's
+    #    "Error 400: redirect_uri_mismatch"), before this service sees anything,
+    #    so this line is the only evidence the deployment can produce.
+    try:
+        from backend.app.services.oauth_service import log_oauth_redirect_uris
+
+        log_oauth_redirect_uris()
+    except Exception as exc:
+        logger.warning("oauth_redirect_uri_audit_failed", error_type=type(exc).__name__)
+
+    # 0b. Report configured-but-unusable provider credentials. Previously a
     #    missing or placeholder key was only discovered mid-request, where the
     #    symptom was a silent capability downgrade and the only clue was a
     #    print() in an exception handler. Never raises: one broken provider must

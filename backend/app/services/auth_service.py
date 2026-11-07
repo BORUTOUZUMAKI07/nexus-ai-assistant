@@ -216,10 +216,15 @@ class AuthService:
         """Sign a user in via a verified OIDC identity.
 
         Identity resolution order is deliberate: the IdP's stable subject id is
-        the authoritative key, and the email is only a first-time linking
-        fallback. Once linked, later logins resolve by subject alone, so a
-        provider that later reassigns or recycles an address can never hand the
-        address to a different person who would then inherit the account.
+        the authoritative key, and the email is a linking fallback only. Once
+        linked, later logins resolve by subject alone, so a provider that later
+        reassigns or recycles an address cannot quietly re-point the account.
+
+        An account already bound to a *different* provider is still reachable
+        through this verified email, but the binding is left untouched: the
+        columns hold one identity, and overwriting it would lock the original
+        provider out. See the branch below for the trade-off.
+
         TOTP-enabled accounts receive the same ``2fa_required`` preauth
         challenge as password login.
         """
@@ -234,24 +239,45 @@ class AuthService:
 
         user = await self._repo.get_by_oauth_identity(identity.provider, identity.subject)
         if user is None:
-            # First time this IdP identity is seen: fall back to the email to
-            # find a pre-existing (password) account to adopt. ONLY adopt an
-            # account that has no OAuth identity yet -- an account already linked
-            # to a different provider subject must NOT be reachable through the
-            # email. Previously it skipped the link but still logged the caller
-            # in as that account, so a recycled/reassigned address (or any second
-            # IdP on the same email) inherited it, directly contradicting the
-            # guarantee in the docstring above.
+            # This IdP identity has never been seen, so the email is the only
+            # remaining join key. Two cases:
+            #   * the account has no OAuth link yet -> adopt it and bind this
+            #     identity, which is what makes subject-first resolution work
+            #     from the next login onwards;
+            #   * it is already bound to another provider -> sign in as that
+            #     account WITHOUT rebinding. See the branch below for why the
+            #     old refusal was wrong and what it costs.
             existing = await self._repo.get_by_email(email)
             if existing is not None:
                 if existing.oauth_sub is not None:
-                    raise AuthenticationError(
-                        "This email is already linked to a different sign-in method."
+                    # The account already has a provider of record; this login
+                    # arrives through a *different* one that has verified the
+                    # same address. Refusing it stranded every user who signed
+                    # up with Google and later pressed GitHub: the message told
+                    # them the method they were already using, and there is no
+                    # in-product way to move the link.
+                    #
+                    # So resolve the account by the verified address and do NOT
+                    # rebind: the stored (provider, subject) pair stays the one
+                    # of record, because one column pair cannot represent two
+                    # identities and silently overwriting it would lock the
+                    # first provider out. The trust this grants is the trust a
+                    # password reset already grants -- the caller proved control
+                    # of the account's own address at an identity provider --
+                    # and it is logged as a distinct event so the weaker path is
+                    # visible in the audit trail rather than indistinguishable.
+                    logger.info(
+                        "oauth_login_via_alias_provider",
+                        user_id=str(existing.id),
+                        linked_provider=existing.oauth_provider,
+                        alias_provider=identity.provider,
                     )
-                existing.oauth_provider = identity.provider
-                existing.oauth_sub = identity.subject
-                await self._repo.update(existing, {})
-                user = existing
+                    user = existing
+                else:
+                    existing.oauth_provider = identity.provider
+                    existing.oauth_sub = identity.subject
+                    await self._repo.update(existing, {})
+                    user = existing
         if user is None:
             user = await self._provision_oauth_user(identity, email)
         elif not user.is_active:
