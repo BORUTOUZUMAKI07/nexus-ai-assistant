@@ -44,9 +44,14 @@ uploads/
 .coverage
 htmlcov/
 .pytest_cache/
+.hypothesis/
 coverage/
 test-results/
 playwright-report/
+
+# Type checker / linter caches (both the repo root and backend/ are used)
+.mypy_cache/
+.ruff_cache/
 
 # Local, untracked artifacts (e.g. prod pg_dump taken before a migration)
 .backups/
