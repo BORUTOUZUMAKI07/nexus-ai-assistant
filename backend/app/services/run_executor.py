@@ -24,7 +24,7 @@ Two behaviours changed, both deliberately:
 ``graph`` is injected rather than imported. The endpoint's own tests monkeypatch
 ``conversations.orchestrator_graph``; if the invocation moved to a module that
 imported the graph itself, that seam would silently stop intercepting and every
-such test would exercise the real graph instead (AGENTS.md §9.14).
+such test would exercise the real graph instead (project guidelines §9.14).
 """
 from __future__ import annotations
 
@@ -563,7 +563,7 @@ async def iter_graph_frames(
             # `TOOL_CALL_START` alias carrying the same call; no client reads it
             # (the BFF understands `tool_call`/`tool_result`, and nothing here
             # speaks AG-UI), so it was silently dropped at the translator — the
-            # exact "event nobody translates" failure AGENTS.md §2 names. The
+            # exact "event nobody translates" failure project guidelines §2 names. The
             # BFF cannot translate it without pushing a second `tool_call`
             # annotation for the same invocation (the client has no dedup), so
             # the honest fix is to not emit it.

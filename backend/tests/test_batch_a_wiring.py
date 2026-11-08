@@ -376,7 +376,7 @@ async def test_stream_route_passes_compiled_prompt_and_skills(monkeypatch):
     #
     # The route passes `conv_mod.async_session_factory` to the background
     # executor, the tail reader reads through it, and the reply persistence
-    # opens its own session from it (AGENTS.md §9.27). Left unpatched, these two
+    # opens its own session from it (project guidelines). Left unpatched, these two
     # tests wrote to whatever `DATABASE_URL` points at -- hosted Supabase in this
     # checkout -- and failed on `relation "agent_runs" does not exist`. That is a
     # fact about which migrations someone has applied to someone else's database,
@@ -456,7 +456,7 @@ async def test_stream_route_survives_prompt_compile_failure(monkeypatch):
     #
     # The route passes `conv_mod.async_session_factory` to the background
     # executor, the tail reader reads through it, and the reply persistence
-    # opens its own session from it (AGENTS.md §9.27). Left unpatched, these two
+    # opens its own session from it (project guidelines). Left unpatched, these two
     # tests wrote to whatever `DATABASE_URL` points at -- hosted Supabase in this
     # checkout -- and failed on `relation "agent_runs" does not exist`. That is a
     # fact about which migrations someone has applied to someone else's database,
@@ -590,7 +590,7 @@ async def test_stream_route_adopts_a_reused_user_turn_instead_of_appending(
     Regenerate and edit-and-resend both replay a prompt whose row already exists.
     The route persists the user turn itself on every stream request, so those
     paths used to append a second copy -- measured live as five rows where four
-    were expected (AGENTS.md §2 shape: a real defect with no red test). The
+    were expected (project guidelines). The
     client sends the row id back as ``reuse_user_message_id``; this pins both
     halves of the branch, because "reuse works" and "a plain send still appends"
     are separately breakable.
@@ -753,7 +753,7 @@ async def test_stream_route_surfaces_a_rejected_reuse_instead_of_appending(
 async def test_stream_route_enforces_the_rate_limit(monkeypatch):
     """A denied limiter must yield 429, not a streamed answer.
 
-    Regression (AGENTS.md §9.31 shape): the route called ``rate_limit(...)`` --
+    Regression (project guidelines): the route called ``rate_limit(...)`` --
     a FastAPI *dependency factory* -- as though it were the enforcer. That raised
     ``TypeError: rate_limit() got an unexpected keyword argument 'request'``,
     which the surrounding fail-open ``except`` swallowed, so the chat stream was

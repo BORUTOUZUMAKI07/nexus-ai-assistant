@@ -1,5 +1,5 @@
 """
-Run durability and rejoin — the tests for the fix recorded in AGENTS.md §9.25.
+Run durability and rejoin — the tests for the fix recorded in project guidelines.
 
 The defect under test: the SSE endpoint ran the graph inside its own
 ``StreamingResponse`` generator, so a run's lifetime was the HTTP request's. A
@@ -15,7 +15,7 @@ corresponding part of the fix makes it fail:
   A. The repository issues the queries we think it does — asserted on the
      compiled statement including the comparison *operator*, because flipping
      ``>`` to ``>=`` or ``eq`` to ``ne`` changes neither the parameters nor the
-     string form (AGENTS.md §9.14).
+     string form (project guidelines).
   B. The writer's batching contract: live before durable, both flush triggers,
      and a bounded retry when the database is broken.
   C. The tailer's two rules: contiguous-only live delivery, and termination from
@@ -62,7 +62,7 @@ from tests.fakes import (
 
 # ── The durable store is faked ───────────────────────────────────────────────
 # FakeRunStore / FakeRunSession live in tests/fakes.py alongside every other
-# fake in this repo (AGENTS.md: "Fakes live in the single module"), because two
+# fake in this repo (project guidelines), because two
 # test files need them: this one, and test_batch_a_wiring.py, whose /stream tests
 # have to stop writing to the real database now that the endpoint opens a session
 # for the run log. A second copy would be a second answer to "what does
@@ -70,7 +70,7 @@ from tests.fakes import (
 
 # The repo root, for the cross-repo checks (the migration's SQL, and that the BFF
 # forwards the same header name). Resolved from this file rather than assumed to
-# be the CWD, because AGENTS.md is explicit that pytest must be run from
+# be the CWD, because project guidelines is explicit that pytest must be run from
 # `backend/` and a relative path would be the first thing to break under it.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -897,8 +897,7 @@ async def test_a_token_stream_from_another_node_is_still_forwarded():
 
 async def test_the_stream_subscribes_to_custom_events_in_string_form():
     """String, not list. `stream_mode=["custom"]` subscribes to nothing and
-    looks identical to a working subscription from the call site (AGENTS.md
-    9.23), so the form itself has to be asserted."""
+    looks identical to a working subscription from the call site (project guidelines), so the form itself has to be asserted."""
     graph = FakeGraph([])
     async for _ in iter_graph_frames(graph, config=CONFIG, graph_input={}):
         pass
@@ -1019,7 +1018,7 @@ def executor_env(monkeypatch, session_factory):
 
     These are the *caller's* dependencies, so substituting them is the right kind
     of fake; the persistence path is asserted through the calls they receive
-    rather than through a mocked repository (AGENTS.md §9.14).
+    rather than through a mocked repository (project guidelines).
     """
     recorded: dict = {"messages": [], "usage": [], "costs": []}
 

@@ -21,7 +21,7 @@ Two tables, with a deliberately narrow split:
 There is deliberately **no** ``event_type`` column. The frame's type lives in
 ``payload["type"]``; a second column holding the same value would be a second
 source of truth for it (the same trap as ``RAG_ANSWER_COVERAGE_DROP_BELOW``,
-AGENTS.md §9.18), and nothing needs to query by type — replay is by ``seq`` and
+project guidelines §9.18), and nothing needs to query by type — replay is by ``seq`` and
 termination is ``AgentRun.status``.
 
 ``message_id`` is set when the assistant reply is persisted, which now happens

@@ -7,14 +7,14 @@ Citations were dead at three independent points, each invisible on its own:
 * the backend emitted no ``citation`` frame, because the only frame path that
   could carry one is ``on_custom_event`` -- an event langgraph never emits
   without being asked for ``stream_mode="custom"``, and even then it arrives as
-  an ``on_chain_stream`` payload (AGENTS.md §9.23, measured on 1.2.11);
+  an ``on_chain_stream`` payload (project guidelines);
 * the ``citations`` and ``tool_calls`` columns were never written by *any* code
   path, so the history loader had nothing to rebuild from;
 * the client-side mappers were correct against those always-empty arrays, so they
   passed their own tests.
 
 Every layer's tests were green and the feature did not exist. That is the shape
-§2 of AGENTS.md describes one layer up, and it is why these tests assert across
+§2 of project guidelines describes one layer up, and it is why these tests assert across
 the seam rather than inside one function.
 
 The second half of the file covers the message row, which is the only durable
@@ -202,7 +202,7 @@ def _stub_the_row_writers(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any
     usage, cost log), evaluate a quality score, count tokens and open a tracing
     span. Only the message is under test, so the rest are replaced -- deliberately
     as *recorders* rather than mocks of the function under test, because the whole
-    subject here is which arguments reached the writer (AGENTS.md §9.14).
+    subject here is which arguments reached the writer (project guidelines).
     """
     import backend.app.services.run_executor as ex
 
@@ -330,7 +330,7 @@ def test_a_checkpointer_that_cannot_be_read_loses_the_evidence_not_the_answer() 
 # (`revert_c3.py`) reported C1, C4 and C5 not load-bearing, because reverting the
 # executor's call sites left every test above green. The frame builder, the
 # argument names and the collector each work in isolation, and the product still
-# ships an answer with no citations -- which is the failure §2 of AGENTS.md
+# ships an answer with no citations -- which is the failure §2 of project guidelines
 # describes, one layer down.
 #
 # So the rest of this file drives `execute_run` itself. The graph reports real
@@ -414,7 +414,7 @@ def store() -> FakeRunStore:
 def session_factory(store: FakeRunStore):
     # Faked, shadowing the session-scoped real-database fixture in conftest.py:
     # this is the same reason test_run_rejoin.py and test_batch_a_wiring.py do it
-    # (AGENTS.md §9.27) -- the endpoint opens sessions of its own and a real one
+    # (project guidelines) -- the endpoint opens sessions of its own and a real one
     # would write to whatever DATABASE_URL points at.
     return lambda: FakeRunSession(store)
 

@@ -2,7 +2,7 @@
 Durable run log: the broker, the batching writer, and the replay/live tailer.
 
 This is the module that makes "rejoin after a refresh" a real feature instead of
-a frontend-only lie (AGENTS.md §9.25). Three pieces, each with one job:
+a frontend-only lie (project guidelines §9.25). Three pieces, each with one job:
 
 ``RunBroker``
     In-process fan-out. Per run, there is exactly **one** writer (the executor),

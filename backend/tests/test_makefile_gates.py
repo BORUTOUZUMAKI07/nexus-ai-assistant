@@ -236,7 +236,7 @@ def test_test_targets_run_from_the_backend_directory():
         assert recipe, f"no `{target}:` target in the Makefile"
         assert "cd backend" in recipe, (
             f"`{target}` does not cd into backend/ first; see the note in "
-            f"AGENTS.md about repo-root-relative paths in the batch tests"
+            f"project guidelines about repo-root-relative paths in the batch tests"
         )
 
 

@@ -199,7 +199,7 @@ class FakeSession:
                     # criteria to every entity by column name let an earlier
                     # `delete(APIKey).where(APIKey.user_id == ...)` silently erase
                     # the user's OrganizationMember rows, which hid the co-member
-                    # erasure in account_service.delete_account (AGENTS.md P2).
+                    # erasure in account_service.delete_account (project guidelines).
                     if getattr(entity, "__tablename__", None) != target_name:
                         continue
                     survived = [r for r in rows if not all(_eval_clause(c, r, self.rows) for c in criteria)]
@@ -271,7 +271,7 @@ class FakeRunSession:
 
     It is deliberately a *narrow* fake. SQLAlchemy's ability to filter is not
     what any of these tests is about -- the query itself is verified by compiling
-    the statement (AGENTS.md §9.14) -- so only what the repository actually issues
+    the statement (project guidelines) -- so only what the repository actually issues
     is modelled, and anything else surfaces as an ``AttributeError`` rather than
     silently returning nothing.
     """

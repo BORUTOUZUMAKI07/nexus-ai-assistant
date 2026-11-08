@@ -9,7 +9,7 @@ that prepends "Here's the JSON:", appends an explanation, wraps the object in a
 defeats it -- and because every one of these callers fails *open*, the result is
 a silently dropped routing flag or research sub-query, never an error anyone
 sees. (The same class of bug as the artifact-frame double-encode recorded in
-AGENTS.md §9.27: right up to the parse, wrong at the seam.)
+project guidelines §9.27: right up to the parse, wrong at the seam.)
 
 Two layers, and both are needed:
 

@@ -19,7 +19,7 @@
  * *local-only* path seeds a `msg-` id.
  *
  * Run with `node node_modules/vitest/vitest.mjs run` on Windows (the bin shim
- * is broken -- AGENTS.md).
+ * is broken -- See project guidelines.
  */
 import { describe, it, expect, beforeEach } from "vitest"
 import { renderHook, act, waitFor } from "@/test/test-utils"

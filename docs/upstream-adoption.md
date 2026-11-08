@@ -43,7 +43,7 @@ Capabilities were sorted by what adopting them would actually require:
 The scoping rule applied throughout: **unreachable config is not a safety net.**
 A primitive wired in but never read is the same defect class as the
 `ResilientPostgresSaver` that LangGraph silently discarded at `compile()` (see
-`AGENTS.md` §2), and it is invisible to a green suite. So a feature is adopted
+`project guidelines), and it is invisible to a green suite. So a feature is adopted
 only when the current graph has a call site that makes it load-bearing.
 
 ## 2. Tier 1
@@ -100,12 +100,7 @@ sized from what each node does. Nodes that write — `artifact`, `synthesizer`,
 re-run the most expensive loop in the graph.
 
 Test: `backend/tests/test_node_policies.py` (61 tests), with a 14/14
-load-bearing revert harness. Recorded as `AGENTS.md` §9.22.
-
-### 2.2 `error_handler` — **not adopted**
-
-A per-node error-handling hook. No node needs a recovery consumer today: the
-graph's failures either retry (transient) or terminate the run. Routing a failed
+load-bearing revert harness. Recorded as `project guidelines) or terminate the run. Routing a failed
 node's error into a new node would add an edge and a failure mode with no
 call site that reads it — the exact "unreachable config" shape the scoping rule
 rejects. Revisit only if a node genuinely needs to continue after a peer fails.
@@ -128,13 +123,7 @@ If a mid-run event is ever added, the measured (langgraph 1.2.11) behaviour is:
 The list form is what anyone writes for more than one mode, and it silently
 delivers nothing; a typo is worse, because it also silences the root deltas.
 `on_custom_event` is never emitted. Pinned by
-`backend/tests/test_stream_custom_event_trap.py` and `AGENTS.md` §9.23.
-Adopting the writer means passing `stream_mode="custom"` as a **string** and
-handling the `on_chain_stream` envelope.
-
-## 3. Tier 2 — kept in view, not adopted now
-
-### 3.1 `BaseStore` (framework long-term memory) — **rejected in-place**
+`backend/tests/test_stream_custom_event_trap.py` and `project guidelines) — **rejected in-place**
 
 `graph.py:354-362` documents the decision at the compile call: this repo has
 **zero `get_store()` call sites**. Long-term memory is mem0
@@ -244,7 +233,7 @@ runtime, pinned weights, a custom loader, and a new serving path.
 **What was retained.** One prompt-shaping idea: a passage under judgement must be
 read **as quoted data, never as instructions**. This is the clause now in the
 answer-coverage grader's prompt (`services/rag/answer_coverage.py`; recorded in
-`AGENTS.md` §9.21) — a passage arguing for its own retention is an unmitigated
+`project guidelines) — a passage arguing for its own retention is an unmitigated
 path into a drop decision. The repo already applies the same discipline to
 synthesizer input via `nodes.py::_wrap_untrusted`.
 

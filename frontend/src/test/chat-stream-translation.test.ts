@@ -170,7 +170,7 @@ describe("/api/chat SSE translation", () => {
     // it did — but the decision was wrong. The backend emitted this frame on
     // every finished run that went through revision, the API contract held, no
     // test anywhere failed, and the user was never told their answer had been
-    // critiqued. AGENTS.md §2 names this exact failure for a new backend event:
+    // critiqued. project guidelines names this exact failure for a new backend event:
     // the first integration point is invisible, because nothing on the backend
     // side can observe it.
     const restore = stubBackend(
@@ -285,7 +285,7 @@ describe("/api/chat SSE translation", () => {
     // frame to the run log; this route is what turns it into the annotation the
     // hook reads. With no branch here the run looks finished, the flagged action
     // is silently skipped, and no test on either side of the proxy notices --
-    // the exact AGENTS.md §2 failure this file exists to prevent.
+    // the exact project guidelines failure this file exists to prevent.
     const restore = stubBackend(
       'data: {"type":"hitl_request","thread_id":"conv-1","tool_name":"execute_python","arguments":{"code":"import os"},"reason":"runs a shell command"}\n\n'
     )

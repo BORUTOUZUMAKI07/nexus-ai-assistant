@@ -8,7 +8,7 @@ On 2026-10-07 the collector refused to start against its own tracked config:
 
 exit 1, before /healthz ever answered — and nothing observed it. The symptom
 from outside was an empty New Relic Logs tab, which is indistinguishable from
-an app that logged nothing (AGENTS.md §9.26: configured-but-broken).
+an app that logged nothing (project guidelines).
 
 `otelcol validate` does NOT catch this. Measured on
 otel/opentelemetry-collector-contrib:0.121.0, three variants of this file:
@@ -39,7 +39,7 @@ Four tests, deliberately different in strength:
 * `test_the_collector_really_builds_the_tracked_config` — starts the pinned
   image on the tracked file and waits for readiness. This asks the collector
   itself instead of asserting the shape a repo test claims it wants
-  (AGENTS.md §9.15: test the integration, not the object), so it catches any
+  (project guidelines), so it catches any
   future build-time rejection — not just this one field.
 
 Neither proves telemetry reaches New Relic. That needs a live ingest key and
@@ -97,7 +97,7 @@ def _require_docker() -> None:
     """Skip — never fail — when Docker itself is unavailable.
 
     The suite already treats a missing daemon as environment rather than
-    regression (AGENTS.md §7: ~113 setup errors when Docker Desktop is off).
+    regression (project guidelines).
     This test is about a config file; going red because the daemon is down
     would teach people to ignore the signal that matters.
     """
@@ -166,7 +166,7 @@ def test_every_resource_attribute_declares_an_action() -> None:
 
     attributes = resource.get("attributes") or []
     # An empty list would let the loop below pass without asserting anything
-    # (AGENTS.md §7: a loop over a possibly-empty collection is not a test).
+    # (project guidelines).
     assert attributes, "processors.resource.attributes is empty; nothing would be checked"
 
     for index, entry in enumerate(attributes):
@@ -188,7 +188,7 @@ def test_collector_hardening_is_wired() -> None:
 
     A dropped durable queue still forwards telemetry while the sink is up; a
     removed auth block still starts the collector. Neither produces a red test
-    at runtime, so the shape has to be asserted here (AGENTS.md §2). Static, so
+    at runtime, so the shape has to be asserted here (project guidelines). Static, so
     it names the missing piece with no Docker involved.
     """
     config = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))

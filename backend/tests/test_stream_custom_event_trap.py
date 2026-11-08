@@ -38,7 +38,7 @@ never reach `astream_events` even with the kwarg, and that `on_custom_event`
 appears zero times. Both were wrong, and the reason they were wrong is worth
 recording -- a probe printed six event *names* for the no-kwarg case and full
 event *data* for the kwarg case, and the two were read as one result. Counting
-events is not measuring content. The repo's own rule applies (AGENTS.md 9.14):
+events is not measuring content. The repo's own rule applies (project guidelines):
 assert each claim on its own axis, or a green test proves nothing.
 
 Run: `cd backend && uv run pytest tests/test_stream_custom_event_trap.py`

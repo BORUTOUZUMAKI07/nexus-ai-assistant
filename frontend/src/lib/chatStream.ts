@@ -12,7 +12,7 @@
  * tool calls, or its verdict, with no error anywhere.
  *
  * This is the same hazard as an untranslated backend SSE frame, one layer up.
- * AGENTS.md §2 records that the backend emitting an event nobody translates is
+ * project guidelines records that the backend emitting an event nobody translates is
  * indistinguishable from the backend not emitting it; the same is true here of
  * the browser side.
  *

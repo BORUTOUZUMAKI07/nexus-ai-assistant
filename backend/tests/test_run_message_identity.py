@@ -13,7 +13,7 @@ count is ambiguous (two runs can legitimately produce the same answer, and one
 run can produce none), and comparing text is a guess that breaks on the exact
 turn it is meant to protect. So the state travels in a response header, which is
 the one channel that crosses the proxy without needing a new SSE frame type --
-and an SSE frame type nobody translates is silently dropped (AGENTS.md §2).
+and an SSE frame type nobody translates is silently dropped (project guidelines).
 
 The second half of the file covers the message read the client makes first. It
 looks like a tidiness change and is not: the previous query returned the
@@ -45,7 +45,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # conftest.py on purpose. Nothing under test touches Postgres -- the header is
 # built from a row the fake already holds -- and inheriting the conftest fixture
 # would open a connection to whatever DATABASE_URL points at, which on this
-# machine is hosted Supabase (AGENTS.md §9.16). The fake is the same one
+# machine is hosted Supabase (project guidelines). The fake is the same one
 # test_run_rejoin.py and test_batch_a_wiring.py use, from tests/fakes.py,
 # because a second copy would be a second answer to what RunRepository issues.
 
@@ -207,7 +207,7 @@ async def test_the_window_is_matched_by_membership_not_exclusion():
     This is the third axis, and `str(stmt)` alone does not catch it: `IN` and
     `NOT IN` produce the same column list and the same bound parameter, so a
     string assertion on the columns and a params assertion on the value both stay
-    green while the query returns exactly the wrong rows (AGENTS.md §9.14). It is
+    green while the query returns exactly the wrong rows (project guidelines). It is
     the one thing in this file that silently produces the *earliest* window with
     every assertion otherwise satisfied.
     """

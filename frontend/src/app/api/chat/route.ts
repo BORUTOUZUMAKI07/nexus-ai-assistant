@@ -135,7 +135,7 @@ function translateFrame(
     // `test_leaves_critique_and_quality_events_untranslated` recorded the
     // omission as a decision. The decision was wrong — the frames land in the
     // database, the API contract holds, no test fails, and the user is simply
-    // never told the answer was critiqued. That is the exact failure AGENTS.md §2
+    // never told the answer was critiqued. That is the exact failure project guidelines
     // warns about for a new backend event, and it is invisible from the backend
     // side.
     //

@@ -75,7 +75,7 @@ async def test_every_chunk_is_indexed_and_persisted(tmp_path: Path) -> None:
 
     assert result["status"] == "success"
     # The fixture must actually contain a chunk, or the assertions below pass
-    # vacuously over empty collections (AGENTS.md 9.13).
+    # vacuously over empty collections (project guidelines).
     assert result["chunks"] >= 1
 
     # One distinct point per chunk, each carrying both vectors and its text.

@@ -206,7 +206,7 @@ describe("hasAnswer", () => {
     // `rendered` carries real ids, so `messages.some(m => m.id === undefined)` is
     // false and the guard is invisible — a test written against that fixture
     // passes with the guard deleted, which is how a defensive check becomes a
-    // claim nothing verifies (AGENTS.md §9.21).
+    // claim nothing verifies (project guidelines).
     //
     // The transcript here comes from a history payload that lost its ids, which
     // `toMessage` copies through verbatim rather than substituting. Then "the run
@@ -220,7 +220,7 @@ describe("hasAnswer", () => {
     expect(hasAnswer(unreadable, null)).toBe(false)
     expect(hasAnswer(unreadable, "")).toBe(false)
     // The fixture check, which is the part that makes those three mean anything
-    // (AGENTS.md §9.13): the predicate *is* reachable on this transcript — it is
+    // (project guidelines): the predicate *is* reachable on this transcript — it is
     // the guard that stops it. Written as the raw predicate rather than as
     // `hasAnswer`, because no input can make `hasAnswer` return true here and an
     // assertion that can never hold is not a fixture check.

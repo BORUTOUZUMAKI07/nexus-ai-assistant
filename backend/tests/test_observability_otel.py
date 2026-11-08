@@ -37,7 +37,7 @@ def _await(coro):
 
     pytest-randomly reorders the suite, and a preceding test that used
     ``asyncio.run`` leaves the thread loop unset — hence the RuntimeError guard
-    (every ``_await`` helper in this repo carries it; see AGENTS.md §7).
+    (every ``_await`` helper in this repo carries it; see project guidelines).
     """
     try:
         loop = asyncio.get_event_loop()

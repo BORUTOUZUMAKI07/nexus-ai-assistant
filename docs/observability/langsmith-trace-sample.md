@@ -5,7 +5,7 @@ stack. The numbers below are measured, not written by hand.
 
 There is no regeneration script for this file, and there never was one — the
 capture was an ad-hoc script run once and not kept. (An earlier version of this
-header pointed at "the command in `AGENTS.md` §9.26"; §9.26 contains no such
+header pointed at "internal documentation"; no such section exists in current docs.
 command, so the pointer was dangling.) Re-deriving the tree means instrumenting
 `services/run_executor.py`'s `astream_events` payloads again, which is the same
 mechanism LangSmith itself consumes.
@@ -148,7 +148,7 @@ it is kept as the baseline to compare a real uploaded trace against.
   the pooler (`server closed the connection unexpectedly`), so
   `ResilientPostgresSaver` degraded to `InMemorySaver` — precisely the seam it
   exists for. Node structure and timings are unaffected; what is missing is
-  survival across a restart. See AGENTS.md §9.26.
+  survival across a restart. See docs for context.
 
 ## Answer produced by this run
 

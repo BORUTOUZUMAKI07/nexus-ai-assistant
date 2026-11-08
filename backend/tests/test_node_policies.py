@@ -269,7 +269,7 @@ def test_every_runtimeerror_raised_in_app_is_terminal():
     RuntimeError(...)`. If someone starts raising it for a transient condition,
     this test fails and the reasoning above has to be redone. `ast` rather than
     a regex because this repo has CRLF checkouts, where `\s*\n\s*` matches
-    nothing and a grep-based check silently reports success (AGENTS.md §2).
+    nothing and a grep-based check silently reports success (project guidelines).
     """
     import ast
     from pathlib import Path

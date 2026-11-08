@@ -44,7 +44,7 @@ def test_plain_string_content_is_returned_unchanged():
 
 
 def test_a_multimodal_turn_yields_its_text_parts():
-    # The shape a vision turn actually arrives in (see AGENTS.md: the route
+    # The shape a vision turn actually arrives in (see project guidelines: the route
     # passes ``body.messages`` verbatim, so this is the request body).
     message = {
         "content": [
@@ -184,7 +184,7 @@ def test_a_vision_turn_still_writes_the_assistant_row():
     # Before the fix this call raised inside the broad except, wrote nothing,
     # and the answer was lost on reload. The assertion is on the *row*, not on
     # the absence of an exception, because the exception is deliberately
-    # swallowed by the caller (AGENTS.md A9.14: assert what reached the writer).
+    # swallowed by the caller (project guidelines).
     vision_user = {
         "content": [
             {"type": "text", "text": "what colour is this"},

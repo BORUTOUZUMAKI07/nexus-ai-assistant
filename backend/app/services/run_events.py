@@ -54,7 +54,7 @@ def citation_payloads(values: Any) -> list[dict[str, Any]]:
     run: the only frame path that could carry them is ``on_custom_event``, which
     langgraph never emits for a custom event -- ``astream_events`` has to be
     asked for ``stream_mode="custom"``, and even then it arrives as an
-    ``on_chain_stream`` payload rather than as ``on_custom_event`` (AGENTS.md
+    ``on_chain_stream`` payload rather than as ``on_custom_event`` (project guidelines
     §9.23, measured on 1.2.11).
 
     That left citations dead at three independent points, each invisible on its
@@ -130,7 +130,7 @@ def finished_run_payloads(values: Any) -> list[dict[str, Any]]:
     The client's translator parses that and finds no ``type``, so the frame is
     dropped -- a critique, a quality score and the notification that a document
     was saved all silently lost, with no error anywhere and every test green,
-    because each layer's own tests pass in isolation. See AGENTS.md §2: an event
+    because each layer's own tests pass in isolation. See project guidelines §2: an event
     nobody can parse is indistinguishable from one that was never emitted.
 
     So the object list is the reusable thing and the SSE string is derived from

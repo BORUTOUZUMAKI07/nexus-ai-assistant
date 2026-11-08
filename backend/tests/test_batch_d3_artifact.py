@@ -872,7 +872,7 @@ def test_the_run_event_frames_helper_is_used_by_the_run():
     The subject moved. `finished_run_events(snapshot.values)` used to be called
     from the `/stream` route, which ran the graph itself; the C2 change made the
     run outlive the request, so the frames are emitted by the background executor
-    and the route only tails the log (AGENTS.md §9.27). Grepping the route for
+    and the route only tails the log (project guidelines). Grepping the route for
     this stopped being true for a reason that has nothing to do with D3 -- the
     delegation is intact, one layer down. The assertion follows it there, and
     additionally pins that the route is now genuinely a reader: a route that

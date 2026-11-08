@@ -482,7 +482,7 @@ async def stream_conversation(
             # Passed in rather than imported by the executor: the endpoint's own
             # tests monkeypatch *this module's* `orchestrator_graph`, and an
             # import inside the executor would step over that seam and run the
-            # real graph (AGENTS.md §9.14).
+            # real graph (project guidelines §9.14).
             graph=orchestrator_graph,
             config=config,
             graph_input={

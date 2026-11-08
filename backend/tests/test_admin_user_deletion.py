@@ -286,7 +286,7 @@ def test_the_route_is_registered_on_the_v1_router():
     # results as `_IncludedRouter` objects rather than flattening them, so the
     # attribute that used to list every path now holds 18 entries with no
     # `.path` at all. `app.openapi()` is the introspection surface that
-    # survives either shape, which is also what AGENTS.md says to use.
+    # survives either shape, which is also what See project guidelines.
     from backend.app.main import app
 
     spec = app.openapi()

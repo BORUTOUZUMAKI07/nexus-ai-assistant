@@ -7,7 +7,7 @@
  * ever appended to by a live stream or a rejoin. So selecting a conversation you
  * had already had a dozen turns in showed a blank panel, and the rejoin feature
  * landed a recovered answer with no user turn anywhere near it. §9.27 of
- * AGENTS.md recorded that as a pre-existing gap and declined to invent a user
+ * project guidelines recorded that as a pre-existing gap and declined to invent a user
  * bubble — correctly, because a bubble the backend never wrote is fabricated
  * conversation. The fix is not to invent one; it is to read the real rows.
  *

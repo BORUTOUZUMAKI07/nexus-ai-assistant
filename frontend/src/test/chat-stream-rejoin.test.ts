@@ -229,7 +229,7 @@ describe("GET /api/chat — rejoin to a run already in flight", () => {
     // rendering the replay -- which is right for a live run and wrong for a
     // finished one, so the failure mode is "the user reads the same answer twice"
     // with no error anywhere. Not a new SSE frame type for exactly that reason:
-    // a frame the translator does not know is dropped in silence (AGENTS.md §2).
+    // a frame the translator does not know is dropped in silence (project guidelines).
     const stub = stubBackend("", {
       headers: { "X-Nexus-Run-Id": RUN, "X-Nexus-Message-Id": MSG },
     })
