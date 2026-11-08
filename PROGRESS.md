@@ -12,6 +12,22 @@ contain this one. Anything that only exists in chat is lost at handoff.
 ## Current State
 
 - **Last updated:** 2026-11-07
+- **CI made green, leg by leg (2026-11-08).** Every push had been failing, and
+  three of the four failures were hiding behind the first. Fixed: (1) three
+  react-hooks/react-compiler errors in the workspace shell (derived model
+  instead of an effect writing state, hand-written memos the compiler refuses,
+  one missing callback dep); (2) `npm audit` gate — undici, vite and zod all
+  had fixed releases, so `npm audit fix` moved them rather than allowlisting;
+  (3) bandit B104 at `otel.py:164`, a hostname in a local-collector set, nosec'd
+  with the reason exactly as `db/core_target.py` already does; (4) pip-audit, 34
+  advisories in 13 packages (pillow 12.3.0, authlib, fastmcp, litellm,
+  opentelemetry, langgraph-*, filelock, msgpack, brotli, certifi, dnspython,
+  joserfc) — pillowed floored directly in pyproject, the rest upgraded in the
+  lock. Verified locally: `npx tsc --noEmit`, `npx eslint src scripts` (0
+  errors), vitest 469 passed, `npm run build`, `npm run audit:gate`,
+  `uv run pip-audit` (no known vulnerabilities), 1582 backend tests passed,
+  ruff, bandit exit 0, mypy allowlist clean. **Not yet verified: the CI run
+  itself** — it needs the push to finish.
 - **The chat 500 is explained and fixed: SQLModel version drift (2026-11-08).**
   The Render log for the failing "hi" request shows `StatementError: Datetime
   values must have timezone information` on `INSERT INTO conversations`, i.e. a

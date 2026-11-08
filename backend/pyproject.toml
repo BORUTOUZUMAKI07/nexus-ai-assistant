@@ -38,6 +38,13 @@ dependencies = [
     # an unpinned transitive dependency silently steps back onto the vulnerable
     # one on the next lock. The module is not imported at app runtime.
     "mako>=1.4.2",
+    # Same shape of problem as mako above, different advisory: Pillow reaches
+    # the tree only through fastembed's embedding pre-processing, so nothing
+    # here declares it and nothing would notice it going stale. pip-audit fails
+    # the build on CVE-2026-96778 / GHSA-78g4-xqwv-q3g8 in 12.3.0, patched in
+    # 13.0.0. Declared directly to hold the floor: `pip install .` in the image
+    # resolves from these requirements, not from uv.lock.
+    "pillow>=13.0.0",
     "asyncpg>=0.29.0",
     "psycopg2-binary>=2.9.9",
     "psycopg[binary,pool]>=3.1.0",

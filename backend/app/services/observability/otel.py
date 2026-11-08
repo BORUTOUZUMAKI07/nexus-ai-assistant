@@ -152,7 +152,13 @@ _LOCAL_COLLECTOR_HOSTS = frozenset(
         "localhost",
         "127.0.0.1",
         "::1",
-        "0.0.0.0",
+        # A *bind* address is never a collector destination, but Linux resolves
+        # it to localhost and compose files written by hand do contain it, so
+        # the honest reading is "meant local". Bandit's B104 matches the literal
+        # and cannot see the surrounding set; nosec with the reason rather than
+        # dropping the entry, which would send a local typo down the public
+        # "missing credentials" path. Same call as `app/core/db_target.py`.
+        "0.0.0.0",  # nosec B104
         "host.docker.internal",
         "otel-collector",
         "collector",
