@@ -18,7 +18,12 @@ import {
   regenerateMessage as apiRegenerateMessage,
   type ConversationMode,
 } from "@/lib/api";
-import { consumeChatStream, readMessageId, readRunId } from "@/lib/chatStream";
+import {
+  coalescePatches,
+  consumeChatStream,
+  readMessageId,
+  readRunId,
+} from "@/lib/chatStream";
 import { hasAnswer, messagesFromHistory } from "@/lib/conversationHistory";
 
 export interface ToolCallAnnotation {
@@ -581,8 +586,14 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         );
       };
 
-      const patchAssistant = (content: string, annos: NexusAnnotation[]) =>
-        patchMessage(assistantMsgId, content, annos);
+      // One transcript write per painted frame, not per token frame. See
+      // `coalescePatches`: the patch carries the whole answer, so coalescing
+      // drops nothing, and `flush` below guarantees the last text lands even when
+      // the stream ends without a frame to paint it.
+      const assistantPatcher = coalescePatches((content, annos) =>
+        patchMessage(assistantMsgId, content, annos)
+      );
+      const patchAssistant = assistantPatcher.patch;
 
       try {
         // Build multimodal message list — user message may carry an image.
@@ -676,7 +687,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
             }
             onConversationCreatedRef.current?.(id);
           },
-        });
+        }).finally(assistantPatcher.flush);
 
         // Reaching this line means the stream closed at the backend's end, so the
         // run is over and there is nothing left to re-attach to. Every failure
@@ -1116,19 +1127,25 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
               ]
         );
 
+        // The rejoin replays a finished run, so it can emit its whole stream of
+        // frames in one burst — the same coalescing applies, and `finally` writes
+        // the final text even if the replay is cut short.
+        const rejoinPatcher = coalescePatches((content, annos) =>
+          updateMessages((prev) =>
+            prev.map((m) =>
+              m.id === rejoinedId
+                ? {
+                    ...m,
+                    content,
+                    annotations: annos.length > 0 ? annos : m.annotations,
+                  }
+                : m
+            )
+          )
+        );
+
         await consumeChatStream(probe.body, {
-          patch: (content, annos) =>
-            updateMessages((prev) =>
-              prev.map((m) =>
-                m.id === rejoinedId
-                  ? {
-                      ...m,
-                      content,
-                      annotations: annos.length > 0 ? annos : m.annotations,
-                    }
-                  : m
-              )
-            ),
+          patch: rejoinPatcher.patch,
           onArtifactSaved: (artifact) =>
             onArtifactSavedRef.current?.(artifact),
           onTurnVerdict: setTurnVerdict,
@@ -1144,7 +1161,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           // it raises belongs to a turn this view has no user message for. It
           // stays in the annotation list, so the transcript records that the
           // turn stopped for a human rather than silently reading as complete.
-        });
+        }).finally(rejoinPatcher.flush);
 
         // The replay reached the backend's end, so the run is finished.
         forgetRun(conversationId);

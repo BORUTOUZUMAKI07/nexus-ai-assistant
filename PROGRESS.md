@@ -12,6 +12,25 @@ contain this one. Anything that only exists in chat is lost at handoff.
 ## Current State
 
 - **Last updated:** 2026-11-07
+- **Chat is confirmed live after the sqlmodel pin (2026-11-08).** The Render log
+  for deploy `38057bb` (image rebuilt 10:11) shows the request that used to 500:
+  `POST /api/v1/conversations/{id}/stream` → **200**, `conversation_created`,
+  `artifact_generated`, `span_finish_agentic_stream status=success`. The 500 is
+  gone. What the same log shows next, not yet fixed: the OTel collector answers
+  **502** to every export batch (retry, then `Failed to export … due to timeout`
+  every ~30 s); image generation returns **402 from the provider** (`flux`,
+  `turbo`) and the API maps that to 502; and a second `stream` call returns
+  **409 Conflict** while the previous run is still going.
+- **Streaming no longer re-renders the workspace per token (2026-11-08).** The
+  SSE consumer called `patch` on every text frame, each carrying the whole answer
+  rebuilt, so a single reply wrote the transcript and re-rendered the page —
+  including a full Markdown parse of the growing answer — dozens of times a
+  second. Added `coalescePatches` in `lib/chatStream.ts`: keep only the latest
+  patch, apply it on the next animation frame, and flush when the stream settles
+  (abort and error included) so no text is lost. Applied to the live turn and the
+  rejoin replay. Verified: 469 frontend tests pass, tsc clean, eslint 0 errors,
+  `npm run build`. Not measured as a frame-time delta — the change caps renders at
+  the display refresh rate instead of the token rate.
 - **CI made green, leg by leg (2026-11-08).** Every push had been failing, and
   three of the four failures were hiding behind the first. Fixed: (1) three
   react-hooks/react-compiler errors in the workspace shell (derived model

@@ -37,6 +37,59 @@ import type {
  * optional is honest about that rather than passing nulls a consumer has to
  * null-check anyway.
  */
+/**
+ * Coalesce `patch` calls to at most one per animation frame.
+ *
+ * Every text frame carries the *whole* answer rebuilt so far, so intermediate
+ * patches are pure waste: the backend emits tens of frames a second, and each
+ * one used to write the transcript and re-render the entire workspace — the
+ * transcript list, the sidebar, the composer, and a Markdown parse of the growing
+ * answer — before the next frame arrived. Keeping only the latest patch and
+ * applying it in the next frame turns N renders per token burst into at most one
+ * per painted frame, and never loses text, because the patch is a snapshot
+ * rather than a delta.
+ *
+ * `flush()` is not optional for a caller: a stream that ends mid-frame must
+ * still show its last text, so callers run it when `consumeChatStream` settles
+ * (including on abort or error) rather than relying on a frame callback that may
+ * never fire while the tab is in the background.
+ */
+export function coalescePatches(apply: ChatStreamSink["patch"]): {
+  patch: ChatStreamSink["patch"];
+  flush: () => void;
+} {
+  let pending: { content: string; annotations: NexusAnnotation[] } | null = null;
+  let frame: number | null = null;
+
+  const flush = () => {
+    if (frame !== null) {
+      cancelAnimationFrame(frame);
+      frame = null;
+    }
+    if (!pending) return;
+    const next = pending;
+    pending = null;
+    apply(next.content, next.annotations);
+  };
+
+  const patch: ChatStreamSink["patch"] = (content, annotations) => {
+    pending = { content, annotations };
+    if (frame !== null) return;
+    // No `requestAnimationFrame` outside a browser (a test runner without a
+    // DOM, a server render): apply immediately rather than dropping the text.
+    if (typeof requestAnimationFrame !== "function") {
+      flush();
+      return;
+    }
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      flush();
+    });
+  };
+
+  return { patch, flush };
+}
+
 export interface ChatStreamSink {
   /**
    * Called whenever the rendered answer or its annotations changed.
