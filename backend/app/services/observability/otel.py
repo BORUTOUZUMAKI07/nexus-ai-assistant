@@ -137,6 +137,11 @@ class _CircuitBreakingExporter:
         self._inner = inner
         self._signal = signal
         self._success = success
+        # Expose protocol attributes for type checking
+        if hasattr(inner, "shutdown"):
+            setattr(self, "shutdown", inner.shutdown)
+        if hasattr(inner, "force_flush"):
+            setattr(self, "force_flush", inner.force_flush)
 
     def export(self, batch: Any) -> Any:
         if _collector_breaker.should_skip():
@@ -373,7 +378,7 @@ def setup_otlp_tracing() -> bool:
         provider = TracerProvider(resource=_resource())
         provider.add_span_processor(
             BatchSpanProcessor(
-                exporter,
+                exporter,  # type: ignore[arg-type]
                 schedule_delay_millis=settings.NEW_RELIC_EXPORT_INTERVAL_SECONDS * 1000,
             )
         )
@@ -425,7 +430,7 @@ def setup_otlp_metrics() -> bool:
             success=MetricExportResult.SUCCESS,
         )
         reader = PeriodicExportingMetricReader(
-            exporter,
+            exporter,  # type: ignore[arg-type]
             export_interval_millis=settings.NEW_RELIC_EXPORT_INTERVAL_SECONDS * 1000,
         )
         provider = MeterProvider(resource=_resource(), metric_readers=[reader])
