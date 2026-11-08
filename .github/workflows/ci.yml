@@ -163,7 +163,7 @@ jobs:
         run: |
           for attempt in 1 2 3; do
             echo "== pytest tests/e2e attempt $attempt =="
-            if uv run pytest tests/e2e -q -m e2e --use-testcontainers; then
+            if uv run pytest tests/e2e -q -m e2e; then
               exit 0
             fi
           done
