@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { ProjectsView } from "@/components/ProjectsView"
 
@@ -100,6 +100,12 @@ describe("ProjectsView", () => {
 
     expect(await screen.findByText("Alpha Renamed")).toBeInTheDocument()
     expect(screen.queryByText("Alpha")).not.toBeInTheDocument()
+  })
+
+  beforeEach(() => {
+    // Deleting a project asks first; jsdom's confirm returns undefined, which
+    // reads as "cancel", so without this the delete never happens.
+    vi.spyOn(window, "confirm").mockReturnValue(true)
   })
 
   it("deletes a project and removes it from the list", async () => {

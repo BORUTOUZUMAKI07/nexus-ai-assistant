@@ -48,11 +48,15 @@ const APP_HOME = "/app";
  *
  * Every one of them is a *result* the page has to render rather than the start
  * of a new sign-in: an OAuth `code` still being exchanged, a provider or
- * callback `error`, the TOTP bounce (`oauth=2fa`), and the expired-session flag.
- * Bouncing those to the workspace would swallow the only explanation the user
- * is given for a sign-in that just failed.
+ * callback `error`, the TOTP bounce (`oauth=2fa`), and `expired` — the flag a
+ * sign-out sets when the logout request never reached the BFF, so the cookies
+ * may still be present. Without the last one, that sign-out would be redirected
+ * straight back into the workspace the user just left.
+ *
+ * Bouncing any of these to the workspace would swallow the only explanation the
+ * user is given for a sign-in that just failed.
  */
-const SIGNIN_RESULT_PARAMS = ["code", "error", "oauth", "message"] as const;
+const SIGNIN_RESULT_PARAMS = ["code", "error", "oauth", "message", "expired"] as const;
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

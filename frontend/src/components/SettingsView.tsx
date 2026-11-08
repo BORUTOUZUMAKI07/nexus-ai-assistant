@@ -188,6 +188,7 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleDeleteMemory = async (id: string) => {
+    if (!window.confirm("Delete this memory? The assistant will no longer recall it.")) return;
     try {
       await deleteMemory(id);
       queryClient.setQueryData<UserMemory[]>(settingsKeys.memories, (prev) =>
@@ -220,6 +221,7 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleDeleteKey = async (id: string) => {
+    if (!window.confirm("Delete this API key? Requests using it fail immediately.")) return;
     try {
       await deleteAPIKey(id);
       queryClient.setQueryData<APIKey[]>(settingsKeys.keys, (prev) =>

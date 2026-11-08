@@ -276,6 +276,9 @@ export const AdminView: React.FC = () => {
   };
 
   const removeHook = async (hook: HookPolicyItem) => {
+    if (!window.confirm("Delete this hook policy? The hook stops running for every conversation it governed.")) {
+      return;
+    }
     try {
       await deleteHookPolicy(hook.id);
       queryClient.setQueryData<HookPolicyItem[]>(adminKeys.hooks, (prev) =>

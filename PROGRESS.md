@@ -12,6 +12,21 @@ contain this one. Anything that only exists in chat is lost at handoff.
 ## Current State
 
 - **Last updated:** 2026-11-07
+- **Frontend parity pass with the url-shortner (2026-11-07).** Read its `login`,
+  `proxy`, `sidebar` and `api-keys` sources line by line and took the four gaps
+  they expose: (1) the OAuth section had no loading state, so on a cold start the
+  card sat blank for the whole boot — it now reserves the space with the same
+  pulsing skeleton Shape the url-shortner uses, on both `/signin` and the in-app
+  modal; (2) sign-out ended with `router.replace("/")`, which kept the workspace
+  mounted long enough for the post-clear query 401s to open the in-app sign-in
+  *dialog* — the "small sign-in page" after logging out — and now does a full
+  `window.location.assign("/signin")`, with `?expired=1` when the logout request
+  never reached the BFF and cookies survive (the gate honours that flag);
+  (3) every destructive control asks first, with the consequence in the prompt:
+  conversation, message, artifact, document, webhook, project, memory, BYOK key,
+  admin hook policy, share-link revoke; (4) `clearSession()` reports success
+  instead of swallowing it, which is what makes `?expired=1` knowable. 469
+  frontend tests pass, `tsc --noEmit` clean.
 - **Signed-in users no longer sit on `/signin` (2026-11-07).** Copied from the
   url-shortner, which redirects `/login` to the app when a session cookie is
   present: Nexus matched only `/app*`, so a session could open the sign-in form

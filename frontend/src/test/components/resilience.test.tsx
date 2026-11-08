@@ -1,10 +1,17 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { KnowledgeView } from "@/components/KnowledgeView"
 import { UsageView } from "@/components/UsageView"
 import { AdminView } from "@/components/AdminView"
 
 describe("resilience - real error states (no fabricated fallbacks)", () => {
+  beforeEach(() => {
+    // The delete controls ask first. jsdom's confirm returns undefined, i.e.
+    // "cancel", so an unstubbed click never reaches the failing request these
+    // tests are about.
+    vi.spyOn(window, "confirm").mockReturnValue(true)
+  })
+
   it("KnowledgeView shows an error state with retry when /api/files returns 500", async () => {
     const { server } = await import("@/test/mocks/server")
     const { http, HttpResponse } = await import("msw")

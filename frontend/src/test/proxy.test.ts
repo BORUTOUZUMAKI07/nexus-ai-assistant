@@ -149,7 +149,14 @@ describe("edge session gate", () => {
     // The OAuth callback and the TOTP bounce both land back on /signin with a
     // reason attached. Bouncing those to /app would swallow the only message the
     // user gets about a sign-in that did not work.
-    for (const purpose of ["?error=oauth_callback_failed_401", "?oauth=2fa", "?code=abc"]) {
+    for (const purpose of [
+      "?error=oauth_callback_failed_401",
+      "?oauth=2fa",
+      "?code=abc",
+      // A sign-out whose logout request never reached the BFF leaves the cookies
+      // in place. Bouncing this one to /app would undo the sign-out.
+      "?expired=1",
+    ]) {
       const res = proxy(request(`/signin${purpose}`, "a.b.c"));
       expect(res.status, `bounced a result of an attempt: ${purpose}`).toBe(200);
       expect(res.headers.get("location")).toBeNull();

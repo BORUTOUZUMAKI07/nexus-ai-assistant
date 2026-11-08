@@ -111,12 +111,22 @@ export async function checkAuth(): Promise<boolean> {
 /**
  * Ends the session. The /api/auth/logout route handler revokes the refresh
  * token server-side and clears both httpOnly cookies (which client-side
- * JavaScript cannot touch). Best-effort: never throws.
+ * JavaScript cannot touch). Never throws.
+ *
+ * Returns whether the request reached the handler. That value is the difference
+ * between a clean sign-out and a `?expired=1` one: when the BFF cannot be
+ * reached the cookies are still set, and `/signin` would bounce a caller
+ * straight back into the workspace (the edge gate sees a cookie and redirects
+ * to /app). The url-shortner side resolves the same case with `?expired=1`,
+ * which its proxy treats as "let the form through"; there is no way to guess
+ * here, so the answer is reported instead of assumed.
  */
-export async function clearSession(): Promise<void> {
+export async function clearSession(): Promise<boolean> {
   try {
-    await fetch("/api/auth/logout", { method: "POST" });
+    const res = await fetch("/api/auth/logout", { method: "POST" });
+    return res.ok;
   } catch {
-    // Best-effort cleanup; the app bounces to the sign-in page regardless.
+    // Best-effort cleanup; the caller decides where to land.
+    return false;
   }
 }

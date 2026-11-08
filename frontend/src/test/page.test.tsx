@@ -75,8 +75,21 @@ describe("Home page integration", () => {
     expect(await screen.findByText("Hello from Nexus.")).toBeInTheDocument()
   })
 
-  it("supports sign out by clearing the token and redirecting to the landing page", async () => {
+  it("signs out with a full navigation to the sign-in page", async () => {
+    // Sign-out used to end with `router.replace("/")` — a client-side hop to the
+    // marketing page that keeps this tree mounted for a tick. The cache clear
+    // makes every query refetch with the cookies already gone, those 401s fire
+    // SESSION_EXPIRED_EVENT, and the in-app sign-in *dialog* opened over the
+    // workspace: the "small sign-in page" that appeared after signing out. A real
+    // page load to /signin is the url-shortner's behaviour and the fix.
     clearCookie()
+    const assign = vi.fn()
+    Object.defineProperty(window, "location", {
+      value: { ...window.location, assign },
+      configurable: true,
+      writable: true,
+    })
+
     render(<Home />)
     await screen.findByText("Welcome back")
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
@@ -90,7 +103,12 @@ describe("Home page integration", () => {
     await screen.findByText("Project kickoff")
     fireEvent.click(screen.getByTitle("Sign out"))
 
-    await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/"))
+    // The logout route answered 200, so the cookies are gone and the plain page
+    // is reachable — no `expired` escape hatch needed.
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/signin"))
+    // And nothing was routed client-side: a router hop is exactly what kept the
+    // tree (and its event listeners) alive long enough to open the dialog.
+    expect(routerMock.replace).not.toHaveBeenCalledWith("/")
   })
 
   it("plans in Plan mode: drafts a plan card, then executes it on approval", async () => {

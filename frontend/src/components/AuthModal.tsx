@@ -28,7 +28,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   // Empty until the server says otherwise: showing the buttons optimistically
   // and hiding them a moment later is the wrong direction to flicker, and a
   // deployment with no OAuth configured would offer a button that 404s.
-  const [oauthProviders, setOAuthProviders] = useState<OAuthProviderName[]>([]);
+  // null = the lookup is still in flight. The section then shows a skeleton
+  // instead of simply not existing, which is what the url-shortner login screen
+  // does in the same window; on a cold start that window is the whole backend
+  // boot.
+  const [oauthProviders, setOAuthProviders] = useState<OAuthProviderName[] | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -215,7 +219,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           </button>
         </form>
 
-        {oauthProviders.length > 0 && (
+        {oauthProviders === null && (
+          <div className="mt-4" role="status">
+            <span className="sr-only">Loading sign-in options</span>
+            <div aria-hidden="true" className="mb-3 flex justify-center">
+              <div className="h-4 w-32 animate-pulse rounded bg-[var(--border-subtle)]" />
+            </div>
+            <div aria-hidden="true" className="grid gap-2">
+              <div aria-hidden="true" className="h-[42px] animate-pulse rounded-lg bg-[var(--bg-main)]" />
+              <div aria-hidden="true" className="h-[42px] animate-pulse rounded-lg bg-[var(--bg-main)]" />
+            </div>
+          </div>
+        )}
+
+        {oauthProviders && oauthProviders.length > 0 && (
           <>
             <div className="mt-4 flex items-center gap-3 text-xs text-[var(--text-faint)]">
               <span className="h-px flex-1 bg-[var(--border-subtle)]" />

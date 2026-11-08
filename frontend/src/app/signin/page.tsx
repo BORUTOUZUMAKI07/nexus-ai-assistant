@@ -69,6 +69,13 @@ const getSnapshot = () => window.location.search;
  */
 function resolveOAuthError(search: string): string | null {
   const params = new URLSearchParams(search);
+  // Set by a sign-out whose logout request never reached the BFF: the cookies
+  // may still be there, and this flag is what the edge gate honours to show the
+  // form instead of bouncing back into the workspace. Say why, so the form does
+  // not look like it appeared for no reason.
+  if (params.get("expired") === "1") {
+    return "Your session has ended. Please sign in again.";
+  }
   if (params.get("oauth") === "2fa") {
     return "Two-factor authentication is required. Sign in with your password to enter your code.";
   }
@@ -310,6 +317,29 @@ export default function SignInPage() {
             )}
           </button>
         </form>
+
+        {/* Reserve the social section's space while the configured-provider
+            lookup is in flight — which, on a free-tier cold start, is the whole
+            time the backend is booting. Without it the card sits there with no
+            sign that anything is happening and the OAuth buttons pop in seconds
+            later; a skeleton is the "it is working on it" the url-shortner login
+            screen shows in the same window. The real section still waits for the
+            answer, so a hidden button is never a lie. */}
+        {oauthProviders === null && (
+          <div className="mt-4" role="status">
+            <span className="sr-only">Loading sign-in options</span>
+            {/* Bars only, no words — the same shape the url-shortner reserves
+                its social section with. Rendering the "or continue with" divider
+                here would promise a section that may turn out not to exist. */}
+            <div aria-hidden="true" className="mb-4 flex justify-center">
+              <div className="h-4 w-32 animate-pulse rounded bg-[var(--border-subtle)]" />
+            </div>
+            <div aria-hidden="true" className="grid gap-2">
+              <div aria-hidden="true" className="h-[42px] animate-pulse rounded-lg bg-[var(--bg-surface-tint)]" />
+              <div aria-hidden="true" className="h-[42px] animate-pulse rounded-lg bg-[var(--bg-surface-tint)]" />
+            </div>
+          </div>
+        )}
 
         {oauthProviders !== null && oauthProviders.length > 0 && (
           <>

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { KnowledgeView } from "@/components/KnowledgeView"
 
@@ -9,6 +9,13 @@ function clearCookie() {
 }
 
 describe("KnowledgeView", () => {
+  beforeEach(() => {
+    // Deleting a document asks for confirmation first (as the url-shortner's
+    // destructive controls do). jsdom's confirm is unimplemented and returns
+    // undefined — read as "cancel" — so the click would never reach the API.
+    vi.spyOn(window, "confirm").mockReturnValue(true)
+  })
+
   it("loads and lists indexed documents from the API", async () => {
     render(<KnowledgeView />)
     expect(await screen.findByText("nexus-spec.pdf")).toBeInTheDocument()

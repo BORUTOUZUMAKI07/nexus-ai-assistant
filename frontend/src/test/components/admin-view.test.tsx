@@ -1,8 +1,14 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { AdminView } from "@/components/AdminView"
 
 describe("AdminView", () => {
+  beforeEach(() => {
+    // Deleting a hook policy asks first; jsdom's confirm is unimplemented and
+    // returns undefined, i.e. "cancel", so the click would stop doing anything.
+    vi.spyOn(window, "confirm").mockReturnValue(true)
+  })
+
   it("lists admin users from the admin API", async () => {
     render(<AdminView />)
     expect(await screen.findByText("Lead Administrator")).toBeInTheDocument()

@@ -118,6 +118,12 @@ export const KnowledgeView: React.FC = () => {
   };
 
   const handleDeleteFile = async (id: string) => {
+    // A document's chunks are what makes it citable, and re-uploading is the only
+    // way back — so this asks first, the way every destructive control in the
+    // url-shortner does.
+    if (!window.confirm("Delete this document? Its indexed chunks are removed and it can no longer be cited.")) {
+      return;
+    }
     setActionError(null);
     try {
       await deleteFile(id);

@@ -174,6 +174,7 @@ export const IntegrationsSettings: React.FC = () => {
   };
 
   const handleDeleteHook = async (id: string) => {
+    if (!window.confirm("Remove this webhook? Deliveries to it stop immediately.")) return;
     try {
       await deleteWebhook(id);
       toast.success("Webhook removed");

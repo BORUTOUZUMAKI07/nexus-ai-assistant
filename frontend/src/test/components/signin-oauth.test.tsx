@@ -330,4 +330,44 @@ describe("Sign-in page OAuth callback messages", () => {
     expect(screen.queryByText(/two-factor authentication is required/i)).toBeNull()
     expect(screen.queryByText(/could not complete sign-in/i)).toBeNull()
   })
+
+  it("explains a ?expired=1 sign-out", async () => {
+    // Sign-out lands here when the logout request never reached the BFF, so the
+    // cookies may survive. The flag is what lets the edge gate show this form at
+    // all (see proxy.ts) — and without a sentence, the form appears for no
+    // visible reason.
+    setSearch("?expired=1")
+    render(<SignInPage />)
+
+    expect(
+      await screen.findByText(/your session has ended/i),
+    ).toBeInTheDocument()
+  })
+})
+
+// ── the cold-start window ────────────────────────────────────────────────────
+
+describe("Sign-in page while the provider list is in flight", () => {
+  it("shows a skeleton instead of an empty gap", async () => {
+    // The provider lookup goes through the backend, so on a free-tier cold start
+    // it takes the whole boot. The page used to render nothing at all in that
+    // window — which reads as "the sign-in page has no other options" — while the
+    // url-shortner login screen reserves the space with a pulsing placeholder.
+    // The lookup is deliberately held open so the assertion runs inside it.
+    const { http, HttpResponse, delay } = await import("msw")
+    const { server } = await import("@/test/mocks/server")
+    server.use(
+      http.get("/api/auth/oauth/providers", async () => {
+        await delay("infinite")
+        return HttpResponse.json({ providers: [] })
+      }),
+    )
+
+    render(<SignInPage />)
+
+    expect(screen.getByText("Loading sign-in options")).toBeInTheDocument()
+    // The password form is usable throughout — the skeleton covers only the
+    // section that is actually waiting on the server.
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument()
+  })
 })

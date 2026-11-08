@@ -472,8 +472,11 @@ function AppPageInner() {
 
   const handleSignOut = async () => {
     // Logs out server-side: revokes the refresh token and clears both httpOnly
-    // cookies (which page scripts cannot delete themselves).
-    await clearSession();
+    // cookies (which page scripts cannot delete themselves). Awaiting it is
+    // load-bearing — navigating before the Set-Cookie lands leaves the edge gate
+    // looking at a live cookie, which is the bounce the url-shortner's sidebar
+    // documents in detail.
+    const cleared = await clearSession();
     // One clear drops the conversation, artifact and plan caches together; the
     // session list is separate state and is emptied explicitly.
     queryClient.clear();
@@ -483,7 +486,19 @@ function AppPageInner() {
     setActiveArtifact(null);
     setActiveCitation(null);
     setPendingPlan(null);
-    router.replace("/");
+    // A full navigation to /signin, not router.replace("/"):
+    //
+    // - the landing page is not where a sign-out ends, the sign-in page is;
+    // - `router.replace` keeps this tree mounted for a tick, and the cache clear
+    //   above makes every query refetch with the cookies already gone. Those 401s
+    //   fire SESSION_EXPIRED_EVENT, which opens the in-app sign-in *dialog* — the
+    //   small sign-in card that appeared over the workspace after signing out.
+    //   A real page load tears the tree down before any of that can run.
+    //
+    // If the cookies were NOT cleared (the logout request never reached the BFF),
+    // `?expired=1` is what the edge gate honours to let the form through instead
+    // of bouncing straight back into the workspace.
+    window.location.assign(cleared ? "/signin" : "/signin?expired=1");
   };
 
   const handleSelectConversation = (id: string) => {
@@ -534,6 +549,9 @@ function AppPageInner() {
         action: {
           label: "Revoke",
           onClick: () => {
+            // Access is cut for everyone holding the link, with no undo beyond
+            // sharing again — so it asks, like every other destructive control.
+            if (!window.confirm("Revoke this share link? Anyone using it loses access immediately.")) return;
             void revokeShareLinks(id)
               .then(() => toast.success("Share link revoked"))
               .catch((err) =>
@@ -551,6 +569,12 @@ function AppPageInner() {
 
   const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    // Asked before anything is touched, and after stopPropagation so a cancelled
+    // confirm does not also select the row. Same rule, and the same native prompt,
+    // as the url-shortner's destructive actions.
+    if (!window.confirm("Delete this conversation? Its messages and artifacts are removed permanently.")) {
+      return;
+    }
     try {
       await deleteConversation(id);
       // Remove from the sidebar only after the server confirms the delete.
@@ -675,6 +699,9 @@ function AppPageInner() {
   };
 
   const handleDeleteMessage = async (messageId: string) => {
+    if (!window.confirm("Delete this message? The turn is removed from the conversation permanently.")) {
+      return;
+    }
     try {
       await chat.removeMessage(messageId);
       // Deleting a turn rewrites the persisted transcript, so any cached
@@ -858,6 +885,7 @@ function AppPageInner() {
 
   const handleDeleteArtifact = async (artifact: ArtifactItem) => {
     if (artifact.version === undefined) return; // transient canvas item
+    if (!window.confirm("Delete this artifact? This cannot be undone.")) return;
     try {
       await deleteArtifact(artifact.id);
       queryClient.setQueryData<CachedArtifact[]>(

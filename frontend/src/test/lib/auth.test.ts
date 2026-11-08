@@ -37,13 +37,21 @@ describe("auth session helper", () => {
   it("clearSession posts to /api/auth/logout so httpOnly cookies are cleared server-side", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)
-    await clearSession()
+    await expect(clearSession()).resolves.toBe(true)
     expect(fetchMock).toHaveBeenCalledWith("/api/auth/logout", { method: "POST" })
   })
 
   it("clearSession never throws, even when the backend is unreachable", async () => {
+    // The return value is the second half of that promise: `false` means the
+    // cookies were never cleared, which is why sign-out then lands on
+    // /signin?expired=1 instead of a /signin the edge gate would bounce away.
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("down")))
-    await expect(clearSession()).resolves.toBeUndefined()
+    await expect(clearSession()).resolves.toBe(false)
+  })
+
+  it("clearSession reports a refused logout, not just an unreachable one", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 503 })))
+    await expect(clearSession()).resolves.toBe(false)
   })
 
   it("exposes the session-expired event name for cross-module coordination", () => {

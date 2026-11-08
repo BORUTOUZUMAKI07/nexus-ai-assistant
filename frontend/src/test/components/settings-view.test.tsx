@@ -1,8 +1,17 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { SettingsView } from "@/components/SettingsView"
 
 describe("SettingsView", () => {
+  beforeEach(() => {
+    // Both delete controls ask first (`window.confirm`), the way the
+    // url-shortner's destructive actions do. jsdom's confirm is unimplemented and
+    // returns undefined, which would read as "cancel" and leave these clicks
+    // doing nothing. Stubbed rather than avoided: the assertion below is that the
+    // delete actually proceeds *after* an accepted confirmation.
+    vi.spyOn(window, "confirm").mockReturnValue(true)
+  })
+
   it("loads agent config, BYOK keys, and persistent memories from the API", async () => {
     render(<SettingsView />)
 

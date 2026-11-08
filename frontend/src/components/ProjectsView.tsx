@@ -122,6 +122,9 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenConversation }
   };
 
   const handleDelete = (project: Project) => {
+    // Asked outside `run` so a cancelled confirm leaves no request, no spinner
+    // and no toast.
+    if (!window.confirm("Delete this project? This cannot be undone.")) return;
     void run(async () => {
       await deleteProject(project.id);
       queryClient.setQueryData<Project[]>(projectKeys.all, (prev) =>
