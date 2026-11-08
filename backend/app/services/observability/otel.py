@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import socket
+import time
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -42,6 +43,125 @@ _meter_provider: Any = None
 # `collector_endpoint_resolvable`). None means "not probed yet"; reset by
 # shutdown_otel() alongside the providers.
 _collector_resolved: bool | None = None
+
+# ── Export circuit breaker ──────────────────────────────────────────────────
+#
+# Measured in production on 2026-11-08: the collector is a Render *free* service,
+# so it sleeps when idle and its next wake-up takes ~50 s. The OTLP exporters
+# treat a 502 from Render's proxy as a transient failure, retry with backoff,
+# and report FAILURE — every 30 s, for all three signals — so an idle backend
+# filled the log with `Transient error Bad Gateway ... exporting logs/metrics/
+# spans batch` and spent a thread re-trying a service that was asleep.
+#
+# Telemetry is best-effort, so the correct response to "the collector is not
+# there" is to stop asking for a while rather than to keep retrying: after this
+# many consecutive failed exports, exports are dropped without touching the
+# network for the cool-off period, then a single probe is let through. A
+# successful probe closes the circuit and normal reporting resumes.
+_EXPORT_FAILURE_THRESHOLD = 1
+_EXPORT_COOLDOWN_SECONDS = 3600.0
+
+
+class _ExportBreaker:
+    """Shared across all three signals: there is one collector, not three.
+
+    Counting per signal would multiply the retry storm by three; counting once
+    means the first signal to notice the outage silences the other two as well.
+    """
+
+    def __init__(
+        self,
+        *,
+        threshold: int = _EXPORT_FAILURE_THRESHOLD,
+        cooldown_seconds: float = _EXPORT_COOLDOWN_SECONDS,
+        clock: Any = time.monotonic,
+    ) -> None:
+        self._threshold = threshold
+        self._cooldown = cooldown_seconds
+        self._clock = clock
+        self._failures = 0
+        self._open_until: float | None = None
+
+    def should_skip(self) -> bool:
+        """True while the cool-off is running, i.e. drop without exporting."""
+        if self._open_until is None:
+            return False
+        if self._clock() < self._open_until:
+            return True
+        # Cool-off elapsed: let exactly one export through as a probe. The
+        # failure count is deliberately *not* cleared here — when the probe
+        # fails, `record` sees the count still at the threshold and reopens the
+        # circuit immediately, instead of spending another `threshold` exports
+        # (each with the SDK's own retries) to rediscover the same outage.
+        self._open_until = None
+        return False
+
+    def record(self, ok: bool) -> None:
+        if ok:
+            self._failures = 0
+            self._open_until = None
+            return
+        self._failures += 1
+        if self._failures >= self._threshold and self._open_until is None:
+            self._open_until = self._clock() + self._cooldown
+            logger.warning(
+                "otlp_export_suspended",
+                consecutive_failures=self._failures,
+                cooldown_seconds=self._cooldown,
+                detail=(
+                    "the collector did not accept an export (a Render free "
+                    "instance returns 502 while it wakes), so exports are "
+                    "dropped without retrying until the cool-off ends"
+                ),
+            )
+
+    def reset(self) -> None:
+        self._failures = 0
+        self._open_until = None
+
+
+_collector_breaker = _ExportBreaker()
+
+
+class _CircuitBreakingExporter:
+    """Exporter decorator: drop batches while the collector is known-down.
+
+    Composition rather than subclassing: the three signal exporters derive from
+    different SDK base classes and only agree on `export` / `force_flush` /
+    `shutdown`, which is exactly the surface the SDK's processors and readers
+    use. Returning SUCCESS while dropping is deliberate — FAILURE would make the
+    SDK retry the very batch we are refusing to send.
+    """
+
+    def __init__(self, inner: Any, *, signal: str, success: Any) -> None:
+        self._inner = inner
+        self._signal = signal
+        self._success = success
+
+    def export(self, batch: Any) -> Any:
+        if _collector_breaker.should_skip():
+            return self._success
+        try:
+            result = self._inner.export(batch)
+        except Exception:  # noqa: BLE001 - telemetry must never raise upstream
+            _collector_breaker.record(False)
+            raise
+        _collector_breaker.record(result == self._success)
+        return result
+
+    def force_flush(self, *args: Any, **kwargs: Any) -> Any:
+        return self._inner.force_flush(*args, **kwargs)
+
+    def shutdown(self) -> Any:
+        return self._inner.shutdown()
+
+    def __getattr__(self, name: str) -> Any:
+        # The SDK reads attribution off the exporter itself rather than through
+        # the protocol — `PeriodicExportingMetricReader` asks for
+        # `_preferred_temporality`, and the signal exporters expose their own
+        # knobs. Composition must not hide the object it wraps, or wiring fails
+        # with an AttributeError that only shows up in production.
+        return getattr(self._inner, name)
 
 
 def _base_endpoint() -> str | None:
@@ -239,12 +359,16 @@ def setup_otlp_tracing() -> bool:
         from opentelemetry import trace
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExportResult
 
-        exporter = OTLPSpanExporter(
-            endpoint=endpoint,
-            headers=otlp_auth_headers(),
-            timeout=10,
+        exporter = _CircuitBreakingExporter(
+            OTLPSpanExporter(
+                endpoint=endpoint,
+                headers=otlp_auth_headers(),
+                timeout=10,
+            ),
+            signal="traces",
+            success=SpanExportResult.SUCCESS,
         )
         provider = TracerProvider(resource=_resource())
         provider.add_span_processor(
@@ -286,12 +410,19 @@ def setup_otlp_metrics() -> bool:
         from opentelemetry import metrics
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
         from opentelemetry.sdk.metrics import MeterProvider
-        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk.metrics.export import (
+            MetricExportResult,
+            PeriodicExportingMetricReader,
+        )
 
-        exporter = OTLPMetricExporter(
-            endpoint=endpoint,
-            headers=otlp_auth_headers(),
-            timeout=10,
+        exporter = _CircuitBreakingExporter(
+            OTLPMetricExporter(
+                endpoint=endpoint,
+                headers=otlp_auth_headers(),
+                timeout=10,
+            ),
+            signal="metrics",
+            success=MetricExportResult.SUCCESS,
         )
         reader = PeriodicExportingMetricReader(
             exporter,
@@ -339,6 +470,9 @@ def shutdown_otel() -> None:
     """
     global _tracer_provider, _meter_provider, _collector_resolved
     global _otlp_credentials_checked
+    # A fresh process (or a re-wire) starts from a clean slate: an outage that
+    # ended while we were down must not keep exports suppressed for ten minutes.
+    _collector_breaker.reset()
     tracer_provider = _tracer_provider
     meter_provider = _meter_provider
     _tracer_provider = None

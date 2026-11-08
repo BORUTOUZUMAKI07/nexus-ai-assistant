@@ -122,24 +122,23 @@ describe("ChatInput", () => {
     expect(screen.queryByTitle("Send message (Enter)")).not.toBeInTheDocument()
   })
 
-  it("allows submitting while loading so the turn can be queued", () => {
-    // The send button used to be absent while a run was in flight, so the
-    // message was unreachable. It is now present and labelled as a queue.
+  it("disables the send button while loading so a still-streaming run is not re-hit (409)", () => {
+    // A run is already in flight. The backend already rejects a second stream
+    // with 409, so the UI must disable send rather than let the user hit the
+    // guard. The message stays in the composer; the active run's `finally`
+    // starts it when it finishes.
     render(<ChatInput onSendMessage={onSendMessage} isLoading={true} onStop={onStop} />)
     const textarea = screen.getByPlaceholderText(
       "Ask Nexus anything, write code, search live web..."
     )
     fireEvent.change(textarea, { target: { value: "follow up" } })
 
-    const queueButton = screen.getByTitle("Queue message (Enter)")
-    expect(queueButton).not.toBeDisabled()
-    fireEvent.click(queueButton)
+    const sendButton = screen.getByTitle("Queue message (Enter)")
+    expect(sendButton).toBeDisabled()
+    fireEvent.click(sendButton)
 
-    expect(onSendMessage).toHaveBeenCalledWith(
-      "follow up",
-      expect.objectContaining({ agentMode: "deep" })
-    )
-    expect((textarea as HTMLTextAreaElement).value).toBe("")
+    expect(onSendMessage).not.toHaveBeenCalled()
+    expect((textarea as HTMLTextAreaElement).value).toBe("follow up")
   })
 
   it("renders queued messages and cancels one", () => {

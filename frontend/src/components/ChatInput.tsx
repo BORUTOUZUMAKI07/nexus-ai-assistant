@@ -434,7 +434,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
   };
 
   const canSend =
-    content.trim().length > 0 || attachments.length > 0 || imageDataUrl !== null;
+    (content.trim().length > 0 || attachments.length > 0 || imageDataUrl !== null) &&
+    !isLoading;
 
   return (
     <div

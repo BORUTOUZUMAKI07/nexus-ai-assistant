@@ -27,6 +27,7 @@ from typing import Any
 import structlog
 from backend.app.core.config import settings
 from backend.app.services.observability.otel import (
+    _CircuitBreakingExporter,
     collector_endpoint_resolvable,
     otlp_auth_headers,
 )
@@ -68,11 +69,19 @@ def setup_otlp_log_handler(log_level: int = logging.INFO) -> logging.Handler | N
     try:
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
         from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+        from opentelemetry.sdk._logs.export import (
+            BatchLogRecordProcessor,
+            LogExportResult,
+        )
         from opentelemetry.sdk.resources import Resource
 
-        exporter = OTLPLogExporter(
-            endpoint=endpoint, timeout=10, headers=otlp_auth_headers()
+        # Same circuit breaker as traces and metrics — one collector means one
+        # outage, so a sleeping Render instance silences all three signals from a
+        # single failure count rather than tripling the retry storm.
+        exporter = _CircuitBreakingExporter(
+            OTLPLogExporter(endpoint=endpoint, timeout=10, headers=otlp_auth_headers()),
+            signal="logs",
+            success=LogExportResult.SUCCESS,
         )
         processor = BatchLogRecordProcessor(
             exporter,
