@@ -14,7 +14,23 @@ dependencies = [
     "httpx>=0.27.0",
     
     # Database & ORM
-    "sqlmodel>=0.0.21",
+    #
+    # EXACT, not a floor. The Dockerfile installs with `pip install .`, which
+    # ignores uv.lock, so a `>=` here means the image gets whatever SQLModel is
+    # newest -- and newer releases map `datetime` to a timezone-enforcing type
+    # that rejects the naive-UTC timestamps this codebase deliberately stores
+    # (55 model fields, 84 `datetime.now(UTC).replace(tzinfo=None)` sites).
+    #
+    # Measured in production, 2026-11-08: every conversation insert failed with
+    #   StatementError: (builtins.ValueError) Datetime values must have timezone
+    #   information. Use datetime.now(timezone.utc), or annotate the field with
+    #   NaiveDatetime for naive storage.
+    # raised from sqlmodel/sql/sqltypes.py *in the image* -- a file that does not
+    # contain that check in the 0.0.42 the whole test suite runs against. So the
+    # deployed build was a different version from the tested one: SIGN-IN worked
+    # (existing rows, no insert) and the first message of every chat returned a
+    # bare 500.
+    "sqlmodel==0.0.42",
     "alembic>=1.13.0",
     # Mako is alembic's template engine, reached transitively. Declared
     # directly because CVE-2026-102991 (a Windows drive-letter path traversal

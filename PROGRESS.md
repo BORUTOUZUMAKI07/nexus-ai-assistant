@@ -12,6 +12,21 @@ contain this one. Anything that only exists in chat is lost at handoff.
 ## Current State
 
 - **Last updated:** 2026-11-07
+- **The chat 500 is explained and fixed: SQLModel version drift (2026-11-08).**
+  The Render log for the failing "hi" request shows `StatementError: Datetime
+  values must have timezone information` on `INSERT INTO conversations`, i.e. a
+  naive-UTC timestamp rejected at bind. The app is naive-UTC by design (55 model
+  fields, 84 `.replace(tzinfo=None)` sites) and the local venv + `uv.lock` are on
+  sqlmodel 0.0.42, where that check does not exist. `backend/Dockerfile` installs
+  with `pip install .`, which ignores uv.lock, and pyproject asked for
+  `sqlmodel>=0.0.21` — so the image resolved a newer release and the deployed
+  build was not the tested one. Pinned `sqlmodel==0.0.42`, re-locked, and added
+  three guards to `tests/test_dependency_floors.py` (exact requirement, lock
+  agrees, installed version equals the pin). `tests/test_dependency_floors.py`
+  5 passed. **Not yet verified: the Render redeploy.** It takes effect only on
+  the next image build, which pins the version.
+  Earlier notes in this file blamed the chat failure on a cold start; that was
+  wrong — `/health` answered throughout and the failure was a deterministic 500.
 - **Frontend parity pass with the url-shortner (2026-11-07).** Read its `login`,
   `proxy`, `sidebar` and `api-keys` sources line by line and took the four gaps
   they expose: (1) the OAuth section had no loading state, so on a cold start the

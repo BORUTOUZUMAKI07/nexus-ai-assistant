@@ -4142,7 +4142,7 @@ requires-dist = [
     { name = "qdrant-client", extras = ["fastembed"], specifier = ">=1.9.0" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
     { name = "redis", specifier = ">=5.0.0" },
-    { name = "sqlmodel", specifier = ">=0.0.21" },
+    { name = "sqlmodel", specifier = "==0.0.42" },
     { name = "structlog", specifier = ">=24.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]

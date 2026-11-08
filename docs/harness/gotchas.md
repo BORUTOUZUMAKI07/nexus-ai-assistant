@@ -2401,6 +2401,42 @@
       breakers, SSE reconnect backoff; P3 is HttpOnly-cookie token delivery,
       security headers, and uniform structured auth audit events.
 
+52. **A `>=` floor is not a version — the image ran a SQLModel this repo never
+    tested, and every chat 500'd.** Measured in production on 2026-11-08:
+
+    ```
+    POST /api/v1/conversations/new/stream  -> 500
+    StatementError: (builtins.ValueError) Datetime values must have timezone
+      information. Use datetime.now(timezone.utc), or annotate the field with
+      NaiveDatetime for naive storage.
+    [SQL: INSERT INTO conversations (..., created_at, updated_at) VALUES
+      (..., $11::TIMESTAMP WITH TIME ZONE, $12::TIMESTAMP WITH TIME ZONE)]
+    ```
+
+    The app stores **naive UTC on purpose** — 55 model `datetime` fields default
+    to `datetime.now(UTC).replace(tzinfo=None)` and 84 sites do the same
+    explicitly, with ordering tie-breaks that depend on both sides being naive.
+    Newer SQLModel maps `datetime` to a timezone-enforcing type and rejects
+    those values on bind. The local venv and `uv.lock` were both on `0.0.42`
+    (which has no such check — the raising file/line in the traceback does not
+    exist there), but `backend/Dockerfile` installs with `pip install .`,
+    **ignoring uv.lock**, and `pyproject.toml` asked for `sqlmodel>=0.0.21`.
+    So the image resolved the newest release, and the deployed code was a
+    different version from the code under test: sign-in kept working (it reads
+    existing rows) while the first message of every new chat failed with no
+    detail in the UI.
+
+    The fix is an exact pin (`sqlmodel==0.0.42`) plus three guards in
+    `tests/test_dependency_floors.py`: the declared requirement is `==`, uv.lock
+    carries the same pin, and the **installed** version equals it — because a
+    pin that the test venv does not share only documents the divergence.
+
+    The generalisable rule: any dependency whose *behaviour around our data*
+    matters (type mapping, datetime handling, serialization) must be pinned
+    exactly, not floored, for as long as the Dockerfile installs from pyproject
+    metadata rather than the lock. When the codebase moves to timezone-aware
+    timestamps this pin can relax to a floor again — not before.
+
 ## 9b. Already solved — do not re-propose
 
 Bounded revision loop with force-accept; LLM retry/empty-response handling +
