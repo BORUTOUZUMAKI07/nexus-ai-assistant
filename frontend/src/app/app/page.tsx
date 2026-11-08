@@ -180,10 +180,12 @@ function AppPageInner() {
   // layout is unchanged) and only translates off-canvas under `md`.
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
-  const [currentModel, setCurrentModel] = useState<string>(DEFAULT_MODEL_ID);
-  // Set the moment the user (or the command palette) picks a model in this
-  // session, so the saved default can never overwrite a deliberate choice.
-  const [modelChosenHere, setModelChosenHere] = useState(false);
+  // The model the user (or the command palette) picked in this session, or null
+  // while they have not picked one. `currentModel` below is *derived* from this
+  // plus the saved default: it used to be a second piece of state written from
+  // an effect, which meant a cascading render on every mount and two sources of
+  // truth for one string.
+  const [pickedModel, setPickedModel] = useState<string | null>(null);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   // A conversation's messages are fetched by the chat hook, not here. See the
@@ -258,13 +260,19 @@ function AppPageInner() {
   // undefined; a fresh array each render would invalidate `allArtifacts` and
   // (more visibly) churn every consumer of it on no actual change.
   const savedArtifacts = useMemo(() => artifactsQuery.data ?? [], [artifactsQuery.data]);
-  const allArtifacts = useMemo(() => {
-    const savedIds = new Set(savedArtifacts.map((a) => a.id));
-    return [
-      ...savedArtifacts,
-      ...sessionArtifacts.filter((a) => !savedIds.has(a.id)),
-    ];
-  }, [savedArtifacts, sessionArtifacts]);
+  const savedArtifactIds = useMemo(
+    () => new Set(savedArtifacts.map((a) => a.id)),
+    [savedArtifacts],
+  );
+  // Saved first, then this session's unsaved ones. Deliberately not wrapped in
+  // `useMemo`: the React Compiler is enabled (`next.config.ts` `reactCompiler`),
+  // and it refuses to compile the whole component when a hand-written memo's
+  // dependencies are not the ones it infers — which was a hard lint error. It
+  // memoises this value itself, from the same inputs, once it can compile.
+  const allArtifacts = [
+    ...savedArtifacts,
+    ...sessionArtifacts.filter((a) => !savedArtifactIds.has(a.id)),
+  ];
 
   const plansQuery = usePlans(activeConversationId, mounted && !isAuthOpen);
   const planHistory = plansQuery.data ?? [];
@@ -274,16 +282,14 @@ function AppPageInner() {
   // Apply it once, on hydration, and only while the user has not picked a model
   // themselves. A legacy stored slug is canonicalised to its router group.
   const settingsQuery = useSettingsQuery(mounted && !isAuthOpen);
-  useEffect(() => {
-    if (modelChosenHere) return;
-    const saved = canonicalModelId(settingsQuery.data?.default_model);
-    if (saved) setCurrentModel(saved);
-  }, [settingsQuery.data, modelChosenHere]);
+  // A deliberate choice this session always wins over the saved default, and the
+  // default only exists once the settings query resolves — both are properties
+  // of the current render, so this is a derivation. A legacy stored slug is
+  // canonicalised to its router group.
+  const currentModel =
+    pickedModel ?? canonicalModelId(settingsQuery.data?.default_model) ?? DEFAULT_MODEL_ID;
 
-  const chooseModel = useCallback((model: string) => {
-    setModelChosenHere(true);
-    setCurrentModel(model);
-  }, []);
+  const chooseModel = useCallback((model: string) => setPickedModel(model), []);
 
   const chat = useNexusChat({
     conversationId: activeConversationId || undefined,
@@ -433,7 +439,7 @@ function AppPageInner() {
       .catch((err) => {
         console.warn("Could not create conversation:", err);
       });
-  }, [currentModel, clearMessages, queryClient]);
+  }, [currentModel, clearMessages, queryClient, setActiveCitation]);
 
   // Seed the active conversation once the list has actually loaded: select the
   // most recent, or create a first one when the account genuinely has none.
