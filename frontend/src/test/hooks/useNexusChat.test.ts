@@ -104,29 +104,48 @@ describe("useNexusChat", () => {
     expect(result.current.messages[0].content).toBe("Hello!")
   })
 
-  it("concatenates multiple text deltas in order", async () => {
-    // Every existing fixture sends a single `0:` frame, so nothing covered the
-    // case that actually happens in production: a real answer arrives as dozens
-    // of deltas. If the reader replaced content instead of appending, a
-    // single-delta test would still pass and the user would see only the last
-    // token of every sentence.
+  it("treats a 409 as 'still streaming' instead of a failed turn", async () => {
     server.use(
       http.post("/api/chat", () =>
-        new HttpResponse(
-          chatStreamBody(["Hello", ", ", "this ", "is ", "Nexus."]),
-          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        HttpResponse.json(
+          { detail: "This conversation is already streaming. Please wait for it to finish." },
+          { status: 409 }
         )
       )
     )
     const { result } = renderHook(() => useNexusChat())
 
     await act(async () => {
-      await result.current.sendMessage("Hello!")
+      await result.current.sendMessage("second question")
     })
-
     await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    // The turn never started, so no empty assistant bubble is left behind.
+    expect(result.current.messages).toEqual([])
+    // The composer got the text back and nothing is reported as an error: the
+    // run is recoverable — the hook re-attaches to the server's still-running one.
+    expect(result.current.input).toBe("second question")
+    expect(result.current.error).toBeNull()
+  })
+
+  it("surfaces the backend's explanation on a failed turn", async () => {
+    server.use(
+      http.post("/api/chat", () =>
+        HttpResponse.json({ detail: "Quota exceeded. Free tier limits reached." }, { status: 500 })
+      )
+    )
+    const { result } = renderHook(() => useNexusChat())
+
+    await act(async () => {
+      await result.current.sendMessage("hello")
+    })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(result.current.error?.message).toContain("Quota exceeded. Free tier limits reached.")
+    // The turn never started, so no assistant bubble survived.
     const assistant = result.current.messages.find((m) => m.role === "assistant")
-    expect(assistant?.content).toBe("Hello, this is Nexus.")
+    expect(assistant?.content).toBe("")
+    expect(assistant?.id).toMatch(/^msg-/)
   })
 
   it("reassembles a frame split across two network chunks", async () => {

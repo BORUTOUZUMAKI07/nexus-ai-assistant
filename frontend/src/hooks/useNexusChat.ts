@@ -230,6 +230,34 @@ function forgetRun(conversationId: string | null) {
   }
 }
 
+/**
+ * An error that carries the backend's own explanation.
+ *
+ * `statusText` is the HTTP reason phrase — "Conflict", "Bad Request" — which
+ * told the user nothing about what to do. The API puts a sentence in `detail`
+ * ("This conversation is already streaming. Please wait for it to finish."), so
+ * read it when it is there and fall back to the status line otherwise.
+ */
+async function chatErrorFromResponse(response: Response): Promise<Error> {
+  let detail = response.statusText;
+  try {
+    const body: unknown = await response.json();
+    if (
+      body &&
+      typeof body === "object" &&
+      "detail" in body &&
+      typeof (body as { detail: unknown }).detail === "string"
+    ) {
+      detail = (body as { detail: string }).detail;
+    }
+  } catch {
+    // Not JSON, or already consumed: the status line is still honest.
+  }
+  return new Error(
+    detail ? `Chat API error ${response.status}: ${detail}` : `Chat API error: ${response.statusText}`
+  );
+}
+
 function readRun(conversationId: string): string | null {
   if (!conversationId) return null;
   try {
@@ -556,6 +584,10 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
        * that silently loses the ability to recover.
        */
       let rememberedUnder: string | null = null;
+      // Set when the backend answered 409: a run it still owns is streaming, and
+      // this turn never started. Read by `finally` to choose re-attachment over
+      // draining the queue.
+      let conflicted = false;
       /**
        * Whether this turn asked for human approval. Until it is resolved the
        * answer has not been persisted, so there are no row ids to adopt and a
@@ -643,8 +675,26 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           }),
         });
 
+        if (response.status === 409) {
+          // The backend still holds this conversation's stream slot. That is not
+          // a failed turn: a local Stop aborts *our* socket, never the server's
+          // run, so the next send lands while that run is still executing.
+          //
+          // This turn was never started, so its optimistic bubbles are removed
+          // rather than left as an empty answer, the text goes back into the
+          // composer, and `finally` re-attaches to the run that is still
+          // producing — the same hydrate-and-rejoin path a page reload uses, so
+          // the arriving answer is shown instead of an error.
+          conflicted = true;
+          updateMessages((prev) =>
+            prev.filter((m) => m.id !== userMsgId && m.id !== assistantMsgId)
+          );
+          setInput((prev) => (prev ? prev : trimmed));
+          setStatusLabel("The previous answer is still running — reconnecting…");
+          return;
+        }
         if (!response.ok || !response.body) {
-          throw new Error(`Chat API error: ${response.statusText}`);
+          throw await chatErrorFromResponse(response);
         }
 
         const runId = readRunId(response);
@@ -734,6 +784,17 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         setIsLoading(false);
         loadingRef.current = false;
         abortRef.current = null;
+        if (conflicted) {
+          // Deliberately does not drain the queue: the backend slot is still
+          // held by the other run, so starting the next queued turn now would
+          // 409 again and loop. Re-attach instead, which is the only action that
+          // shows the user what is actually happening. The queue survives — its
+          // entries are still in `queuedRef` — and drains after the next run
+          // that does start.
+          const target = conversationId;
+          if (target) void hydrateThenRejoinRef.current?.(target);
+          return;
+        }
         // Advance the queue, if any. This is the single place a run releases the
         // slot, so it is the single place the next turn may start; releasing it
         // in `stop()` instead would race an aborted run's own teardown.
