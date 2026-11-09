@@ -622,9 +622,12 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       // `coalescePatches`: the patch carries the whole answer, so coalescing
       // drops nothing, and `flush` below guarantees the last text lands even when
       // the stream ends without a frame to paint it.
+      // Text deltas paint immediately (no RAF batching) so tokens stream as
+      // fast as the backend emits them. Annotation frames (tool calls,
+      // citations, HITL) are infrequent enough that immediate apply is fine.
       const assistantPatcher = coalescePatches((content, annos) =>
         patchMessage(assistantMsgId, content, annos)
-      );
+      , { immediate: true });
       const patchAssistant = assistantPatcher.patch;
 
       try {

@@ -51,11 +51,11 @@ logger = structlog.get_logger(__name__)
 SUBSCRIBER_QUEUE_SIZE = 1000
 
 # Frames buffered before a flush is forced, independent of the timer.
-DEFAULT_BATCH_SIZE = 64
+DEFAULT_BATCH_SIZE = 16
 
 # How long a batch may sit unflushed. This is the worst-case delay between a
 # frame being emitted and being replayable, and it is why the broker path exists.
-DEFAULT_FLUSH_INTERVAL_SECONDS = 0.25
+DEFAULT_FLUSH_INTERVAL_SECONDS = 0.05
 
 # How long a reader waits for a live frame before re-checking the database.
 # Only matters when the broker dropped frames or the reader is between runs.

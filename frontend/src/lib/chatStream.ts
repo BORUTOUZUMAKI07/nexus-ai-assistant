@@ -54,12 +54,21 @@ import type {
  * (including on abort or error) rather than relying on a frame callback that may
  * never fire while the tab is in the background.
  */
-export function coalescePatches(apply: ChatStreamSink["patch"]): {
+export interface CoalesceOptions {
+  /** When true, skip RAF batching and apply each patch immediately. */
+  immediate?: boolean;
+}
+
+export function coalescePatches(
+  apply: ChatStreamSink["patch"],
+  options: CoalesceOptions = {}
+): {
   patch: ChatStreamSink["patch"];
   flush: () => void;
 } {
   let pending: { content: string; annotations: NexusAnnotation[] } | null = null;
   let frame: number | null = null;
+  const immediate = options.immediate ?? false;
 
   const flush = () => {
     if (frame !== null) {
@@ -73,6 +82,12 @@ export function coalescePatches(apply: ChatStreamSink["patch"]): {
   };
 
   const patch: ChatStreamSink["patch"] = (content, annotations) => {
+    // Text deltas and other immediate patches bypass RAF batching so tokens
+    // paint as they arrive instead of waiting for the next animation frame.
+    if (immediate) {
+      apply(content, annotations);
+      return;
+    }
     pending = { content, annotations };
     if (frame !== null) return;
     // No `requestAnimationFrame` outside a browser (a test runner without a

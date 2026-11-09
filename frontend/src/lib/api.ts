@@ -291,7 +291,7 @@ const REFRESH_WAIT_MS = 5000;
  * The cost is one extra heartbeat interval of latency on a refresh that happens
  * roughly once an hour, in exchange for correctness.
  */
-const REFRESH_ELECTION_MS = 150;
+const REFRESH_ELECTION_MS = 50;
 /** How often the leader re-announces that it still holds the lock. */
 const REFRESH_BEAT_MS = 50;
 /** How long a leader may hold the claim before followers assume it died. */
