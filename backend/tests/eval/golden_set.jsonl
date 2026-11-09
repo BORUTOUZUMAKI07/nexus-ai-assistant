@@ -1,0 +1,11 @@
+# Golden dataset for LLM-as-judge regression gate.
+#
+# Each line is a JSON object: {question, expected_keywords, min_overall_score}.
+# The regression gate runs each question through the assistant and scores the
+# answer with the judge model. Fails if any score drops below min_overall_score.
+
+{"question": "What is the capital of France?", "expected_keywords": ["Paris"], "min_overall_score": 0.9}
+{"question": "Explain photosynthesis in one sentence.", "expected_keywords": ["plants", "sunlight", "energy"], "min_overall_score": 0.85}
+{"question": "Write a Python function to reverse a string.", "expected_keywords": ["def", "return", "string"], "min_overall_score": 0.8}
+{"question": "What is 2+2?", "expected_keywords": ["4"], "min_overall_score": 0.95}
+{"question": "Summarize the concept of RAG in two sentences.", "expected_keywords": ["retrieval", "augmented", "generation"], "min_overall_score": 0.85}

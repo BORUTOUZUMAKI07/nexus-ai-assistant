@@ -342,6 +342,7 @@ def _timeout(run_timeout: float, idle_timeout: float | None = None) -> TimeoutPo
 #: not three.
 TIMEOUTS: Final[dict[str, TimeoutPolicy]] = {
     "bootstrap": _timeout(30.0),
+    "model_router": _timeout(15.0),
     "planner": _timeout(120.0),
     "tree_of_thoughts": _timeout(300.0),
     "orchestrator": _timeout(300.0),

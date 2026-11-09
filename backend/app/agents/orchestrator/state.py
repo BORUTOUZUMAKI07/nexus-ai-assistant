@@ -89,9 +89,12 @@ class AgentState(TypedDict):
     # Model selection (user-facing picker). `model` is the caller's requested
     # synthesis group (`fast_chat` / `complex_reasoning`), whitelisted before it
     # reaches the router. `answer_model` is what actually answered, so the
-    # transcript can report a fallback instead of the label the user picked.
     model: str | None
     answer_model: str
+    model_group: str | None  # fast_chat | complex_reasoning (auto-routed)
+    model_confidence: float | None  # router confidence 0..1
+    model_reason: str | None  # router rationale
+    model_estimated_cost_usd: float | None  # cost estimate for this turn
 
     # Exact prompt assembly for this turn, written by the synthesizer.
     #

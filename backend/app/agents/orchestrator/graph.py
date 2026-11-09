@@ -27,6 +27,7 @@ except ImportError:
     AsyncPostgresSaver = None
 
 from backend.app.agents.orchestrator.artifact_node import artifact_node
+from backend.app.agents.orchestrator.model_router import route
 from backend.app.agents.orchestrator.nodes import (
     bootstrap_node,
     critic_grader_node,
@@ -51,6 +52,25 @@ logger = structlog.get_logger(__name__)
 
 # ─── Module-level compiled graph (initialised at lifespan) ───────────────────
 _compiled_graph: Any | None = None
+
+
+def model_router_node(state: AgentState) -> dict:
+    """Auto-route each turn to fast_chat vs complex_reasoning based on task
+    complexity, unless the user explicitly picked a group via the picker."""
+    user_message = ""
+    if state.get("messages"):
+        last = state["messages"][-1]
+        user_message = getattr(last, "content", "") or ""
+
+    decision = route(user_message, preferred_group=state.get("model"))
+    return {
+        "answer_model": decision.model,
+        # Store decision for observability / cost display
+        "model_group": decision.group,
+        "model_confidence": decision.confidence,
+        "model_reason": decision.reason,
+        "model_estimated_cost_usd": decision.estimated_cost_usd,
+    }
 
 
 def _safety_short_circuited(state: AgentState) -> bool:
@@ -192,6 +212,7 @@ def _build_workflow() -> StateGraph:
     # registration check at the bottom of this function enforces the first, and
     # tests/test_node_policies.py enforces the second.
     _add(workflow, "bootstrap", bootstrap_node)
+    _add(workflow, "model_router", model_router_node)
     _add(workflow, "planner", planner_node)
     _add(workflow, "tree_of_thoughts", tree_of_thoughts_node)
     _add(workflow, "orchestrator", orchestrator_node)
@@ -213,7 +234,8 @@ def _build_workflow() -> StateGraph:
 
     # Edges
     workflow.add_edge(START, "bootstrap")
-    workflow.add_edge("bootstrap", "planner")
+    workflow.add_edge("bootstrap", "model_router")
+    workflow.add_edge("model_router", "planner")
     workflow.add_conditional_edges(
         "planner",
         route_after_planner,
