@@ -1,4 +1,5 @@
 import time
+from typing import Any
 
 import redis.asyncio as redis
 from backend.app.core.config import settings
@@ -91,6 +92,74 @@ class RedisService(ICacheService):
         except Exception:
             # No pipelined fallback: a non-atomic fallback could double-count.
             # Surface the error so callers can degrade (fail-open) explicitly.
+            raise
+
+    async def rotate_refresh_token(
+        self,
+        jti: str,
+        ttl_seconds: int,
+        grace_window_seconds: int,
+        race_response: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Atomically rotate a single-use refresh token via a Lua script.
+
+        Returns a dict with one of:
+          {"action": "first_use"}        -- key was absent, we claimed it
+          {"action": "race_replay", "data": str} -- jti already used, race response cached
+          {"action": "theft"}            -- jti already used, no race response (stolen token)
+
+        The script guarantees that only one caller wins the SETNX, eliminating
+        the race between `set_if_absent` and `_store_replay_response` that
+        existed when they were separate Redis round-trips.
+        """
+        import json as _json
+
+        script = """
+        local used_key = KEYS[1]
+        local race_key = KEYS[2]
+        local ttl = tonumber(ARGV[1])
+        local grace = tonumber(ARGV[2])
+        local race_json = ARGV[3]
+
+        local existing = redis.call('GET', used_key)
+        if existing then
+            -- Already consumed: check if the winner published a race response
+            local cached = redis.call('GET', race_key)
+            if cached then
+                return {1, cached}
+            end
+            return {1, nil}
+        end
+
+        -- First use: claim the jti
+        redis.call('SET', used_key, '1', 'EX', ttl)
+
+        -- If a race response was provided, publish it for the loser
+        if race_json and #race_json > 0 then
+            redis.call('SET', race_key, race_json, 'EX', grace)
+        end
+
+        return {0, nil}
+        """
+        try:
+            result = await self.client.eval(
+                script,
+                2,
+                f"refresh:used:{jti}",
+                f"refresh:race:{jti}",
+                ttl_seconds,
+                grace_window_seconds,
+                race_response or "",
+            )
+            action = int(result[0])
+            data = result[1]
+            if action == 0:
+                return {"action": "first_use"}
+            if data:
+                return {"action": "race_replay", "data": data}
+            return {"action": "theft"}
+        except Exception:
             raise
 
 

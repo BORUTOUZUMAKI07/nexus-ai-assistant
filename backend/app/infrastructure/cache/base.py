@@ -3,6 +3,7 @@ Abstract Cache Service Interface.
 Enforces Interface Segregation, Open/Closed, and Dependency Inversion principles for cache and state backends.
 """
 from abc import ABC, abstractmethod
+from typing import Any
 
 
 class ICacheService(ABC):
@@ -58,4 +59,21 @@ class ICacheService(ABC):
         cost: int = 1,
     ) -> tuple[bool, int]:
         """Check and consume rate limit tokens. Returns (is_allowed, remaining_tokens)."""
+        pass
+
+    @abstractmethod
+    async def rotate_refresh_token(
+        self,
+        jti: str,
+        ttl_seconds: int,
+        grace_window_seconds: int,
+        race_response: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically rotate a single-use refresh token via Lua script.
+
+        Returns {"action": "first_use"} when the jti was absent and claimed,
+        {"action": "race_replay", "data": str} when already used but a race
+        response is cached, or {"action": "theft"} when already used with no
+        cached response (stolen token).
+        """
         pass

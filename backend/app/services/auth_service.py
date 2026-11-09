@@ -45,13 +45,6 @@ logger = structlog.get_logger(__name__)
 _REFRESH_REVOKED_PREFIX = "refresh:revoked:"
 
 # How long a duplicate refresh waits for the in-flight winner to publish its
-# tokens before concluding the replay was a theft, and how often it looks. The
-# wait is a sub-window of REFRESH_REUSE_GRACE_SECONDS on purpose: the winner has
-# one user lookup and one cache write left to do, so this is generous, but it
-# still stops a stolen token from parking a request open for the whole window.
-_REPLAY_PUBLISH_WAIT_SECONDS = 3.0
-_REPLAY_POLL_SECONDS = 0.05
-
 # The password-reset route only needs the mail-send to complete synchronously in
 # local dev, where it returns a dev link the UI follows. In production the send
 # is fire-and-forget so the known-address and unknown-address branches take
@@ -473,6 +466,10 @@ class AuthService:
         first exchange already issued. Outside that window it is a replay, and
         with ``REFRESH_REVOKE_ON_REUSE`` on (the default) it revokes the token's
         family -- one sign-in, not the user's other devices.
+
+        Rotation is atomic via a Lua script in Redis: the single ``SETNX`` on
+        ``refresh:used:{jti}`` guarantees exactly one winner, eliminating the
+        race window between claiming the jti and publishing the replay response.
         """
         payload = decode_token(refresh_token_str)
         if payload.get("type") != "refresh":
@@ -495,52 +492,11 @@ class AuthService:
         if await self._is_refresh_family_revoked(user_id, family_id=family_id or None):
             raise AuthenticationError("Session has been revoked. Please sign in again.")
 
-        # Single-use guard: mark this refresh token jti as consumed in Redis.
-        # If it was already redeemed, refuse the exchange (reuse detection).
         ttl_seconds = max(1, int(payload["exp"]) - int(time.time()))
-        first_use = await get_cache_service().set_if_absent(
-            f"refresh:used:{jti}", "1", ttl_seconds=ttl_seconds
-        )
-        if not first_use:
-            # This jti was already redeemed. Two very different situations look
-            # identical here, and telling them apart is the whole problem:
-            #
-            #   * A race. The same cookie was sent twice within a second or two --
-            #     two tabs waking together, or a client retrying. The first
-            #     exchange already succeeded, so this one is redundant, not
-            #     hostile. Serving the identical response again is correct and
-            #     leaks nothing: the caller already holds this exact token.
-            #   * A replay. A captured token presented later to establish a
-            #     parallel session. That is theft and is treated as such.
-            #
-            # The window is what separates them. A genuine attacker racing the
-            # owner inside the window is a far smaller risk than logging honest
-            # users out of every device they own, which is what this did before.
-            # The winner may still be mid-exchange -- it only writes its result
-            # after the user lookup and signing. So losing the SETNX does not yet
-            # mean the exchange finished; _replay_response waits briefly for the
-            # in-flight winner to publish before we conclude anything.
-            replayed = await self._replay_response(jti)
-            if replayed is not None:
-                logger.info(
-                    "refresh_replay_within_grace_window",
-                    user_id=str(user_id),
-                    jti=jti,
-                )
-                return replayed
 
-            # Never published, or published too long ago to be that same
-            # exchange. Treat as theft.
-            logger.warning(
-                "refresh_token_reuse_detected",
-                user_id=str(user_id),
-                jti=jti,
-                has_family=bool(family_id),
-            )
-            if settings.REFRESH_REVOKE_ON_REUSE:
-                await self._revoke_refresh_family(user_id, family_id=family_id or None)
-            raise AuthenticationError("Refresh token has already been used.")
-
+        # Do the idempotent work first (user lookup + token creation). If we lose
+        # the atomic rotation race, we discard these and return the cached
+        # response instead -- no harm done.
         user = await self._repo.get_by_id(user_id)
         if not user or not user.is_active:
             raise AuthenticationError("User not found or inactive.")
@@ -560,81 +516,63 @@ class AuthService:
         response = TokenResponse(
             access_token=access_token,
             refresh_token=new_refresh,
-            token_type="bearer",  # nosec B106
+            token_type="bearer",
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             refresh_expires_in=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         )
 
-        # Publish the result so a racing duplicate of this very request can be
-        # answered with the same tokens instead of being treated as a theft.
-        # Only kept for the grace window, so a stolen token cannot lean on it
-        # later.
-        await self._store_replay_response(jti, response)
-        return response
+        race_response_json = json.dumps(
+            {
+                "access_token": response.access_token,
+                "refresh_token": response.refresh_token,
+                "expires_in": response.expires_in,
+                "refresh_expires_in": response.refresh_expires_in,
+            }
+        )
 
-    async def _store_replay_response(
-        self, jti: str, response: TokenResponse
-    ) -> None:
-        """Cache a rotation result for the length of the grace window."""
-        window = settings.REFRESH_REUSE_GRACE_SECONDS
-        if window <= 0:
-            return
-        try:
-            await get_cache_service().set(
-                f"refresh:race:{jti}",
-                json.dumps(
-                    {
-                        "access_token": response.access_token,
-                        "refresh_token": response.refresh_token,
-                        "expires_in": response.expires_in,
-                        "refresh_expires_in": response.refresh_expires_in,
-                    }
-                ),
-                ttl_seconds=window,
+        # Atomic rotation: exactly one caller wins the SETNX on refresh:used:{jti}.
+        result = await get_cache_service().rotate_refresh_token(
+            jti=jti,
+            ttl_seconds=ttl_seconds,
+            grace_window_seconds=settings.REFRESH_REUSE_GRACE_SECONDS,
+            race_response=race_response_json,
+        )
+        action = result["action"]
+
+        if action == "first_use":
+            # We won the rotation. Our tokens are the authoritative ones.
+            return response
+
+        if action == "race_replay":
+            # We lost the race but the winner published its response within the
+            # grace window. Return it -- this is a duplicate tab/retry, not theft.
+            cached = json.loads(result["data"])
+            logger.info(
+                "refresh_replay_within_grace_window",
+                user_id=str(user_id),
+                jti=jti,
             )
-        except Exception as exc:  # pragma: no cover - defensive
-            # A cache outage must not block a legitimate refresh. The cost is
-            # that a racing duplicate is refused instead of served, which is the
-            # behaviour that existed before the grace window existed at all.
-            logger.warning(
-                "refresh_race_cache_failed", jti=jti, error=type(exc).__name__
+            return TokenResponse(
+                access_token=cached["access_token"],
+                refresh_token=cached["refresh_token"],
+                token_type="bearer",
+                expires_in=cached["expires_in"],
+                refresh_expires_in=cached["refresh_expires_in"],
             )
 
-    async def _replay_response(self, jti: str) -> TokenResponse | None:
-        """Return the tokens an earlier exchange of this ``jti`` produced, or None.
+        # action == "theft": jti already used, no race response cached. This is
+        # a captured token presented outside the grace window -- treat as theft.
+        logger.warning(
+            "refresh_token_reuse_detected",
+            user_id=str(user_id),
+            jti=jti,
+            has_family=bool(family_id),
+        )
+        if settings.REFRESH_REVOKE_ON_REUSE:
+            await self._revoke_refresh_family(user_id, family_id=family_id or None)
+        raise AuthenticationError("Refresh token has already been used.")
 
-        Losing the single-use guard does not tell us *when* the winning exchange
-        happened -- it may still be running. So this polls for a bounded moment
-        before giving up: the winner has only a user lookup and one cache write
-        to do, which is milliseconds, but a slow database must not turn the
-        duplicate into a logout. The bound is deliberately shorter than the grace
-        window so a real attacker replaying a stolen token cannot park a request
-        open for the full window and amplify load.
-
-        None means the caller must treat the replay as a theft. The ``jti`` is
-        unguessable and the entry is bound to that exact token, so this can only
-        ever be answered by a duplicate of the request that wrote it.
-        """
-        window = settings.REFRESH_REUSE_GRACE_SECONDS
-        if window <= 0:
-            return None
-        deadline = time.monotonic() + min(window, _REPLAY_PUBLISH_WAIT_SECONDS)
-        while True:
-            response = await self._read_replay_response(jti)
-            if response is not None:
-                return response
-            if time.monotonic() >= deadline:
-                return None
-            await asyncio.sleep(_REPLAY_POLL_SECONDS)
-
-    async def _read_replay_response(self, jti: str) -> TokenResponse | None:
-        """One non-blocking read of the published rotation result for ``jti``."""
-        try:
-            raw = await get_cache_service().get(f"refresh:race:{jti}")
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "refresh_race_cache_failed", jti=jti, error=type(exc).__name__
-            )
+    async def _revoke_refresh_family(
             return None
         if not raw:
             return None
