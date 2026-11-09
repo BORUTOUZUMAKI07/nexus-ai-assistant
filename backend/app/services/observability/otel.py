@@ -143,11 +143,11 @@ class _CircuitBreakingExporter:
         if hasattr(inner, "force_flush"):
             setattr(self, "force_flush", inner.force_flush)
 
-    def export(self, batch: Any) -> Any:
+    def export(self, batch: Any, **kwargs: Any) -> Any:
         if _collector_breaker.should_skip():
             return self._success
         try:
-            result = self._inner.export(batch)
+            result = self._inner.export(batch, **kwargs)
         except Exception:  # noqa: BLE001 - telemetry must never raise upstream
             _collector_breaker.record(False)
             raise
