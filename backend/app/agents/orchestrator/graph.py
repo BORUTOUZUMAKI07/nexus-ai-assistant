@@ -56,13 +56,31 @@ _compiled_graph: Any | None = None
 
 def model_router_node(state: AgentState) -> dict:
     """Auto-route each turn to fast_chat vs complex_reasoning based on task
-    complexity, unless the user explicitly picked a group via the picker."""
+    complexity, unless the user explicitly picked a group via the picker.
+    Also compacts older conversation turns into a summary when the history
+    exceeds the compaction threshold (context window management)."""
+
     user_message = ""
-    if state.get("messages"):
-        last = state["messages"][-1]
+    messages = state.get("messages", [])
+    if messages:
+        last = messages[-1]
         user_message = getattr(last, "content", "") or ""
 
     decision = route(user_message, preferred_group=state.get("model"))
+
+    # Context compaction: if history exceeds COMPACT_AFTER_TURNS turns, summarize
+    # older turns into a single summary message and keep only the recent window.
+    # This prevents context-window exhaustion on long threads.
+    compact_result = _maybe_compact(messages)
+    if compact_result:
+        return {**compact_result, **{
+            "answer_model": decision.model,
+            "model_group": decision.group,
+            "model_confidence": decision.confidence,
+            "model_reason": decision.reason,
+            "model_estimated_cost_usd": decision.estimated_cost_usd,
+        }}
+
     return {
         "answer_model": decision.model,
         # Store decision for observability / cost display
@@ -71,6 +89,61 @@ def model_router_node(state: AgentState) -> dict:
         "model_reason": decision.reason,
         "model_estimated_cost_usd": decision.estimated_cost_usd,
     }
+
+
+_COMPACT_AFTER_TURNS = 20
+_COMPACT_KEEP_LAST = 8
+
+
+def _maybe_compact(messages: list) -> dict | None:
+    """Return compaction patch if history is too long, else None."""
+    # Count user+assistant turns (pairs)
+    turn_count = sum(1 for m in messages if getattr(m, "type", "") in ("human", "ai"))
+    if turn_count <= _COMPACT_AFTER_TURNS:
+        return None
+
+    # Summarize everything except the last COMPACT_KEEP_LAST turns
+    older = messages[:-_COMPACT_KEEP_LAST]
+    recent = messages[-_COMPACT_KEEP_LAST:]
+
+    older_text = "\n".join(
+        f"{m.type}: {getattr(m, 'content', '')[:200]}"
+        for m in older
+    )
+    summary_prompt = (
+        "Summarize this conversation history into a compact paragraph (max 200 words). "
+        "Preserve key facts, decisions, and unresolved questions:\n\n"
+        + older_text[:4000]
+    )
+
+    # Build the summary using a fast model call. If it fails, skip compaction
+    # (better to have full history than none).
+    try:
+        import asyncio
+
+        from backend.app.infrastructure.ai.litellm_client import ai_client
+
+        summary = asyncio.get_event_loop().run_until_complete(
+            ai_client.completion(
+                messages=[{"role": "user", "content": summary_prompt}],
+                model="gpt-4o-mini",
+                temperature=0.1,
+            )
+        )
+    except Exception:
+        return None
+
+    summary_msg = (
+        f"[Conversation summary of {len(older)} earlier turns: {summary}]"
+    )
+
+    # Replace older messages with the summary, keep recent window
+    from langchain_core.messages import SystemMessage
+    new_messages = [
+        SystemMessage(content=summary_msg),
+        *recent,
+    ]
+    return {"messages": new_messages, "compacted": True}
 
 
 def _safety_short_circuited(state: AgentState) -> bool:
