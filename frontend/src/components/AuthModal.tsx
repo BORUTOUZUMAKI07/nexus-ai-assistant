@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { X, Lock, Mail, User, ArrowRight, Sparkles, Loader2 } from "lucide-react";
-import { registerUser, loginUser, startOAuthLogin, listOAuthProviders, type OAuthProviderName } from "@/lib/api";
+import { X, Lock, Mail, User, ArrowRight, Sparkles, Loader2, GitHub, Mail as MailIcon } from "lucide-react";
+import { registerUser, loginUser, startOAuthLogin, listOAuthProviders } from "@/lib/api";
 import {
   Dialog,
   DialogContent,
@@ -24,7 +24,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [oauthProvider, setOAuthProvider] = useState<OAuthProviderName | null>(null);
+  const [oauthProvider, setOAuthProvider] = useState<string | null>(null);
   // Empty until the server says otherwise: showing the buttons optimistically
   // and hiding them a moment later is the wrong direction to flicker, and a
   // deployment with no OAuth configured would offer a button that 404s.
@@ -32,7 +32,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   // instead of simply not existing, which is what the url-shortner login screen
   // does in the same window; on a cold start that window is the whole backend
   // boot.
-  const [oauthProviders, setOAuthProviders] = useState<OAuthProviderName[] | null>(null);
+  const [oauthProviders, setOAuthProviders] = useState<string[] | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -41,8 +41,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         if (!live) return;
         const usable = providers
           .filter((p) => p.configured)
-          .map((p) => p.name)
-          .filter((name): name is OAuthProviderName => name === "google" || name === "github");
+          .map((p) => p.name);
         // Unconditional, including the empty case: "the server reports none
         // configured" must hide the section, not fall back to a hardcoded pair.
         setOAuthProviders(usable);
@@ -57,7 +56,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     };
   }, []);
 
-  const handleOAuth = async (provider: OAuthProviderName) => {
+  const handleOAuth = async (provider: string) => {
     setError(null);
     setOAuthProvider(provider);
     try {
@@ -241,28 +240,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             </div>
 
             <div className="mt-3 grid gap-2">
-              {oauthProviders.includes("google") && (
+              {oauthProviders.map((provider) => (
                 <button
+                  key={provider}
                   type="button"
-                  onClick={() => handleOAuth("google")}
+                  onClick={() => handleOAuth(provider)}
                   disabled={oauthProvider !== null}
                   className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-4 py-2.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:border-[var(--accent)] hover:text-[var(--accent-ink)] disabled:opacity-50"
                 >
-                  {oauthProvider === "google" ? <Loader2 className="h-4 w-4 animate-spin" /> : <GoogleGlyph />}
-                  {oauthProvider === "google" ? "Redirecting…" : "Continue with Google"}
+                  {oauthProvider === provider ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      {provider === "google" && <GoogleGlyph />}
+                      {provider === "github" && <GitHubGlyph />}
+                      {(provider !== "google" && provider !== "github") && (
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.5}
+                            d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                          />
+                        </svg>
+                      )}
+                    </>
+                  )}
+                  {oauthProvider === provider
+                    ? "Redirecting…"
+                    : `Continue with ${provider.charAt(0).toUpperCase() + provider.slice(1)}`}
                 </button>
-              )}
-              {oauthProviders.includes("github") && (
-                <button
-                  type="button"
-                  onClick={() => handleOAuth("github")}
-                  disabled={oauthProvider !== null}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-4 py-2.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:border-[var(--accent)] hover:text-[var(--accent-ink)] disabled:opacity-50"
-                >
-                  {oauthProvider === "github" ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitHubGlyph />}
-                  {oauthProvider === "github" ? "Redirecting…" : "Continue with GitHub"}
-                </button>
-              )}
+              ))}
             </div>
           </>
         )}

@@ -8,26 +8,38 @@ import { registerUser, loginUser, startOAuthLogin, listOAuthProviders, type OAut
 import { checkAuth } from "@/lib/auth";
 
 /**
- * Display name per provider. Also the whitelist the fetched list is filtered
- * against: a backend that gains a provider before this file learns to draw it
- * drops the entry instead of rendering a button with no glyph and a blank
- * label. `Object.prototype.hasOwnProperty` rather than `in`, so a provider
- * literally named "constructor" cannot smuggle itself through the check and
- * read a function off the prototype.
+ * Display name per provider. Falls back to capitalised provider name for
+ * providers this UI doesn't know about yet — so a newly configured backend
+ * provider still shows a button instead of being silently dropped.
  */
-const PROVIDER_LABELS: Record<OAuthProviderName, string> = {
+const PROVIDER_LABELS: Record<string, string> = {
   google: "Google",
   github: "GitHub",
 };
 
+/** Fallback icon for providers this UI doesn't have a glyph for. */
+function ProviderGlyphFallback() {
+  return (
+    <svg
+      className="w-4 h-4"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.5}
+        d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+      />
+    </svg>
+  );
+}
+
 /**
- * Provider mark per provider, keyed in step with `PROVIDER_LABELS` so the two tables
- * can never disagree about which providers this page can draw.
- *
- * Safe to build at module scope even though the glyph components are declared
- * further down: both are hoisted `function` declarations.
+ * Provider glyph per provider, with a fallback for unknown providers.
  */
-const PROVIDER_GLYPHS: Record<OAuthProviderName, React.ReactNode> = {
+const PROVIDER_GLYPHS: Record<string, React.ReactNode> = {
   google: <GoogleGlyph />,
   github: <GitHubGlyph />,
 };
@@ -121,12 +133,12 @@ export default function SignInPage() {
   // redirect URL carried. `null` = explicitly cleared by a retry. A string = a
   // message produced on this page (submit failure, OAuth start failure).
   const [error, setError] = useState<string | null | undefined>(undefined);
-  const [oauthProvider, setOAuthProvider] = useState<OAuthProviderName | null>(null);
+  const [oauthProvider, setOAuthProvider] = useState<string | null>(null);
   // null means "not known yet", which is treated the same as "none": the OAuth
   // section stays hidden until the server has said what it supports. Rendering
   // the buttons optimistically and hiding them a moment later would be the
   // wrong direction to flicker.
-  const [oauthProviders, setOAuthProviders] = useState<OAuthProviderName[] | null>(null);
+  const [oauthProviders, setOAuthProviders] = useState<string[] | null>(null);
 
   // Read the redirect's query string without an effect (see `resolveOAuthError`).
   const searchString = useSyncExternalStore(SUBSCRIBE, getSnapshot, getServerSnapshot);
@@ -185,18 +197,16 @@ export default function SignInPage() {
       if (controller.signal.aborted) return;
       const usable = providers
         .filter((p) => p.configured)
-        // A name this UI has no glyph or label for is dropped rather than
-        // rendered as a blank button: the backend can gain a provider before
-        // the frontend learns to draw it.
-        .map((p) => p.name)
-        .filter((name): name is OAuthProviderName =>
-          Object.prototype.hasOwnProperty.call(PROVIDER_LABELS, name));
+        // Every configured provider gets a button: known ones use their glyph
+        // and label, unknown ones get a generic fallback so a newly configured
+        // backend provider is never silently dropped.
+        .map((p) => p.name);
       setOAuthProviders(usable);
     });
     return () => controller.abort();
   }, []);
 
-  const handleOAuth = async (provider: OAuthProviderName) => {
+  const handleOAuth = async (provider: string) => {
     setError(null);
     setOAuthProvider(provider);
     try {
@@ -361,11 +371,11 @@ export default function SignInPage() {
                   {oauthProvider === provider ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
-                    PROVIDER_GLYPHS[provider]
+                    PROVIDER_GLYPHS[provider] ?? <ProviderGlyphFallback />
                   )}
                   {oauthProvider === provider
                     ? "Redirecting…"
-                    : `Continue with ${PROVIDER_LABELS[provider]}`}
+                    : `Continue with ${PROVIDER_LABELS[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1)}`}
                 </button>
               ))}
             </div>
