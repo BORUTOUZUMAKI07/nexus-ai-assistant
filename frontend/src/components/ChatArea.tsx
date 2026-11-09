@@ -1276,6 +1276,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 ) : (
                   <>
                     <MarkdownRenderer content={msg.content} />
+                    {/* Inline citation chips directly under the answer text so
+                        the source is adjacent to the claim, not hidden in a
+                        drawer. The full citation list remains below for
+                        inspection. */}
+                    {msg.citations && msg.citations.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {msg.citations.map((c, idx) => (
+                          <button
+                            key={idx}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelectCitation?.(c);
+                            }}
+                            className="px-1.5 py-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] text-[9px] font-semibold hover:border-[var(--accent)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                            title={`Source: ${c.filename}`}
+                          >
+                            [{idx + 1}]
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     {/*
                       A generated image renders from `imageDataUrl`, not from the
                       markdown body: a base64 data URL inlined into `content`

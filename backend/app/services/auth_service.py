@@ -400,6 +400,14 @@ class AuthService:
             expires_delta=timedelta(minutes=settings.PASSWORD_RESET_TOKEN_MINUTES),
             # JWT `type` claim, not a secret.
             token_type="reset_password",  # nosec B106
+            additional_claims={
+                # Password-reset fingerprint: bind the token to the current
+                # password hash. If the password changes after the token is
+                # issued (e.g. the user logs in elsewhere and rotates), the
+                # captured reset link becomes invalid -- an attacker who
+                # intercepted the email cannot use it after the owner rotates.
+                "pw_hash": user.hashed_password[:16],
+            },
         )
         link = build_email_link("/reset-password?token=", token)
         send_coro = email_service.send(
@@ -434,6 +442,15 @@ class AuthService:
         user = await self._repo.get_by_id(user_id)
         if not user:
             raise AuthenticationError("User not found.")
+        # Password-reset fingerprint: the token was bound to the password hash
+        # at issue time. If the password has changed since, the captured link
+        # is invalid -- an intercepted reset email cannot be used after the
+        # owner rotates their password through another session.
+        pw_hash = payload.get("pw_hash")
+        if pw_hash and user.hashed_password[:16] != pw_hash:
+            raise AuthenticationError(
+                "This password reset link is stale -- your password was changed since it was issued."
+            )
         user.hashed_password = get_password_hash(new_password)
         user.is_verified = True
         await self._repo.update(user, {})
