@@ -9,6 +9,8 @@ vi.mock("@/lib/api", () => ({
   startOAuthLogin: vi.fn(),
 }))
 
+import { listOAuthProviders } from "@/lib/api"
+
 const mockedListOAuthProviders = vi.mocked(listOAuthProviders)
 
 const { routerMock } = vi.hoisted(() => ({
