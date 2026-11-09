@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { act, fireEvent, render, screen, waitFor } from "@/test/test-utils"
 import SignInPage from "@/app/signin/page"
-import { listOAuthProviders } from "@/lib/api"
+import { listOAuthProviders, type OAuthProviderInfo } from "@/lib/api"
 
 vi.mock("@/lib/api", () => ({
   listOAuthProviders: vi.fn(async () => [] as OAuthProviderInfo[]),

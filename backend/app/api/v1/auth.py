@@ -219,7 +219,7 @@ async def login(
         samesite="lax",
         path="/",
     )
-    return {"ok": True}
+    return tokens
 
 
 @router.post("/refresh", response_model=TokenResponse)
