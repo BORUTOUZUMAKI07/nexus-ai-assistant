@@ -495,17 +495,11 @@ async def iter_graph_frames(
                 yield {"type": "status", "stage": node_name, "label": label}, False
 
         if kind == "on_chat_model_stream":
-            # The synthesizer's own token stream is the one thing this function
-            # must not forward: its raw draft is not yet redacted or hedged (see
-            # `nodes._emit_answer_stream`) and the sanitised text arrives through
-            # the writer a moment later. Forwarding both put the answer on the
-            # wire twice, which is measured: two identical `text_delta` frames
-            # ("sweep one edited") in one run, and a regenerated reply persisted
-            # as "sweep one editedsweep one edited". The provider only streams on
-            # some runs, which is why it looked intermittent.
-            streaming_node = (event.get("metadata") or {}).get("langgraph_node")
-            if streaming_node == "synthesizer":
-                continue
+            # Stream raw model tokens immediately for fast time-to-first-token.
+            # The synthesizer's draft may be unhedged, but it arrives first and
+            # is replaced by the sanitised final text_delta from the writer when
+            # it lands. The client replaces message content on each patch, so no
+            # duplication is visible; the final frame wins.
             chunk = event.get("data", {}).get("chunk")
             if chunk and hasattr(chunk, "content") and chunk.content:
                 _streamed_tokens = True
