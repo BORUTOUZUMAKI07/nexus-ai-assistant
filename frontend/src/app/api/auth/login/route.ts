@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
     // httpOnly cookies so no page script can ever read them.
     const response = NextResponse.json(
       { ok: Boolean(data.access_token) },
-      { status: res.status }
+      { status: res.status, headers: res.status === 429 ? { "Retry-After": res.headers.get("Retry-After") ?? "60" } : {} }
     );
     if (res.ok && data.access_token) {
       const cookieOptions = authCookieOptions(req);

@@ -1068,13 +1068,19 @@ export async function registerUser(payload: {
 export async function loginUser(payload: {
   email: string;
   password: string;
-}): Promise<{ ok: boolean }> {
+}): Promise<{ ok: boolean; retryAfter?: number }> {
   const res = await nexusFetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw await parseError(res, "Invalid email or password");
+  if (!res.ok) {
+    const retryAfter = res.headers.get("Retry-After");
+    throw Object.assign(
+      await parseError(res, "Invalid email or password"),
+      { retryAfter: retryAfter ? parseInt(retryAfter, 10) : undefined },
+    );
+  }
   return (await res.json()) as { ok: boolean };
 }
 

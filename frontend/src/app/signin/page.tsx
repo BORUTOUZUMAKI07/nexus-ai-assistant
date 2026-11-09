@@ -133,6 +133,7 @@ export default function SignInPage() {
   // redirect URL carried. `null` = explicitly cleared by a retry. A string = a
   // message produced on this page (submit failure, OAuth start failure).
   const [error, setError] = useState<string | null | undefined>(undefined);
+  const [retryAfter, setRetryAfter] = useState<number | null>(null);
   const [oauthProvider, setOAuthProvider] = useState<string | null>(null);
   // null means "not known yet", which is treated the same as "none": the OAuth
   // section stays hidden until the server has said what it supports. Rendering
@@ -177,7 +178,13 @@ export default function SignInPage() {
       await loginUser({ email, password });
       router.replace(nextPath);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");
+      if (err instanceof Error && "retryAfter" in err && err.retryAfter) {
+        setRetryAfter(err.retryAfter);
+        setError(null);
+      } else {
+        setRetryAfter(null);
+        setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");
+      }
     } finally {
       setLoading(false);
     }
@@ -241,7 +248,19 @@ export default function SignInPage() {
 
         {errorMessage && (
           <div className="mb-4 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-main)] p-3 text-xs text-[var(--status-danger)]">
-            {errorMessage}
+            {retryAfter !== null && retryAfter > 0 ? (
+              <>
+                Too many attempts. Try again in {retryAfter}s.
+                <button
+                  onClick={() => setRetryAfter(null)}
+                  className="ml-2 text-[var(--accent-ink)] underline underline-offset-4 hover:text-[var(--accent)]"
+                >
+                  Dismiss
+                </button>
+              </>
+            ) : (
+              errorMessage
+            )}
           </div>
         )}
 
