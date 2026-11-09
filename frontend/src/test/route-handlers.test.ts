@@ -898,12 +898,10 @@ describe("auth cookie lifetimes follow the tokens they carry", () => {
       status: 200,
       headers: {
         "Content-Type": "application/json",
-        "set-cookie": [
-          "nexus_access_token=at; Max-Age=3600; Path=/; HttpOnly; SameSite=Lax",
-          "nexus_refresh_token=rt; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
-        ].join(","),
       },
     })
+    res.headers.append("set-cookie", "nexus_access_token=at; Max-Age=3600; Path=/; HttpOnly; SameSite=Lax")
+    res.headers.append("set-cookie", "nexus_refresh_token=rt; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax")
     backendFetch.mockImplementation(async () => res)
     const mod = await loadRoute(routeFile("/api/auth/login")!)
 
@@ -943,12 +941,10 @@ describe("auth cookie lifetimes follow the tokens they carry", () => {
       status: 200,
       headers: {
         "Content-Type": "application/json",
-        "set-cookie": [
-          `nexus_access_token=at; Max-Age=${ACCESS_TOKEN_MAX_AGE}; Path=/; HttpOnly; SameSite=Lax`,
-          `nexus_refresh_token=rt; Max-Age=${REFRESH_TOKEN_MAX_AGE}; Path=/; HttpOnly; SameSite=Lax`,
-        ].join(","),
       },
     })
+    res.headers.append("set-cookie", `nexus_access_token=at; Max-Age=${ACCESS_TOKEN_MAX_AGE}; Path=/; HttpOnly; SameSite=Lax`)
+    res.headers.append("set-cookie", `nexus_refresh_token=rt; Max-Age=${REFRESH_TOKEN_MAX_AGE}; Path=/; HttpOnly; SameSite=Lax`)
     backendFetch.mockImplementation(async () => res)
     const mod = await loadRoute(routeFile("/api/auth/login")!)
 

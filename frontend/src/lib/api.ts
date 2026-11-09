@@ -1166,61 +1166,24 @@ function oauthProvidersRetryDelayMs(attempt: number, baseDelayMs: number): numbe
 export async function listOAuthProviders(
   options: OAuthProvidersOptions = {}
 ): Promise<OAuthProviderInfo[]> {
-  const attempts = Math.max(
-    1,
-    options.attempts ?? OAUTH_PROVIDERS_RETRY_ATTEMPTS
-  );
-  const baseDelayMs = Math.max(
-    0,
-    options.baseDelayMs ?? OAUTH_PROVIDERS_RETRY_BASE_DELAY_MS
-  );
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  let res: Response;
+  try {
+    res = await nexusFetch(`${API_BASE}/auth/oauth/providers`, {
+      method: "GET",
+      signal: options.signal,
+    });
+  } catch {
     if (options.signal?.aborted) return [];
-
-    let res: Response;
-    try {
-      res = await nexusFetch(`${API_BASE}/auth/oauth/providers`, {
-        method: "GET",
-        signal: options.signal,
-      });
-    } catch {
-      // An aborted request is a navigation, not a failure to report.
-      if (options.signal?.aborted) return [];
-      if (attempt === attempts) return [];
-      await sleepUntilAbort(
-        oauthProvidersRetryDelayMs(attempt, baseDelayMs),
-        options.signal
-      );
-      continue;
-    }
-
-    // Only gateway statuses are worth another attempt; a 4xx cannot be improved
-    // by retrying (the same rule `fetchWithRetry` applies to every JSON call).
-    if (!TRANSIENT_STATUS.has(res.status)) {
-      // Status first, shape second. The shape check alone covers every failure
-      // the app itself generates, because `backendFetch` answers a dead socket
-      // or a timeout with `{detail: "..."}` and no `providers` key. What it
-      // cannot cover is a status failure that still carries a valid body — a
-      // reverse proxy or CDN replaying a cached 200 while reporting 502.
-      // Reading that as a provider list would put OAuth buttons on the page
-      // because a request *failed*.
-      if (!res.ok) return [];
-      try {
-        const body = (await res.json()) as { providers?: OAuthProviderInfo[] };
-        return Array.isArray(body.providers) ? body.providers : [];
-      } catch {
-        return [];
-      }
-    }
-
-    if (attempt === attempts) return [];
-    await sleepUntilAbort(
-      oauthProvidersRetryDelayMs(attempt, baseDelayMs),
-      options.signal
-    );
+    return [];
   }
-  return [];
+
+  if (!res.ok) return [];
+  try {
+    const body = (await res.json()) as { providers?: OAuthProviderInfo[] };
+    return Array.isArray(body.providers) ? body.providers : [];
+  } catch {
+    return [];
+  }
 }
 
 /**

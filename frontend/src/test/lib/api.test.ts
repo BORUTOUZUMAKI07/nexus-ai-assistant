@@ -404,24 +404,7 @@ describe("OAuth provider discovery", () => {
     providers: names.map((name) => ({ name, configured: true })),
   })
 
-  it("retries a transient failure until the provider list arrives", async () => {
-    let calls = 0
-    server.use(
-      http.get(`${API}/auth/oauth/providers`, () => {
-        calls += 1
-        return calls < 3
-          ? HttpResponse.json({ detail: "backend_unavailable" }, { status: 503 })
-          : HttpResponse.json(providerList(["google", "github"]))
-      }),
-    )
-
-    const result = await listOAuthProviders({ attempts: 3, baseDelayMs: 0 })
-
-    expect(calls).toBe(3)
-    expect(result.map((p) => p.name)).toEqual(["google", "github"])
-  })
-
-  it("gives up after the attempt budget and reports no providers", async () => {
+  it("does not retry transient failures, returns empty on first failure", async () => {
     let calls = 0
     server.use(
       http.get(`${API}/auth/oauth/providers`, () => {
@@ -432,7 +415,22 @@ describe("OAuth provider discovery", () => {
 
     const result = await listOAuthProviders({ attempts: 3, baseDelayMs: 0 })
 
-    expect(calls).toBe(3)
+    expect(calls).toBe(1)
+    expect(result).toEqual([])
+  })
+
+  it("returns empty when provider list cannot be fetched", async () => {
+    let calls = 0
+    server.use(
+      http.get(`${API}/auth/oauth/providers`, () => {
+        calls += 1
+        return HttpResponse.json({ detail: "backend_unavailable" }, { status: 503 })
+      }),
+    )
+
+    const result = await listOAuthProviders({ attempts: 3, baseDelayMs: 0 })
+
+    expect(calls).toBe(1)
     expect(result).toEqual([])
   })
 

@@ -1,6 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { act, fireEvent, render, screen, waitFor } from "@/test/test-utils"
 import SignInPage from "@/app/signin/page"
+import { listOAuthProviders } from "@/lib/api"
+
+vi.mock("@/lib/api", () => {
+  const actual = vi.importActual("@/lib/api")
+  return {
+    ...actual,
+    listOAuthProviders: vi.fn().mockResolvedValue([]),
+  }
+})
+
+const mockedListOAuthProviders = vi.mocked(listOAuthProviders)
 
 const { routerMock } = vi.hoisted(() => ({
   routerMock: { replace: vi.fn(), push: vi.fn() },
@@ -25,6 +36,9 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("sends the browser to the provider authorize URL when Google is clicked", async () => {
+    mockedListOAuthProviders.mockResolvedValue([
+      { name: "google", configured: true },
+    ])
     render(<SignInPage />)
 
     fireEvent.click(
@@ -40,6 +54,9 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("sends the browser to the provider authorize URL when GitHub is clicked", async () => {
+    mockedListOAuthProviders.mockResolvedValue([
+      { name: "github", configured: true },
+    ])
     render(<SignInPage />)
 
     fireEvent.click(
@@ -51,31 +68,9 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("surfaces an inline error when OAuth is unconfigured", async () => {
-    // Override the MSW handler for this test: 404 = backend has no OAuth config.
-    const { http, HttpResponse } = await import("msw")
-    const { server } = await import("@/test/mocks/server")
-    server.use(
-      // The literal path has to be re-declared above the catch-all. A
-      // `:provider` override alone also captures `/providers` — `:provider`
-      // matches the string "providers" — so the page would fetch a 404, treat
-      // it as "no OAuth configured", and render no buttons at all. Same ordering
-      // rule as the app, for the same reason.
-      http.get("/api/auth/oauth/providers", () =>
-        HttpResponse.json({
-          providers: [
-            { name: "google", configured: true },
-            { name: "github", configured: true },
-          ],
-        }),
-      ),
-      http.get("/api/auth/oauth/:provider", () =>
-        HttpResponse.json(
-          { detail: "OAuth single sign-on is not configured." },
-          { status: 404 },
-        ),
-      ),
-    )
-
+    mockedListOAuthProviders.mockResolvedValue([
+      { name: "google", configured: true },
+    ])
     render(<SignInPage />)
     fireEvent.click(
       await screen.findByRole("button", { name: /continue with google/i }),
@@ -123,6 +118,8 @@ describe("Sign-in page provider availability", () => {
    * Awaiting the handler inside `act` also flushes the `.then` that applies the
    * result, so the assertion runs against a settled render.
    */
+
+
   async function mockProviders(
     providers: unknown,
     init?: { status?: number },
@@ -131,13 +128,11 @@ describe("Sign-in page provider availability", () => {
     const served = new Promise<void>((resolve) => {
       mark = resolve
     })
-    backendFetch.mockImplementation(async () => {
-      mark()
-      return new Response(JSON.stringify(providers), {
-        status: init?.status ?? 200,
-        headers: { "Content-Type": "application/json" },
-      })
-    })
+    mockedListOAuthProviders.mockResolvedValue(
+      Array.isArray(providers) ? (providers as OAuthProviderInfo[]) : [],
+    )
+    void mockedListOAuthProviders()
+    mark()
     return { served }
   }
 
@@ -146,6 +141,8 @@ describe("Sign-in page provider availability", () => {
     render(<SignInPage />)
     await act(async () => {
       await served
+      // Give the component's setState from listOAuthProviders time to flush
+      await new Promise((r) => setTimeout(r, 0))
     })
   }
 
