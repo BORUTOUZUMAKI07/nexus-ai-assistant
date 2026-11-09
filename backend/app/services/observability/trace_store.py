@@ -22,5 +22,5 @@ async def get_trace_span(trace_id: str) -> dict[str, Any] | None:
     degrades cleanly without a tracing backend configured.
     """
     # Placeholder: integrate with the OTel SDK's in-memory span exporter or
-    // a tracing backend (Jaeger, Tempo, Honeycomb, etc.) here.
+    # a tracing backend (Jaeger, Tempo, Honeycomb, etc.) here.
     return None

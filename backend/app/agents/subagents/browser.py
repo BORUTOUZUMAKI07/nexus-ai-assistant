@@ -11,10 +11,7 @@ subagent_dispatcher.
 """
 from __future__ import annotations
 
-import asyncio
-import json
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass
@@ -76,7 +73,7 @@ class BrowserSubagent:
                     await page.goto(start_url, wait_until="domcontentloaded")
                 # The agent loop: in a full implementation, an LLM would plan
                 # actions here. For now, return the page title and text.
-                title = await page.title()
+                _title = await page.title()
                 text = await page.evaluate("() => document.body.innerText")
                 return BrowserResult(
                     success=True,

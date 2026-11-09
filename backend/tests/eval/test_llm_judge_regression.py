@@ -15,7 +15,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from backend.app.services.evaluation.llm_judge import judge_answer
 
 GOLDEN_SET = Path(__file__).parent / "golden_set.jsonl"
