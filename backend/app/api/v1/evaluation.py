@@ -229,3 +229,56 @@ async def run_prompt_regression(
         evaluator="prompt_regression",
     )
     return report
+
+
+@router.get("/traces/{trace_id}")
+async def get_trace(trace_id: str) -> dict[str, Any]:
+    """
+    Return a single turn's full trace span (events, cost, tokens, model,
+    confidence) for side-by-side comparison.
+    """
+    from backend.app.services.observability.trace_store import get_trace_span
+
+    span = await get_trace_span(trace_id)
+    if not span:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="trace not found")
+    return span
+
+
+@router.get("/traces/compare")
+async def compare_traces(trace_a: str, trace_b: str) -> dict[str, Any]:
+    """
+    Side-by-side comparison of two traces. Returns both spans plus a delta
+    of cost, tokens, latency, and confidence.
+    """
+    from backend.app.services.observability.trace_store import get_trace_span
+
+    span_a = await get_trace_span(trace_a)
+    span_b = await get_trace_span(trace_b)
+    if not span_a or not span_b:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="one or both traces not found")
+
+    def _num(x: Any, default: float = 0.0) -> float:
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return default
+
+    delta = {
+        "cost_usd": round(_num(span_b.get("cost_usd")) - _num(span_a.get("cost_usd")), 6),
+        "tokens": _num(span_b.get("tokens")) - _num(span_a.get("tokens")),
+        "latency_ms": _num(span_b.get("latency_ms")) - _num(span_a.get("latency_ms")),
+        "confidence": round(
+            _num(span_b.get("confidence_score")) - _num(span_a.get("confidence_score")), 4
+        ),
+    }
+
+    return {
+        "trace_a": span_a,
+        "trace_b": span_b,
+        "delta": delta,
+    }

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Compare, X, Sparkles } from "lucide-react";
+import { Sliders, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -13,29 +13,35 @@ interface ModelComparisonProps {
 }
 
 export function ModelComparison({ onClose, question, modelA, modelB }: ModelComparisonProps): React.ReactElement {
-  const [responseA, setResponseA] = React.useState("");
-  const [responseB, setResponseB] = React.useState("");
-  const [loadingA, setLoadingA] = React.useState(true);
-  const [loadingB, setLoadingB] = React.useState(true);
+  const [responseA, setResponseA] = React.useState<string>("");
+  const [responseB, setResponseB] = React.useState<string>("");
+  const [loadingA, setLoadingA] = React.useState<boolean>(true);
+  const [loadingB, setLoadingB] = React.useState<boolean>(true);
   const [errorA, setErrorA] = React.useState<string | null>(null);
   const [errorB, setErrorB] = React.useState<string | null>(null);
 
-  React.useEffect(() => {
-    // Fire two parallel streams against the same question with different models
-    async function runComparison() {
-      const aborter = new AbortController();
+  let aborter: AbortController | null = null;
 
-      const run = async (model: string, setResp: (s: string) => void, setErr: (e: string | null) => void, setLoad: (l: boolean) => void) => {
+  React.useEffect(() => {
+    aborter = new AbortController();
+
+    async function runComparison() {
+      const run = async (
+        model: string,
+        setResp: (s: string | ((prev: string) => string)) => void,
+        setErr: (e: string | null) => void,
+        setLoad: (l: boolean) => void,
+      ) => {
         try {
           const res = await fetch("/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               message: question,
-              model, // The backend model_router node honors this override
+              model,
               conversation_id: null,
             }),
-            signal: aborter.signal,
+            signal: aborter!.signal,
           });
           const reader = res.body?.getReader();
           const decoder = new TextDecoder();
@@ -51,7 +57,7 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
               try {
                 const parsed = JSON.parse(line);
                 if (parsed.type === "text_delta") {
-                  setResp((prev) => prev + (parsed.content ?? ""));
+                  setResp((prev: string) => prev + (parsed.content ?? ""));
                 }
                 if (parsed.type === "done") {
                   setLoad(false);
@@ -62,6 +68,7 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
             }
           }
         } catch (err) {
+          if ((err as Error).name === "AbortError") return;
           setErr(err instanceof Error ? err.message : "Comparison failed");
           setLoad(false);
         }
@@ -74,7 +81,9 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
     }
 
     runComparison();
-    return () => aborter.abort();
+    return () => {
+      aborter?.abort();
+    };
   }, [question, modelA, modelB]);
 
   return (
@@ -91,8 +100,8 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
       />
       <div className="flex-1 flex flex-col bg-[var(--bg-surface)] border-l border-[var(--border-subtle)] shadow-2xl">
         <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3 bg-[var(--bg-surface-elevated)] shrink-0">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-[var(--accent)]" />
+            <div className="flex items-center gap-2">
+              <Sliders className="w-4 h-4 text-[var(--accent)]" />
             <h2 className="text-sm font-semibold text-[var(--text-primary)] uppercase tracking-tighter">
               Model Comparison
             </h2>
@@ -161,7 +170,7 @@ function ModelComparisonPanel({ label, badge, response, loading, error }: ModelC
           {loading && (
             <span className="text-xs text-[var(--text-muted)]">streaming…</span>
           )}
-        </div>
+        </CardHeader>
         <CardContent className="p-0">
           <div className="h-full overflow-y-auto p-4 flex flex-col gap-3">
             {error && (

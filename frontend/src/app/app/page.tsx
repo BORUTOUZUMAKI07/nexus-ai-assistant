@@ -18,7 +18,7 @@ import PlanHistory from "@/components/PlanHistory";
 import SavedArtifacts from "@/components/SavedArtifacts";
 import { CitationInspector } from "@/components/CitationInspector";
 import { AuthModal } from "@/components/AuthModal";
-import { Menu, Moon, Sun, Compare } from "lucide-react";
+import { Menu, Moon, Sun, Sliders } from "lucide-react";
 import { toast } from "sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { KeyboardShortcutsGuide } from "@/components/KeyboardShortcuts";
@@ -1133,7 +1133,7 @@ function AppPageInner() {
               className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors hidden sm:flex"
               title="Compare two models side-by-side"
             >
-              <Compare className="w-5 h-5" />
+              <Sliders className="w-5 h-5" />
               <span className="ml-1 text-[11px] text-[var(--text-muted)]">Compare</span>
             </button>
           </div>
