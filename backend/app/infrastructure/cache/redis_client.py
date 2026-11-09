@@ -113,8 +113,6 @@ class RedisService(ICacheService):
         the race between `set_if_absent` and `_store_replay_response` that
         existed when they were separate Redis round-trips.
         """
-        import json as _json
-
         script = """
         local used_key = KEYS[1]
         local race_key = KEYS[2]

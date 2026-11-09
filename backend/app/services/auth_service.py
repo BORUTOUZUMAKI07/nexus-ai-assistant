@@ -573,25 +573,6 @@ class AuthService:
         raise AuthenticationError("Refresh token has already been used.")
 
     async def _revoke_refresh_family(
-            return None
-        if not raw:
-            return None
-        try:
-            data = json.loads(raw)
-            return TokenResponse(
-                access_token=data["access_token"],
-                refresh_token=data["refresh_token"],
-                token_type="bearer",  # nosec B106
-                expires_in=data["expires_in"],
-                refresh_expires_in=data["refresh_expires_in"],
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "refresh_race_cache_corrupt", jti=jti, error=type(exc).__name__
-            )
-            return None
-
-    async def _revoke_refresh_family(
         self, user_id: UUID, family_id: str | None = None
     ) -> None:
         """Revoke a refresh-token family for the refresh-token lifetime.
