@@ -1,12 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { backendFetch } from "@/lib/proxy";
-import {
-  ACCESS_TOKEN_MAX_AGE,
-  REFRESH_COOKIE,
-  REFRESH_TOKEN_MAX_AGE,
-  TOKEN_COOKIE,
-  authCookieOptions,
-} from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
   let body: { email?: unknown; password?: unknown };
@@ -32,31 +25,13 @@ export async function POST(req: NextRequest) {
 
   const text = await res.text();
   if (!text) return new NextResponse(null, { status: res.status });
-  try {
-    const data = JSON.parse(text);
-    // Only a boolean is echoed back to the browser — raw tokens stay in
-    // httpOnly cookies so no page script can ever read them.
-    const response = NextResponse.json(
-      { ok: Boolean(data.access_token) },
-      { status: res.status, headers: res.status === 429 ? { "Retry-After": res.headers.get("Retry-After") ?? "60" } : {} }
-    );
-    if (res.ok && data.access_token) {
-      const cookieOptions = authCookieOptions(req);
-      response.cookies.set(TOKEN_COOKIE, data.access_token, {
-        ...cookieOptions,
-        maxAge: data.expires_in ?? ACCESS_TOKEN_MAX_AGE,
-      });
-      if (data.refresh_token) {
-        response.cookies.set(REFRESH_COOKIE, data.refresh_token, {
-          ...cookieOptions,
-          // Authoritative lifetime comes from the backend; the constant is only
-          // a fallback so the cookie never outlives the token inside it.
-          maxAge: data.refresh_expires_in ?? REFRESH_TOKEN_MAX_AGE,
-        });
-      }
-    }
-    return response;
-  } catch {
-    return new NextResponse(text, { status: res.status });
-  }
+
+  // Forward the backend's Set-Cookie headers (httpOnly tokens) to the client.
+  // The backend sets both cookies; we just echo them through so the browser
+  // stores them and sends them back on every subsequent request.
+  const response = NextResponse.json(
+    { ok: true },
+    { status: res.status, headers: res.headers }
+  );
+  return response;
 }

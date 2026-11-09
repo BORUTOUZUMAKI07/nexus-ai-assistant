@@ -1,15 +1,14 @@
 /**
  * Nexus AI – server-side proxy helper for Next.js App Router API routes.
  *
- * Every /api/* proxy reads the JWT from the incoming request cookie and
- * forwards it to FastAPI as `Authorization: Bearer <token>`, so the browser
- * never exposes the token to the backend directly.
+ * Every /api/* proxy forwards the incoming request's httpOnly access-token
+ * cookie to FastAPI as `Authorization: Bearer <token>`, so the browser never
+ * exposes the token to the backend directly.
  */
 import "server-only";
 
 import { cookies, headers as nextHeaders } from "next/headers";
 import { NextResponse } from "next/server";
-import { TOKEN_COOKIE } from "./auth";
 
 // Server-only backend address. Do NOT use a NEXT_PUBLIC_ variable here: this
 // value must never reach the client bundle (it exposes the internal host/port
@@ -93,7 +92,7 @@ export async function backendFetch(
   // received that token yet at that point (it only learns about it from this
   // response's Set-Cookie), so the cookie store still holds the stale value and
   // the re-probe would 401 for the wrong reason.
-  const accessToken = options.accessToken ?? cookieStore.get(TOKEN_COOKIE)?.value;
+  const accessToken = options.accessToken ?? cookieStore.get("nexus_access_token")?.value;
 
   const method = (init?.method ?? "GET").toUpperCase();
   if (MUTATING_METHODS.has(method)) {
@@ -111,10 +110,9 @@ export async function backendFetch(
   if (!isFormBody && !headers.get("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  // Login/refresh are reached with a possibly expired/stale access token still
-  // in the cookie; forwarding it would shadow the fresh credentials. All other
-  // routes — including /auth/me, which is the app's authenticated session probe
-  // — must present the bearer token or the backend rejects them as anonymous.
+  // Forward the access token as a Bearer header on every authenticated
+  // request. Login and refresh endpoints don't need it: they carry fresh
+  // credentials in the body or set cookies on the response.
   const isTokenlessAuth =
     path.startsWith("/auth/login") || path.startsWith("/auth/refresh");
   if (accessToken && !isTokenlessAuth) {

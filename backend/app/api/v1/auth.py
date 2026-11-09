@@ -36,7 +36,7 @@ from backend.app.services.auth_service import AuthService
 from backend.app.services.oauth_service import OAuthProviderRegistry, OAuthService
 from backend.app.services.two_factor_service import TwoFactorService
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordRequestForm
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -174,6 +174,7 @@ async def register_user(
 @router.post("/login")
 async def login(
     request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     auth_svc: AuthService = Depends(get_auth_service),
     _rl: None = rate_limit_anon("auth.login", limit=60, window_seconds=60),
@@ -182,12 +183,15 @@ async def login(
     Returns a token pair. When the user has TOTP 2FA enabled, returns
     ``{"status": "2fa_required", "preauth_token": ..., "expires_in": ...}``
     instead; exchange it via POST /auth/2fa/verify.
+
+    Both tokens are set as httpOnly cookies (``nexus_access_token`` and
+    ``nexus_refresh_token``). The response body carries no secrets.
     """
     await _enforce_auth_rate_limit(
         request, action="login", limit=10, account=form_data.username
     )
     try:
-        return await auth_svc.login(form_data.username, form_data.password)
+        tokens = await auth_svc.login(form_data.username, form_data.password)
     except AuthenticationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -195,18 +199,71 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Set both tokens as httpOnly cookies. The frontend must never read them
+    # from JavaScript; the BFF forwards cookies server-side.
+    response.set_cookie(
+        key="nexus_access_token",
+        value=tokens.access_token,
+        max_age=tokens.expires_in,
+        httponly=True,
+        secure=settings.ENVIRONMENT != "development",
+        samesite="lax",
+        path="/",
+    )
+    response.set_cookie(
+        key="nexus_refresh_token",
+        value=tokens.refresh_token,
+        max_age=tokens.refresh_expires_in,
+        httponly=True,
+        secure=settings.ENVIRONMENT != "development",
+        samesite="lax",
+        path="/",
+    )
+    return {"ok": True}
+
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
-    token_in: TokenRefresh,
     request: Request,
+    response: Response,
+    token_in: TokenRefresh | None = None,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
     await _enforce_auth_rate_limit(request, action="refresh", limit=20)
+    # Prefer the httpOnly cookie; fall back to the request body for clients
+    # that still send it (backwards compatibility during rollout).
+    refresh_token = request.cookies.get("nexus_refresh_token")
+    if not refresh_token and token_in:
+        refresh_token = token_in.refresh_token
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token"
+        )
     try:
-        return await auth_svc.refresh(token_in.refresh_token)
+        tokens = await auth_svc.refresh(refresh_token)
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.message)
+
+    # Rotate the refresh cookie with the new token.
+    response.set_cookie(
+        key="nexus_access_token",
+        value=tokens.access_token,
+        max_age=tokens.expires_in,
+        httponly=True,
+        secure=settings.ENVIRONMENT != "development",
+        samesite="lax",
+        path="/",
+    )
+    response.set_cookie(
+        key="nexus_refresh_token",
+        value=tokens.refresh_token,
+        max_age=tokens.refresh_expires_in,
+        httponly=True,
+        secure=settings.ENVIRONMENT != "development",
+        samesite="lax",
+        path="/",
+    )
+    return tokens
 
 
 @router.get("/me", response_model=UserResponse)
