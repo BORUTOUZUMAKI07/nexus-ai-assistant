@@ -18,10 +18,11 @@ import PlanHistory from "@/components/PlanHistory";
 import SavedArtifacts from "@/components/SavedArtifacts";
 import { CitationInspector } from "@/components/CitationInspector";
 import { AuthModal } from "@/components/AuthModal";
-import { Menu, Moon, Sun } from "lucide-react";
+import { Menu, Moon, Sun, Compare } from "lucide-react";
 import { toast } from "sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { KeyboardShortcutsGuide } from "@/components/KeyboardShortcuts";
+import { ModelComparison } from "@/components/ModelComparison";
 import {
   createConversation,
   deleteConversation,
@@ -176,6 +177,8 @@ function AppPageInner() {
   const { mode, setMode, resolved } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparisonQuestion, setComparisonQuestion] = useState("");
   const [activeConversationId, setActiveConversationId] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"chat" | "files" | "projects" | "usage" | "settings" | "admin">("chat");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -1123,6 +1126,16 @@ function AppPageInner() {
                 mode === "light" ? "Dark" : "Light"
               }</span>
             </button>
+            <button
+              type="button"
+              aria-label="Compare models side-by-side"
+              onClick={() => setComparisonOpen(true)}
+              className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors hidden sm:flex"
+              title="Compare two models side-by-side"
+            >
+              <Compare className="w-5 h-5" />
+              <span className="ml-1 text-[11px] text-[var(--text-muted)]">Compare</span>
+            </button>
           </div>
         </div>
         {/* Mobile-only bar: without it the drawer has no handle on small screens. */}
@@ -1206,14 +1219,19 @@ function AppPageInner() {
               )}
               <SavedArtifacts artifacts={allArtifacts} onOpen={handleOpenArtifact} />
               <PlanHistory plans={planHistory} />
-              <ChatInput
-                key={composerEpoch}
-                onSendMessage={handleSendMessage}
-                isLoading={chat.isLoading}
-                onStop={handleStop}
-                queuedMessages={chat.queuedMessages}
-                onCancelQueued={chat.cancelQueued}
-              />
+              {/* Mobile bottom composer: fixed at bottom on small screens so
+                  the input is always reachable with thumbs. On desktop it stays
+                  inline in the page flow. */}
+              <div className="md:static fixed bottom-0 left-0 right-0 z-50 bg-[var(--bg-surface)] border-t border-[var(--border-subtle)] p-2 shadow-lg md:shadow-none md:border-t-0 md:p-0">
+                <ChatInput
+                  key={composerEpoch}
+                  onSendMessage={handleSendMessage}
+                  isLoading={chat.isLoading}
+                  onStop={handleStop}
+                  queuedMessages={chat.queuedMessages}
+                  onCancelQueued={chat.cancelQueued}
+                />
+              </div>
             </div>
             {/* Dual-Pane Artifact Canvas */}
             {activeArtifact && (
@@ -1237,6 +1255,16 @@ function AppPageInner() {
 
             {/* Keyboard shortcuts guide (toggle with ?) */}
             <KeyboardShortcutsGuide open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+
+            {/* Model comparison modal */}
+            {comparisonOpen && (
+              <ModelComparison
+                onClose={() => setComparisonOpen(false)}
+                question={comparisonQuestion}
+                modelA="gpt-4o-mini"
+                modelB="gpt-4o"
+              />
+            )}
           </div>
         )}
 
