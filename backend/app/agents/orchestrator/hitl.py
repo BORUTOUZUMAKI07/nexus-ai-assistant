@@ -21,6 +21,7 @@ def build_approval_payload(
     tool_name: str,
     arguments: dict[str, Any],
     reason: str = "This tool call requires explicit user confirmation before proceeding.",
+    editable: bool = False,
 ) -> dict[str, Any]:
     """
     Payload handed to the caller while the graph is interrupted.
@@ -31,6 +32,8 @@ def build_approval_payload(
         "action": "tool_approval",
         "tool_name": tool_name,
         "arguments": arguments,
+        "editable_arguments": dict(arguments) if editable else None,
+        "editable": editable,
         "reason": reason,
         "approval_deadline": (datetime.now(UTC) + timedelta(seconds=approval_timeout_seconds())).isoformat(),
     }
@@ -56,6 +59,7 @@ def request_human_approval(
     tool_name: str,
     arguments: dict[str, Any],
     reason: str = "This tool call requires explicit user confirmation before proceeding.",
+    editable: bool = False,
 ) -> dict[str, Any]:
     """
     Suspends graph execution and prompts the user for approval.
@@ -67,7 +71,7 @@ def request_human_approval(
     # through the authenticated graph interrupt channel.
     logger.info("requesting_hitl_approval", tool_name=tool_name, argument_count=len(arguments))
 
-    approval_payload = build_approval_payload(tool_name, arguments, reason)
+    approval_payload = build_approval_payload(tool_name, arguments, reason, editable=editable)
 
     # interrupt pauses graph execution and yields the payload to the caller/client
     user_decision: dict[str, Any] = interrupt(approval_payload)
