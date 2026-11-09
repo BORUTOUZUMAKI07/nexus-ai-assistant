@@ -127,10 +127,11 @@ function streamTranslation(
             }
 
             try {
-              // Forward raw backend SSE data line without re-encoding to AI
-              // SDK format. The frontend parses backend-native JSON directly,
-              // eliminating double JSON parse+stringify per frame.
-              controller.enqueue(encoder.encode(data + "\n"));
+              const frame = translateFrame(
+                JSON.parse(data) as Record<string, unknown>,
+                conversationId
+              );
+              if (frame !== null) controller.enqueue(encoder.encode(frame));
             } catch {
               // Non-JSON SSE lines are skipped
             }
@@ -145,6 +146,151 @@ function streamTranslation(
       }
     },
   });
+}
+
+/**
+ * One backend SSE frame → one AI SDK frame (or nothing).
+ *
+ * Returns `null` for events the data-stream protocol has no representation for,
+ * which is the only honest option: emitting nothing is invisible, emitting
+ * answer text for a verdict puts the critic's words in the assistant's mouth.
+ *
+ * `conversationId` is the client's pre-resolution id, used only for the HITL
+ * fallback; every other frame carries its own data and is not embellished.
+ */
+function translateFrame(
+  parsed: Record<string, unknown>,
+  conversationId: unknown
+): string | null {
+  const eventType = parsed.type;
+
+  if (eventType === "text_delta") {
+    // Text delta: Vercel AI SDK format 0: prefix
+    return `0:${JSON.stringify(parsed.content)}\n`;
+  }
+
+  if (
+    eventType === "tool_call" ||
+    eventType === "tool_result" ||
+    eventType === "thinking" ||
+    eventType === "citation"
+  ) {
+    // stream data annotations: 8: prefix for message annotations
+    return `8:${JSON.stringify([{ type: eventType, data: parsed }])}\n`;
+  }
+
+  if (eventType === "hitl_request") {
+    // Human-in-the-loop interrupt signal. Inject the thread id (the conversation
+    // id) and a readable request string so the client can render an approval card
+    // without backend context.
+    const interrupted = Array.isArray(
+      (parsed.state as { next?: unknown } | undefined)?.next
+    )
+      ? ((parsed.state as { next: unknown[] }).next)
+      : [];
+    const data = {
+      ...parsed,
+      type: "hitl_request",
+      // backend now sends the resolved uuid in the event; fall back to the
+      // client-supplied id only for legacy payloads.
+      thread_id: parsed.thread_id ?? conversationId ?? "new",
+      request:
+        parsed.reason ??
+        (interrupted.length > 0
+          ? `The agent is waiting for your approval before continuing with "${interrupted[0]}".`
+          : "The agent is waiting for your approval before continuing."),
+    };
+    return `8:${JSON.stringify([{ type: "hitl_request", data }])}\n`;
+  }
+
+  if (eventType === "critique" || eventType === "quality") {
+    // The critic's verdict and the evidence-quality score, emitted by the backend
+    // on a finished run (services/run_events.py).
+    //
+    // These were previously dropped on the floor: the backend emitted them, this
+    // chain had no branch for them, and the test named
+    // `test_leaves_critique_and_quality_events_untranslated` recorded the
+    // omission as a decision. The decision was wrong — the frames land in the
+    // database, the API contract holds, no test fails, and the user is simply
+    // never told the answer was critiqued. That is the exact failure project guidelines
+    // warns about for a new backend event, and it is invisible from the backend
+    // side.
+    //
+    // Translated as annotations rather than text: the verdict is metadata about
+    // the turn, not part of the answer, and emitting it as a text delta would put
+    // it inside the model's own words. Field names mirror the backend contract
+    // exactly (services/run_events.py::finished_run_events): critique carries
+    // `critique` + `revision_count`; quality carries `evidence_score` +
+    // `evidence_gate_passed`. These are not invented here — a renamed field would
+    // translate cleanly into an annotation permanently missing its value.
+    const data =
+      eventType === "critique"
+        ? {
+            critique: parsed.critique ?? "",
+            revision_count: parsed.revision_count ?? 0,
+          }
+        : {
+            evidence_score: parsed.evidence_score ?? null,
+            evidence_gate_passed: parsed.evidence_gate_passed ?? null,
+          };
+    return `8:${JSON.stringify([{ type: eventType, data }])}\n`;
+  }
+
+  if (eventType === "artifact") {
+    // The turn was saved as a durable artifact. Only the id crosses the wire:
+    // the canvas fetches the content itself, so a 120k-char document is never
+    // duplicated into an SSE frame the client then has to hold in memory twice.
+    return `8:${JSON.stringify([
+      {
+        type: "artifact",
+        data: {
+          artifact_id: parsed.artifact_id,
+          title: parsed.title ?? "",
+          version: parsed.version ?? 1,
+          created: parsed.created !== false,
+        },
+      },
+    ])}\n`;
+  }
+
+  if (eventType === "status" && typeof parsed.label === "string") {
+    // Node-start progress, emitted by services/run_executor.py::iter_graph_frames.
+    //
+    // Without this branch the frame is dropped on the floor and the transcript
+    // shows a static "Thinking…" for the whole run — which, because the
+    // synthesizer only streams its *finished* (guardrailed) text, is every
+    // agent-mode turn: measured 53 s of silence on a live run. The label is a
+    // string the backend owns; this side only forwards it, so a renamed stage
+    // cannot turn into a wrong claim here.
+    const stage = typeof parsed.stage === "string" ? parsed.stage : "";
+    return `8:${JSON.stringify([
+      { type: "status", data: { stage, label: parsed.label } },
+    ])}\n`;
+  }
+
+  if (eventType === "error") {
+    const errorMsg = parsed.message ?? parsed.error ?? "An error occurred";
+    return `3:${JSON.stringify(errorMsg)}\n`;
+  }
+
+  if (eventType === "model_info" && typeof parsed.model === "string") {
+    // The model that actually answered, read from the run checkpoint. Carried
+    // to the transcript so a provider fallback shows the real model instead of
+    // the group the picker asked for.
+    return `8:${JSON.stringify([
+      { type: "model_info", data: { model: parsed.model } },
+    ])}\n`;
+  }
+
+  if (eventType === "done" && parsed.thread_id) {
+    // Forward the resolved conversation id so the hook can surface it to the page
+    // when a new conversation was auto-created.
+    return `8:${JSON.stringify([
+      { type: "conversation_created", data: { thread_id: parsed.thread_id } },
+    ])}\n`;
+  }
+
+  return null;
 }
 
 /** Response headers for both entry points, plus the run id when there is one. */

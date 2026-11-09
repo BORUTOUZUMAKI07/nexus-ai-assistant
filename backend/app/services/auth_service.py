@@ -45,6 +45,11 @@ logger = structlog.get_logger(__name__)
 _REFRESH_REVOKED_PREFIX = "refresh:revoked:"
 
 # How long a duplicate refresh waits for the in-flight winner to publish its
+# result before concluding the replay was a theft. Sub-window of
+# REFRESH_REUSE_GRACE_SECONDS.
+_REPLAY_PUBLISH_WAIT_SECONDS = 3.0
+_REPLAY_POLL_SECONDS = 0.05
+
 # The password-reset route only needs the mail-send to complete synchronously in
 # local dev, where it returns a dev link the UI follows. In production the send
 # is fire-and-forget so the known-address and unknown-address branches take

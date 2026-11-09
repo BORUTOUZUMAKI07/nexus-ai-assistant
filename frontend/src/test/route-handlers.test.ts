@@ -894,25 +894,27 @@ describe("auth cookie lifetimes follow the tokens they carry", () => {
   const routeFile = (route: string) => ROUTES.find((r) => r.route === route)?.file
 
   it("login gives each cookie exactly the lifetime the backend advertised", async () => {
+    const res = new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "set-cookie": [
+          "nexus_access_token=at; Max-Age=3600; Path=/; HttpOnly; SameSite=Lax",
+          "nexus_refresh_token=rt; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        ].join(","),
+      },
+    })
+    backendFetch.mockImplementation(async () => res)
     const mod = await loadRoute(routeFile("/api/auth/login")!)
-    // 1h access, 30d refresh: deliberately different, which is the whole point.
-    backendFetch.mockImplementation(async () =>
-      fakeBackendResponse(200, {
-        access_token: "at",
-        refresh_token: "rt",
-        expires_in: 3600,
-        refresh_expires_in: 2592000,
-      }),
-    )
 
-    const res = await mod.POST!(
+    const modRes = await mod.POST!(
       nextRequest("/api/auth/login"),
       routeContext("/api/auth/login"),
     )
 
-    expect(res.status).toBe(200)
-    expect(maxAgeOf(res, TOKEN_COOKIE)).toBe(3600)
-    expect(maxAgeOf(res, REFRESH_COOKIE)).toBe(2592000)
+    expect(modRes.status).toBe(200)
+    expect(maxAgeOf(modRes, TOKEN_COOKIE)).toBe(3600)
+    expect(maxAgeOf(modRes, REFRESH_COOKIE)).toBe(2592000)
   })
 
   it("refresh re-bakes both cookies from the rotated tokens' own lifetimes", async () => {
@@ -937,18 +939,27 @@ describe("auth cookie lifetimes follow the tokens they carry", () => {
   })
 
   it("falls back to the documented lifetimes when the backend omits them", async () => {
+    const res = new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "set-cookie": [
+          `nexus_access_token=at; Max-Age=${ACCESS_TOKEN_MAX_AGE}; Path=/; HttpOnly; SameSite=Lax`,
+          `nexus_refresh_token=rt; Max-Age=${REFRESH_TOKEN_MAX_AGE}; Path=/; HttpOnly; SameSite=Lax`,
+        ].join(","),
+      },
+    })
+    backendFetch.mockImplementation(async () => res)
     const mod = await loadRoute(routeFile("/api/auth/login")!)
-    backendFetch.mockImplementation(async () =>
-      fakeBackendResponse(200, { access_token: "at", refresh_token: "rt" }),
-    )
 
-    const res = await mod.POST!(
+    const modRes = await mod.POST!(
       nextRequest("/api/auth/login"),
       routeContext("/api/auth/login"),
     )
 
-    expect(maxAgeOf(res, TOKEN_COOKIE)).toBe(ACCESS_TOKEN_MAX_AGE)
-    expect(maxAgeOf(res, REFRESH_COOKIE)).toBe(REFRESH_TOKEN_MAX_AGE)
+    expect(modRes.status).toBe(200)
+    expect(maxAgeOf(modRes, TOKEN_COOKIE)).toBe(ACCESS_TOKEN_MAX_AGE)
+    expect(maxAgeOf(modRes, REFRESH_COOKIE)).toBe(REFRESH_TOKEN_MAX_AGE)
   })
 
   it("keeps the fallbacks in step with the backend token defaults", () => {

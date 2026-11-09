@@ -379,7 +379,7 @@ export default function SignInPage() {
             </div>
 
             <div className="mt-4 grid gap-2">
-              {oauthProviders.map((provider) => (
+              {oauthProviders?.map((provider) => (
                 <button
                   key={provider}
                   type="button"

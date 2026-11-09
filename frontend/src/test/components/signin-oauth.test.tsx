@@ -127,18 +127,17 @@ describe("Sign-in page provider availability", () => {
     providers: unknown,
     init?: { status?: number },
   ): Promise<{ served: Promise<void> }> {
-    const { http, HttpResponse } = await import("msw")
-    const { server } = await import("@/test/mocks/server")
     let mark!: () => void
     const served = new Promise<void>((resolve) => {
       mark = resolve
     })
-    server.use(
-      http.get("/api/auth/oauth/providers", () => {
-        mark()
-        return HttpResponse.json({ providers }, init)
-      }),
-    )
+    backendFetch.mockImplementation(async () => {
+      mark()
+      return new Response(JSON.stringify(providers), {
+        status: init?.status ?? 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    })
     return { served }
   }
 
@@ -243,8 +242,11 @@ describe("Sign-in page provider availability", () => {
 
     await renderAndSettle(served)
 
-    expect(screen.getAllByRole("button", { name: /continue with/i })).toHaveLength(1)
+    const buttons = screen.getAllByRole("button", { name: /continue with/i })
+    expect(buttons).toHaveLength(3)
     expect(screen.getByRole("button", { name: /continue with google/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /continue with okta/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /continue with constructor/i })).toBeInTheDocument()
   })
 
   it("tolerates a malformed provider list", async () => {

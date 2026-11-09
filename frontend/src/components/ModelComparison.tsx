@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Sliders, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 
 interface ModelComparisonProps {
   onClose: () => void;
@@ -20,10 +20,10 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
   const [errorA, setErrorA] = React.useState<string | null>(null);
   const [errorB, setErrorB] = React.useState<string | null>(null);
 
-  let aborter: AbortController | null = null;
+  const aborterRef = React.useRef<AbortController | null>(null);
 
   React.useEffect(() => {
-    aborter = new AbortController();
+    aborterRef.current = new AbortController();
 
     async function runComparison() {
       const run = async (
@@ -41,7 +41,7 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
               model,
               conversation_id: null,
             }),
-            signal: aborter!.signal,
+            signal: aborterRef.current!.signal,
           });
           const reader = res.body?.getReader();
           const decoder = new TextDecoder();
@@ -82,7 +82,7 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
 
     runComparison();
     return () => {
-      aborter?.abort();
+      aborterRef.current?.abort();
     };
   }, [question, modelA, modelB]);
 

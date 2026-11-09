@@ -15,11 +15,7 @@
  *     return jsonResponse(await result.json(), result.status);
  *   });
  */
-import "server-only";
-
 import { NextRequest, NextResponse } from "next/server";
-import { cookies, headers as nextHeaders } from "next/headers";
-import { backendFetch } from "@/lib/proxy";
 
 /** Shape of the handler's resolved inputs. */
 export interface BFFRouteContext {
@@ -96,7 +92,7 @@ export function createBFFRoute(
       });
     }
 
-    if (!allowedMethods.has(method as any)) {
+    if (!allowedMethods.has(method)) {
       return jsonResponse({ detail: "method_not_allowed" }, 405);
     }
 

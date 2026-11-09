@@ -32,7 +32,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   // instead of simply not existing, which is what the url-shortner login screen
   // does in the same window; on a cold start that window is the whole backend
   // boot.
-  const [oauthProviders, setOAuthProviders] = useState<string[] | null>(null);
+  const [oauthProviders, setOAuthProviders] = useState<string[]>([]);
 
   useEffect(() => {
     let live = true;
