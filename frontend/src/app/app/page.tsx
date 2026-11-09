@@ -18,7 +18,7 @@ import PlanHistory from "@/components/PlanHistory";
 import SavedArtifacts from "@/components/SavedArtifacts";
 import { CitationInspector } from "@/components/CitationInspector";
 import { AuthModal } from "@/components/AuthModal";
-import { Menu } from "lucide-react";
+import { Menu, Moon, Sun } from "lucide-react";
 import { toast } from "sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import {
@@ -43,6 +43,7 @@ import {
   fetchCurrentUser,
 } from "@/lib/api";
 import { clearSession, SESSION_EXPIRED_EVENT } from "@/lib/auth";
+import { useTheme } from "@/lib/theme";
 import { createQueryClient } from "@/lib/query-client";
 import {
   useConversations,
@@ -171,6 +172,7 @@ export default function AppPage() {
 function AppPageInner() {
   const queryClient = useQueryClient();
   const router = useRouter();
+  const { mode, setMode, resolved } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"chat" | "files" | "projects" | "usage" | "settings" | "admin">("chat");
@@ -1081,6 +1083,31 @@ function AppPageInner() {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+        {/* Desktop header: theme toggle + app title, hidden below md. */}
+        <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-2.5 bg-[var(--bg-surface)] md:flex hidden">
+          <div className="flex items-center gap-2">
+            <div className="h-6 w-6 rounded bg-[var(--accent)]" />
+            <span className="text-sm font-semibold text-[var(--text-primary)]">Nexus AI</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              aria-label="Toggle theme"
+              onClick={() => setMode(mode === "light" ? "dark" : "light")}
+              className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors"
+              title={mode === "light" ? "Switch to dark mode" : "Switch to light mode"}
+            >
+              {mode === "light" ? (
+                <Moon className="h-5 w-5" />
+              ) : (
+                <Sun className="h-5 w-5" />
+              )}
+              <span className="hidden sm:inline text-[11px] text-[var(--text-muted)]">{
+                mode === "light" ? "Dark" : "Light"
+              }</span>
+            </button>
+          </div>
+        </div>
         {/* Mobile-only bar: without it the drawer has no handle on small screens. */}
         <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 md:hidden">
           <button
@@ -1090,6 +1117,20 @@ function AppPageInner() {
             className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)]"
           >
             <Menu className="h-5 w-5" />
+          </button>
+          {/* Theme toggle on mobile bar */}
+          <button
+            type="button"
+            aria-label="Toggle theme"
+            onClick={() => setMode(mode === "light" ? "dark" : "light")}
+            className="ml-auto rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors"
+            title={mode === "light" ? "Switch to dark mode" : "Switch to light mode"}
+          >
+            {mode === "light" ? (
+              <Moon className="h-5 w-5" />
+            ) : (
+              <Sun className="h-5 w-5" />
+            )}
           </button>
           {/* The brand lives in the drawer; repeating it here gave the page two
               identical "Nexus AI" nodes inside <main>, which broke exact-text
