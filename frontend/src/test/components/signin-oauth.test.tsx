@@ -7,7 +7,7 @@ vi.mock("@/lib/api", () => {
   const actual = vi.importActual("@/lib/api")
   return {
     ...actual,
-    listOAuthProviders: vi.fn().mockResolvedValue([]),
+    listOAuthProviders: vi.fn(async () => []),
   }
 })
 
@@ -129,7 +129,7 @@ describe("Sign-in page provider availability", () => {
       mark = resolve
     })
     mockedListOAuthProviders.mockResolvedValue(
-      Array.isArray(providers) ? (providers as OAuthProviderInfo[]) : [],
+      Promise.resolve(Array.isArray(providers) ? (providers as OAuthProviderInfo[]) : [])
     )
     void mockedListOAuthProviders()
     mark()
