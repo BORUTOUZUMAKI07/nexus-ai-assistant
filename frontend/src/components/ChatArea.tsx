@@ -168,21 +168,24 @@ const ScaleIcon: React.FC<{ verdict: TurnVerdict }> = ({ verdict }) => (
   />
 );
 
-/**
- * Evidence score, as a percentage of the backend's 0..1 float.
- *
- * The `Number.isFinite` guard is not decoration: the value arrives from a JSON
- * frame, and `NaN` renders as the literal text "NaN%" while still looking like
- * a formatted number in a screenshot.
- */
-const ScorePill: React.FC<{ score: number }> = ({ score }) => (
-  <span
-    className="px-2 py-0.5 rounded bg-[var(--bg-main)] text-[var(--text-secondary)] border border-[var(--border-subtle)]"
-    title="Evidence quality score reported by the run"
-  >
-    evidence {Number.isFinite(score) ? Math.round(score * 100) : 0}%
-  </span>
-);
+/** Evidence score pill with confidence color coding. */
+const ScorePill: React.FC<{ score: number | null }> = ({ score }) => {
+  const pct = score != null && Number.isFinite(score) ? Math.round(score * 100) : 0;
+  const confClass =
+    pct >= 80
+      ? "text-[var(--status-success)] border-[var(--status-success)]/30 bg-[var(--status-success)]/10"
+      : pct >= 50
+      ? "text-[var(--status-warning)] border-[var(--status-warning)]/30 bg-[var(--status-warning)]/10"
+      : "text-[var(--status-danger)] border-[var(--status-danger)]/30 bg-[var(--status-danger)]/10";
+  return (
+    <span
+      className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${confClass}`}
+      title="Evidence quality score reported by the run"
+    >
+      {pct}%
+    </span>
+  );
+};
 
 /** Per-turn cost chip. Zero-cost turns (user messages, filtered runs) show nothing. */
 const CostPill: React.FC<{ costUsd: number }> = ({ costUsd }) => {
