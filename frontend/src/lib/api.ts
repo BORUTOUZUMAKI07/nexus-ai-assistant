@@ -70,6 +70,7 @@ export interface ConversationMessage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  cost_usd?: number;
   citations: MessageCitation[];
   tool_calls: MessageToolCall[];
   user_feedback: string | null;

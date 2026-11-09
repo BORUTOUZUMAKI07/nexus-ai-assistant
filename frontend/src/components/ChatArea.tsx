@@ -71,6 +71,10 @@ export interface MessageItem {
   created_at?: string;
   /** base64 data URL of an image attached to a user message */
   imageDataUrl?: string;
+  /** Durable cost of this turn, persisted server-side. Zero for user messages. */
+  cost_usd?: number;
+  /** Total tokens for this turn. */
+  total_tokens?: number;
 }
 
 export interface PendingHITLRequest {
@@ -179,6 +183,19 @@ const ScorePill: React.FC<{ score: number }> = ({ score }) => (
     evidence {Number.isFinite(score) ? Math.round(score * 100) : 0}%
   </span>
 );
+
+/** Per-turn cost chip. Zero-cost turns (user messages, filtered runs) show nothing. */
+const CostPill: React.FC<{ costUsd: number }> = ({ costUsd }) => {
+  if (!costUsd || costUsd <= 0) return null;
+  return (
+    <span
+      className="px-2 py-0.5 rounded bg-[var(--bg-main)] text-[var(--text-secondary)] border border-[var(--border-subtle)]"
+      title="Estimated cost of this turn"
+    >
+      ${costUsd.toFixed(4)}
+    </span>
+  );
+};
 
 /** Live elapsed seconds counter – starts when mounted, stops when stopped=true */
 const LiveTimer: React.FC<{ stopped?: boolean }> = ({ stopped }) => {
@@ -1295,6 +1312,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                             [{idx + 1}]
                           </button>
                         ))}
+                      </div>
+                    )}
+                    {/* Cost chip for assistant turns */}
+                    {!isUser && msg.cost_usd && msg.cost_usd > 0 && (
+                      <div className="mt-1 flex items-center gap-2">
+                        <CostPill costUsd={msg.cost_usd} />
+                        {msg.total_tokens && msg.total_tokens > 0 && (
+                          <span className="px-2 py-0.5 rounded bg-[var(--bg-main)] text-[var(--text-secondary)] border border-[var(--border-subtle)] text-[9px]">
+                            {msg.total_tokens} tokens
+                          </span>
+                        )}
                       </div>
                     )}
                     {/*

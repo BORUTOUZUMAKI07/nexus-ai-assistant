@@ -121,6 +121,10 @@ export interface NexusMessage {
   createdAt?: string;
   /** base64 data URL of an attached image (user messages only) */
   imageDataUrl?: string;
+  /** Durable cost of this turn, persisted server-side. Zero for user messages. */
+  cost_usd?: number;
+  /** Total tokens for this turn. */
+  total_tokens?: number;
 }
 
 export interface UseNexusChatOptions {

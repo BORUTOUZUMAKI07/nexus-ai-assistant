@@ -134,6 +134,8 @@ function toMessage(row: ConversationMessage): NexusMessage {
     content: row.content,
     model: row.model ?? undefined,
     createdAt: row.created_at,
+    cost_usd: row.cost_usd ?? 0,
+    total_tokens: row.total_tokens ?? 0,
     // Attached only when there is something in it. `annotations: []` on every
     // message is not equivalent in the components: several of them treat an
     // absent list and an empty one differently, and history messages have no
