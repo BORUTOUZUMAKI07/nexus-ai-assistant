@@ -214,132 +214,149 @@ export async function consumeChatStream(
   const processLine = (line: string) => {
     if (!line) return;
 
-    // Structured stream error (Vercel AI SDK 3: prefix)
-    if (line.startsWith("3:")) {
-      const raw = line.slice(2);
-      try {
-        streamError = JSON.parse(raw);
-      } catch {
-        streamError = raw;
-      }
+    // Backend-native JSON frame (forwarded raw by the BFF, no AI SDK
+    // re-encoding in between). Parsing once here instead of
+    // parse→stringify→parse in the BFF eliminates double JSON work per frame.
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return;
+    }
+
+    const eventType = parsed.type;
+
+    // Structured stream error
+    if (eventType === "error") {
+      const msg = parsed.message ?? parsed.error ?? "An error occurred";
+      streamError = typeof msg === "string" ? msg : String(msg);
       return;
     }
 
     // Text delta
-    if (line.startsWith("0:")) {
-      const raw = line.slice(2);
-      try {
-        streamContent += JSON.parse(raw);
-      } catch {
-        streamContent += raw;
-      }
+    if (eventType === "text_delta") {
+      const content =
+        typeof parsed.content === "string" ? parsed.content : "";
+      streamContent += content;
       sink.patch(streamContent, annotations);
       return;
     }
 
-    // Annotations
-    if (!line.startsWith("8:")) return;
-    try {
-      const parsed: unknown[] = JSON.parse(line.slice(2));
-      if (!Array.isArray(parsed)) return;
-      for (const ann of parsed) {
-        // Verdict frames are read structurally, before the `NexusAnnotation`
-        // cast, because they are deliberately NOT part of that union: they are
-        // not stored on the message. Casting them in would put a member in the
-        // union that no code path ever pushes, which is a type that lies.
-        const verdict = ann as { type?: string; data?: Record<string, unknown> };
-        if (verdict.type === "critique") {
-          const d = verdict.data ?? {};
-          if (typeof d.critique === "string") verdictCritique = d.critique;
-          if (typeof d.revision_count === "number") verdictRevisions = d.revision_count;
-          publishVerdict();
-          continue;
-        }
-        if (verdict.type === "quality") {
-          const d = verdict.data ?? {};
-          if (typeof d.evidence_score === "number") verdictScore = d.evidence_score;
-          // `?? null` and not `?? true`: an unreported gate is not a pass, and
-          // defaulting it to `true` turns the backend's silence into a clean bill
-          // of health.
-          verdictGate =
-            typeof d.evidence_gate_passed === "boolean"
-              ? d.evidence_gate_passed
-              : null;
-          publishVerdict();
-          continue;
-        }
-        if (verdict.type === "status") {
-          const d = verdict.data ?? {};
-          if (typeof d.label === "string" && d.label) sink.onStatus?.(d.label);
-          continue;
-        }
-        if (verdict.type === "model_info") {
-          const d = verdict.data ?? {};
-          if (typeof d.model === "string") sink.onModelResolved?.(d.model);
-          continue;
-        }
-
-        const typed = ann as NexusAnnotation;
-        if (typed.type === "reasoning") {
-          reasoningBuffer += typed.data.content ?? "";
-        } else if (typed.type === "citation") {
-          citations.push(typed.data);
-        } else if (typed.type === "tool_call") {
-          toolCalls.push({ ...typed.data, status: "running" });
-        } else if (typed.type === "tool_result") {
-          const call = toolCalls.find(
-            (c) => c.tool_call_id === typed.data.tool_call_id
-          );
-          if (call) {
-            call.status = "error" in typed.data ? "error" : "completed";
-            call.result = typed.data.result;
-          }
-          annotations.push(typed);
-        } else if (typed.type === "hitl_request") {
-          sink.onHitlRequest?.(typed.data);
-          annotations.push(typed);
-        } else if (typed.type === "artifact") {
-          // Not pushed into `annotations`: the array is rebuilt from
-          // reasoning/citations/tool-calls on the next patch, so an entry here
-          // would be dropped by the very next text delta. The callback is the
-          // durable signal; the artifact itself lives in the database.
-          sink.onArtifactSaved?.(typed.data);
-        } else if (
-          (ann as { type: string; data?: { thread_id?: string } }).type ===
-          "conversation_created"
-        ) {
-          // Backend resolved a new conversation UUID — hand it straight on.
-          // Fired here rather than collected: it arrives on the last frame, and
-          // the page that adopts the new id needs it before the turn closes.
-          const newId = (ann as { type: string; data: { thread_id: string } }).data
-            ?.thread_id;
-          if (newId) sink.onConversationCreated?.(newId);
-        }
-      }
-      const next: NexusAnnotation[] = [
-        ...annotations,
-        ...(reasoningBuffer
-          ? [
-              {
-                type: "reasoning" as const,
-                data: { content: reasoningBuffer },
-              },
-            ]
-          : []),
-        ...citations.map(
-          (c): CitationAnnotation => ({ type: "citation", data: c })
-        ),
-        ...toolCalls.map(
-          (t): ToolCallAnnotation => ({
-            type: "tool_call",
-            data: t,
-          })
-        ),
-      ];
-      sink.patch(streamContent, next);
-    } catch {
-      // Ignore malformed annotation payloads
+    // Annotation frames: tool_call, tool_result, thinking, citation,
+    // hitl_request, critique, quality, status, model_info, artifact,
+    // conversation_created
+    if (
+      !(
+        eventType === "tool_call" ||
+        eventType === "tool_result" ||
+        eventType === "thinking" ||
+        eventType === "citation" ||
+        eventType === "hitl_request" ||
+        eventType === "critique" ||
+        eventType === "quality" ||
+        eventType === "status" ||
+        eventType === "model_info" ||
+        eventType === "artifact" ||
+        eventType === "conversation_created"
+      )
+    ) {
+      return;
     }
+
+    const data = parsed.data ?? {};
+    // Verdict frames are read structurally, before the `NexusAnnotation`
+    // cast, because they are deliberately NOT part of that union: they are
+    // not stored on the message. Casting them in would put a member in the
+    // union that no code path ever pushes, which is a type that lies.
+    const verdict = data as Record<string, unknown>;
+    if (eventType === "critique") {
+      if (typeof verdict.critique === "string") verdictCritique = verdict.critique;
+      if (typeof verdict.revision_count === "number") verdictRevisions = verdict.revision_count;
+      publishVerdict();
+      return;
+    }
+    if (eventType === "quality") {
+      if (typeof verdict.evidence_score === "number") verdictScore = verdict.evidence_score;
+      verdictGate =
+        typeof verdict.evidence_gate_passed === "boolean"
+          ? verdict.evidence_gate_passed
+          : null;
+      publishVerdict();
+      return;
+    }
+    if (eventType === "status") {
+      const d = data as { label?: string };
+      if (typeof d.label === "string" && d.label) sink.onStatus?.(d.label);
+      return;
+    }
+    if (eventType === "model_info") {
+      const d = data as { model?: string };
+      if (typeof d.model === "string") sink.onModelResolved?.(d.model);
+      return;
+    }
+    if (eventType === "conversation_created") {
+      const d = data as { thread_id?: string };
+      const newId = d.thread_id;
+      if (typeof newId === "string") sink.onConversationCreated?.(newId);
+      return;
+    }
+
+    const typed = data as NexusAnnotation;
+    if (typed.type === "reasoning") {
+      reasoningBuffer += typed.data.content ?? "";
+    } else if (typed.type === "citation") {
+      citations.push(typed.data);
+    } else if (typed.type === "tool_call") {
+      toolCalls.push({ ...typed.data, status: "running" });
+    } else if (typed.type === "tool_result") {
+      const call = toolCalls.find(
+        (c) => c.tool_call_id === typed.data.tool_call_id
+      );
+      if (call) {
+        call.status = "error" in typed.data ? "error" : "completed";
+        call.result = typed.data.result;
+      }
+      annotations.push(typed);
+    } else if (typed.type === "hitl_request") {
+      sink.onHitlRequest?.(typed.data);
+      annotations.push(typed);
+    } else if (typed.type === "artifact") {
+      // Not pushed into `annotations`: the array is rebuilt from
+      // reasoning/citations/tool-calls on the next patch, so an entry here
+      // would be dropped by the very next text delta. The callback is the
+      // durable signal; the artifact itself lives in the database.
+      sink.onArtifactSaved?.(typed.data);
+    } else if (
+      (typed as { type: string; data?: { thread_id?: string } }).type ===
+      "conversation_created"
+    ) {
+      const newId = (
+        typed as { type: string; data: { thread_id: string } }
+      ).data?.thread_id;
+      if (newId) sink.onConversationCreated?.(newId);
+    }
+
+    const next: NexusAnnotation[] = [
+      ...annotations,
+      ...(reasoningBuffer
+        ? [
+            {
+              type: "reasoning" as const,
+              data: { content: reasoningBuffer },
+            },
+          ]
+        : []),
+      ...citations.map(
+        (c): CitationAnnotation => ({ type: "citation", data: c })
+      ),
+      ...toolCalls.map(
+        (t): ToolCallAnnotation => ({
+          type: "tool_call",
+          data: t,
+        })
+      ),
+    ];
+    sink.patch(streamContent, next);
   };
 
   const reader = body.getReader();
