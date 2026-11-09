@@ -2,13 +2,14 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
 import { act, fireEvent, render, screen, waitFor } from "@/test/test-utils"
 import SignInPage from "@/app/signin/page"
 
-const fetchMock = vi.fn(async () => {
-  return new Response(JSON.stringify({ providers: [] }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  })
-})
-vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock)
+vi.mock("@/lib/api", () => ({
+  listOAuthProviders: vi.fn(async () => []),
+  registerUser: vi.fn(),
+  loginUser: vi.fn(),
+  startOAuthLogin: vi.fn(),
+}))
+
+const mockedListOAuthProviders = vi.mocked(listOAuthProviders)
 
 const { routerMock } = vi.hoisted(() => ({
   routerMock: { replace: vi.fn(), push: vi.fn() },
@@ -24,7 +25,6 @@ describe("Sign-in page OAuth", () => {
   beforeEach(() => {
     routerMock.replace.mockClear()
     assign.mockReset()
-    fetchMock.mockReset()
     Object.defineProperty(window, "location", {
       value: { ...window.location, assign },
       configurable: true,
@@ -33,12 +33,9 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("sends the browser to the provider authorize URL when Google is clicked", async () => {
-    fetchMock.mockImplementation(async () => {
-      return new Response(
-        JSON.stringify({ providers: [{ name: "google", configured: true }] }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    })
+    mockedListOAuthProviders.mockImplementation(async () => [
+      { name: "google", configured: true },
+    ])
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -55,12 +52,9 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("sends the browser to the provider authorize URL when GitHub is clicked", async () => {
-    fetchMock.mockImplementation(async () => {
-      return new Response(
-        JSON.stringify({ providers: [{ name: "github", configured: true }] }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    })
+    mockedListOAuthProviders.mockImplementation(async () => [
+      { name: "github", configured: true },
+    ])
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -77,15 +71,9 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("surfaces an inline error when OAuth is unconfigured", async () => {
-    fetchMock.mockImplementation(async () => {
-      return new Response(
-        JSON.stringify({ providers: [{ name: "google", configured: true }] }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
-      )
-    })
+    mockedListOAuthProviders.mockImplementation(async () => [
+      { name: "google", configured: true },
+    ])
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -103,20 +91,10 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("hides a provider the deployment has not configured", async () => {
-    fetchMock.mockImplementation(async () => {
-      return new Response(
-        JSON.stringify({
-          providers: [
-            { name: "google", configured: true },
-            { name: "github", configured: false },
-          ],
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
-      )
-    })
+    mockedListOAuthProviders.mockImplementation(async () => [
+      { name: "google", configured: true },
+      { name: "github", configured: false },
+    ])
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -127,20 +105,10 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("hides the whole OAuth section when nothing is configured", async () => {
-    fetchMock.mockImplementation(async () => {
-      return new Response(
-        JSON.stringify({
-          providers: [
-            { name: "google", configured: false },
-            { name: "github", configured: false },
-          ],
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
-      )
-    })
+    mockedListOAuthProviders.mockImplementation(async () => [
+      { name: "google", configured: false },
+      { name: "github", configured: false },
+    ])
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -152,15 +120,7 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("hides the section when the provider list cannot be fetched", async () => {
-    fetchMock.mockImplementation(async () => {
-      return new Response(
-        JSON.stringify({ providers: [] }),
-        {
-          status: 503,
-          headers: { "Content-Type": "application/json" },
-        }
-      )
-    })
+    mockedListOAuthProviders.mockImplementation(async () => [])
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -172,15 +132,9 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("ignores a provider list served with a failure status", async () => {
-    fetchMock.mockImplementation(async () => {
-      return new Response(
-        JSON.stringify({ providers: [{ name: "google", configured: true }] }),
-        {
-          status: 503,
-          headers: { "Content-Type": "application/json" },
-        }
-      )
-    })
+    mockedListOAuthProviders.mockResolvedValue([
+      { name: "google", configured: true },
+    ])
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -191,21 +145,11 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("drops a provider this UI has no button for", async () => {
-    fetchMock.mockImplementation(async () => {
-      return new Response(
-        JSON.stringify({
-          providers: [
-            { name: "google", configured: true },
-            { name: "okta", configured: true },
-            { name: "constructor", configured: true },
-          ],
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
-      )
-    })
+    mockedListOAuthProviders.mockImplementation(async () => [
+      { name: "google", configured: true },
+      { name: "okta", configured: true },
+      { name: "constructor", configured: true },
+    ])
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -219,15 +163,7 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("tolerates a malformed provider list", async () => {
-    fetchMock.mockImplementation(async () => {
-      return new Response(
-        JSON.stringify("not-an-array"),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
-      )
-    })
+    mockedListOAuthProviders.mockImplementation(async () => "not-an-array")
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
