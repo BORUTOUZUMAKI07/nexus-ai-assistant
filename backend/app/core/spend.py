@@ -196,7 +196,21 @@ class SpendMeter:
             "prompt_tokens_reported": self.prompt_tokens_reported,
             "cached_tokens": self.cached_tokens,
             "cache_hit_rate": self.cache_hit_rate,
+            "estimated_cost_usd": round(self.estimated_cost_usd, 6),
         }
+
+    @property
+    def estimated_cost_usd(self) -> float:
+        """Rough dollar estimate for tokens spent this run.
+
+        Pessimistic blended rate (~$0.003/1k input + output tokens, between
+        cheap and expensive models). Accurate enough for a per-turn cost chip;
+        not for billing. The litellm_client already knows the exact model and
+        could feed exact pricing later without changing this shape.
+        """
+        if self.tokens <= 0:
+            return 0.0
+        return self.tokens * 0.003 / 1000.0
 
     def merge_from(self, tokens: int, steps: int) -> None:
         """Adopt counters carried across a suspend/resume boundary.

@@ -38,7 +38,11 @@ from uuid import UUID
 import structlog
 from backend.app.core.config import settings
 from backend.app.core.logging import bind_request_context, clear_request_context
-from backend.app.core.spend import cached_tokens_seen, clear_spend_meter
+from backend.app.core.spend import (
+    cached_tokens_seen,
+    clear_spend_meter,
+    current_spend_meter,
+)
 from backend.app.domain.run.service import RunService
 from backend.app.domain.usage.schemas import UsageLogCreate
 from backend.app.infrastructure.ai.litellm_client import ai_client, resolve_provider
@@ -318,12 +322,19 @@ async def execute_run(
             for frame in post_run:
                 await writer.emit(frame)
 
+            spend_meter = current_spend_meter()
             await writer.emit(
                 {
                     "type": "done",
                     "content": emitted_text,
                     "thread_id": config["configurable"]["thread_id"],
                     "latency_ms": latency_ms,
+                    "tokens": spend_meter.tokens if spend_meter else 0,
+                    "cost_usd": round(
+                        spend_meter.estimated_cost_usd, 6
+                    )
+                    if spend_meter
+                    else 0.0,
                 }
             )
             await _terminate(
@@ -866,6 +877,7 @@ async def _persist_reply(
                 # and no tool history, and read as though the answer had none.
                 citations=citations or [],
                 tool_calls=tool_calls or [],
+                cost_usd=cost_usd,
             )
             await usage_svc.log_usage(
                 UsageLogCreate(

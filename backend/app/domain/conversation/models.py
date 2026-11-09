@@ -55,6 +55,7 @@ class Message(SQLModel, table=True):
     completion_tokens: int = Field(default=0)
     total_tokens: int = Field(default=0)
     tokens_used: int | None = Field(default=None)
+    cost_usd: float = Field(default=0.0)
     latency_ms: int | None = Field(default=None)
     citations: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB, nullable=True))
     tool_calls: list[dict[str, Any]] | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
