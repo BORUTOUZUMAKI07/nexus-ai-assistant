@@ -45,6 +45,7 @@ class MemoryCache:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
         self.sets: list[tuple[str, int | None]] = []
+        self.race_response: dict[str, str] = {}
 
     async def get(self, key: str) -> str | None:
         return self.store.get(key)
@@ -65,6 +66,29 @@ class MemoryCache:
         """Not used by the service -- only to age a cache entry out of existence,
         standing in for a grace window that has elapsed in real time."""
         self.store.pop(key, None)
+
+    async def rotate_refresh_token(
+        self,
+        jti: str,
+        ttl_seconds: int,
+        grace_window_seconds: int,
+        race_response: str | None = None,
+    ) -> dict[str, str | None]:
+        """Atomic rotate-and-record for the single-use refresh token.
+        Returns {"action": "first_use"} on first claim, or
+        {"action": "race_replay", "data": <race_response>} when the jti was
+        already used (and a race response was cached), or
+        {"action": "theft"} when the jti was already used with no cached response.
+        """
+        if jti in self.store:
+            # Already consumed -- this is a replay/theft.
+            data = self.race_response.get(jti) if hasattr(self, "race_response") else None
+            return {"action": "race_replay", "data": data} if data else {"action": "theft"}
+        # First use: claim the jti and optionally record the race response.
+        self.store[jti] = "1"
+        if race_response:
+            self.race_response[jti] = race_response
+        return {"action": "first_use"}
 
 
 def _await(coro):

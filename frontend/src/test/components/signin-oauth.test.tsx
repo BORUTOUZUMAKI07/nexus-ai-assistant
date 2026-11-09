@@ -1,15 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { act, fireEvent, render, screen, waitFor } from "@/test/test-utils"
 import SignInPage from "@/app/signin/page"
+import { listOAuthProviders } from "@/lib/api"
 
 vi.mock("@/lib/api", () => ({
-  listOAuthProviders: vi.fn(async () => []),
+  listOAuthProviders: vi.fn(async () => [] as OAuthProviderInfo[]),
   registerUser: vi.fn(),
   loginUser: vi.fn(),
   startOAuthLogin: vi.fn(),
 }))
-
-import { listOAuthProviders } from "@/lib/api"
 
 const mockedListOAuthProviders = vi.mocked(listOAuthProviders)
 
