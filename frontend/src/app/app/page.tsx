@@ -21,6 +21,7 @@ import { AuthModal } from "@/components/AuthModal";
 import { Menu, Moon, Sun } from "lucide-react";
 import { toast } from "sonner";
 import { CommandPalette } from "@/components/CommandPalette";
+import { KeyboardShortcutsGuide } from "@/components/KeyboardShortcuts";
 import {
   createConversation,
   deleteConversation,
@@ -174,6 +175,7 @@ function AppPageInner() {
   const router = useRouter();
   const { mode, setMode, resolved } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"chat" | "files" | "projects" | "usage" | "settings" | "admin">("chat");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -382,6 +384,21 @@ function AppPageInner() {
       cancelled = true;
     };
   }, []);
+
+  // `?` toggles the keyboard shortcuts guide. Esc closes it.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "?") {
+        e.preventDefault();
+        setShowShortcuts((s) => !s);
+      }
+      if (e.key === "Escape" && showShortcuts) {
+        setShowShortcuts(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showShortcuts]);
 
   // Listen for session expiry from api.ts. This is the only path into the auth
   // modal that happens mid-session (the mount path opens it with an empty
@@ -1217,6 +1234,9 @@ function AppPageInner() {
               citation={activeCitation}
               onClose={() => setActiveCitation(null)}
             />
+
+            {/* Keyboard shortcuts guide (toggle with ?) */}
+            <KeyboardShortcutsGuide open={showShortcuts} onClose={() => setShowShortcuts(false)} />
           </div>
         )}
 
