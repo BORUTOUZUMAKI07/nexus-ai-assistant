@@ -1,6 +1,9 @@
 "use client";
 
+import "react-syntax-highlighter/dist/esm/styles/prism/vsc-dark-plus.css";
 import React, { useState, useCallback, useEffect, useRef } from "react";
+import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useCopyFeedback, useCopyToggle } from "@/lib/clipboard";
 import { modelDisplayName } from "@/lib/models";
 import {
@@ -391,40 +394,87 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
           )}
         </button>
       </div>
-      <div className="px-5 py-4 overflow-x-auto text-[var(--text-secondary)] leading-relaxed text-[13px]">
-        <pre className="!bg-transparent !p-0 !m-0 !border-0 font-mono">
-          <code>{code}</code>
-        </pre>
+      <div className="px-5 py-4 overflow-x-auto">
+        <SyntaxHighlighter
+          language={language || "text"}
+          style={vscDarkPlus}
+          customStyle={{
+            margin: 0,
+            padding: "1rem",
+            background: "var(--code-block-bg)",
+            borderRadius: 0,
+            fontSize: "13px",
+            lineHeight: "1.6",
+          }}
+          codeTagProps={{ className: "!bg-transparent !p-0 !m-0 !border-0 font-mono" }}
+          showLineNumbers={false}
+        >
+          {code}
+        </SyntaxHighlighter>
       </div>
     </div>
   );
 };
 
 /**
- * Renders a ```mermaid fenced block.
+ * Renders a ```mermaid fenced block as a live SVG diagram.
  *
- * It shows the diagram SOURCE, not a rendered diagram — there is no mermaid
- * renderer wired up, and the label says "Diagram source" so that is not
- * mistaken for one. The header used to read "Mermaid Diagram", which
- * described a rendering that never happened.
- *
- * Rendering it for real is a deliberate, separate change, not a missing
- * import: the `mermaid` package injects generated HTML and inline styles, so
- * it needs client-only execution plus sanitisation of its output, and it has
- * to be checked against the CSP in next.config.ts. Worth doing as its own
- * change with those constraints designed for, rather than bolted on here.
+ * Uses mermaid.initialize + mermaid.render on mount. The SVG is injected via
+ * dangerouslySetInnerHTML because mermaid generates its own HTML/SVG. The
+ * diagram is wrapped in a scrollable container so large graphs don't break
+ * the layout.
  */
 const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
   const [copied, copyCode] = useCopyToggle();
+  const [svg, setSvg] = useState<string | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const mermaidRef = useRef<HTMLDivElement>(null);
 
   const handleCopyCode = () => copyCode(code);
 
+  useEffect(() => {
+    if (!mermaidRef.current) return;
+    // mermaid is imported dynamically to avoid SSR issues — it injects
+    // inline styles and SVG that can't be server-rendered.
+    import("mermaid").then(({ default: mermaid }) => {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "base",
+        securityLevel: "loose",
+      });
+      mermaid
+        .render("mermaid-svg", code)
+        .then(({ svg }) => {
+          if (mermaidRef.current) {
+            setSvg(svg);
+            setRenderError(null);
+          }
+        })
+        .catch((err) => {
+          setRenderError(err instanceof Error ? err.message : "Diagram render failed");
+        });
+    });
+  }, [code]);
+
+  if (renderError) {
+    return (
+      <div className="my-3 rounded-lg overflow-hidden border border-[var(--status-danger)/30] bg-[var(--status-danger)]/10">
+        <div className="px-4 py-3 text-xs text-[var(--status-danger)]">
+          Could not render diagram: {renderError}
+        </div>
+        <pre className="px-4 py-2 overflow-x-auto text-[var(--text-secondary)] font-mono text-[12px] bg-[var(--bg-main)]/50">
+          <code>{code}</code>
+        </pre>
+      </div>
+    );
+  }
+
   return (
-    <div className="my-3 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--code-block-bg)] dark-island">
+    <div className="my-3 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-surface)]">
       <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-surface-elevated)] border-b border-[var(--border-subtle)] text-[11px] text-[var(--text-muted)]">
         <span className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-[var(--accent-ink)] font-mono">
           <GitBranch className="w-3.5 h-3.5 text-[var(--accent-ink)]" />
-          Diagram Source
+          Diagram
         </span>
         <button
           onClick={handleCopyCode}
@@ -444,11 +494,23 @@ const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
           )}
         </button>
       </div>
-      <div className="p-4 overflow-x-auto text-[var(--text-secondary)] font-mono text-[12px] bg-[var(--bg-main)]/50 leading-relaxed border-l-2 border-[var(--accent)]">
-        <pre className="!bg-transparent !p-0 !m-0 !border-0 font-mono text-emerald-400">
+      <div className="p-4 overflow-x-auto bg-[var(--bg-main)]">
+        {svg ? (
+          <div ref={mermaidRef} dangerouslySetInnerHTML={{ __html: svg }} />
+        ) : (
+          <div ref={mermaidRef} className="h-48 flex items-center justify-center text-[var(--text-faint)] text-xs">
+            Rendering diagram…
+          </div>
+        )}
+      </div>
+      <details className="border-t border-[var(--border-subtle)] px-4 py-2">
+        <summary className="cursor-pointer text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-medium">
+          Diagram source
+        </summary>
+        <pre className="mt-2 p-3 overflow-x-auto text-[var(--text-secondary)] font-mono text-[12px] bg-[var(--bg-main)]/50">
           <code>{code}</code>
         </pre>
-      </div>
+      </details>
     </div>
   );
 };
