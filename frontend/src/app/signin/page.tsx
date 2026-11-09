@@ -179,7 +179,7 @@ export default function SignInPage() {
       router.replace(nextPath);
     } catch (err) {
       if (err instanceof Error && "retryAfter" in err && err.retryAfter) {
-        setRetryAfter(err.retryAfter);
+        setRetryAfter((err as { retryAfter?: number }).retryAfter ?? null);
         setError(null);
       } else {
         setRetryAfter(null);

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://vercel.schema.json",
+  "version": 2,
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm ci --legacy-peer-deps",
+  "framework": "nextjs",
+  "regions": ["iad1"],
+  "build": {
+    "env": {
+      "NEXT_PUBLIC_API_URL": "@backend_url"
+    }
+  },
+  "crons": []
+}
