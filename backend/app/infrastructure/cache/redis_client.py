@@ -136,12 +136,15 @@ class RedisService(ICacheService):
         -- First use: claim the jti
         redis.call('SET', used_key, '1', 'EX', ttl)
 
-        -- If a race response was provided, publish it for the loser
-        if race_json and #race_json > 0 then
+        -- If a race response was provided, publish it for the loser.
+        -- Only set an expiry when grace > 0; EX 0 is rejected by Redis.
+        if race_json and #race_json > 0 and grace > 0 then
             redis.call('SET', race_key, race_json, 'EX', grace)
         end
 
-        return {0, nil}
+        -- Return empty string instead of nil so Python always gets 2 elements;
+        -- nil is dropped from Lua tables when marshalled to Python.
+        return {0, ""}
         """
         try:
             result = await self.client.eval(
