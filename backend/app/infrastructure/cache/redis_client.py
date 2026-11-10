@@ -165,7 +165,7 @@ class RedisService(ICacheService):
             data = result[1]
             if action == 0:
                 return {"action": "first_use"}
-            if data and grace_window_seconds > 0:
+            if data:
                 return {"action": "race_replay", "data": data}
             return {"action": "theft"}
         except Exception:
