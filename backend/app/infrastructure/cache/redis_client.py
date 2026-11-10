@@ -102,74 +102,34 @@ class RedisService(ICacheService):
         race_response: str | None = None,
     ) -> dict[str, Any]:
         """
-        Atomically rotate a single-use refresh token via a Lua script.
+        Atomically rotate a single-use refresh token.
+
+        Uses SET NX on ``refresh:used:{jti}`` so exactly one caller wins and
+        mints new tokens; any duplicate presentation of the same jti either
+        replays the winner's tokens (race replay, within grace window) or is
+        treated as theft (no race response published).
 
         Returns a dict with one of:
           {"action": "first_use"}        -- key was absent, we claimed it
           {"action": "race_replay", "data": str} -- jti already used, race response cached
           {"action": "theft"}            -- jti already used, no race response (stolen token)
-
-        The script guarantees that only one caller wins the SETNX, eliminating
-        the race between `set_if_absent` and `_store_replay_response` that
-        existed when they were separate Redis round-trips.
         """
-        script = """
-        local used_key = KEYS[1]
-        local race_key = KEYS[2]
-        local ttl = tonumber(ARGV[1])
-        local grace = tonumber(ARGV[2])
-        local race_json = ARGV[3]
+        used_key = f"refresh:used:{jti}"
+        race_key = f"refresh:race:{jti}"
 
-        local existing = redis.call('GET', used_key)
-        if existing then
-            -- Already consumed: check if the winner published a race response
-            local cached = redis.call('GET', race_key)
-            if cached then
-                return {1, cached}
-            end
-            -- Return empty string instead of nil to prevent nil being dropped
-            -- from the Lua table when passed to Python (nil values are
-            -- dropped from tables, causing index out of range errors)
-            return {1, ""}
-        end
+        # Atomic SET NX: exactly one caller wins and mints fresh tokens.
+        won = await self.client.set(used_key, "1", ex=ttl_seconds, nx=True)
+        if won:
+            # Publish the winner's tokens for the loser (race replay within grace window).
+            if race_response and grace_window_seconds > 0:
+                await self.client.set(race_key, race_response, ex=grace_window_seconds)
+            return {"action": "first_use"}
 
-        -- First use: claim the jti
-        redis.call('SET', used_key, '1', 'EX', ttl)
-
-        -- Publish the race response for the loser. When grace_window_seconds
-        -- is 0 (strict single-use), write it with no expiry -- Python ignores
-        -- it when grace is 0, so the key is harmless but present.
-        if race_json and #race_json > 0 then
-            if grace > 0 then
-                redis.call('SET', race_key, race_json, 'EX', grace)
-            else
-                redis.call('SET', race_key, race_json)
-            end
-        end
-
-        -- Return empty string instead of nil so Python always gets 2 elements;
-        -- nil is dropped from Lua tables when marshalled to Python.
-        return {0, ""}
-        """
-        try:
-            result = await self.client.eval(
-                script,
-                2,
-                f"refresh:used:{jti}",
-                f"refresh:race:{jti}",
-                ttl_seconds,
-                grace_window_seconds,
-                race_response or "",
-            )
-            action = int(result[0])
-            data = result[1]
-            if action == 0:
-                return {"action": "first_use"}
-            if data:
-                return {"action": "race_replay", "data": data}
-            return {"action": "theft"}
-        except Exception:
-            raise
+        # We lost the race: check whether the winner published a replay response.
+        cached = await self.client.get(race_key)
+        if cached:
+            return {"action": "race_replay", "data": cached}
+        return {"action": "theft"}
 
 
 # Singleton instance for backwards-compatibility
