@@ -127,7 +127,10 @@ class RedisService(ICacheService):
             if cached then
                 return {1, cached}
             end
-            return {1, nil}
+            -- Return empty string instead of nil to prevent nil being dropped
+            -- from the Lua table when passed to Python (nil values are
+            -- dropped from tables, causing index out of range errors)
+            return {1, ""}
         end
 
         -- First use: claim the jti
