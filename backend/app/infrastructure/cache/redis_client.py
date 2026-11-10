@@ -118,7 +118,8 @@ class RedisService(ICacheService):
         race_key = f"refresh:race:{jti}"
 
         # Atomic SET NX: exactly one caller wins and mints fresh tokens.
-        won = await self.client.set(used_key, "1", ex=ttl_seconds, nx=True)
+        # The key persists forever (no TTL) so a used jti can never be reused.
+        won = await self.client.setnx(used_key, "1")
         if won:
             # Publish the winner's tokens for the loser (race replay within grace window).
             if race_response and grace_window_seconds > 0:
