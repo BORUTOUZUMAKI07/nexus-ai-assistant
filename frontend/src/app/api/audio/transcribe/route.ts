@@ -37,6 +37,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ detail: "No audio file provided" }, { status: 400 });
   }
 
+  // Reject non-audio MIME types before buffering anything for the backend.
+  const contentType = (file as File).type ?? "";
+  if (contentType && !contentType.startsWith("audio/")) {
+    return NextResponse.json(
+      { detail: `Unsupported audio format '${contentType}'. Expected an audio MIME type.` },
+      { status: 400 },
+    );
+  }
+
   // Re-build a FormData to forward to FastAPI
   const backendForm = new FormData();
   backendForm.append("file", file, (file as File).name ?? "recording.webm");

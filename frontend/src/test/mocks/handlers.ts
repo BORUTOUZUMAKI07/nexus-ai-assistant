@@ -562,6 +562,17 @@ export const handlers = [
 
   http.delete("/api/files/:id", () => HttpResponse.json(null, { status: 204 })),
 
+  // A signed download URL lets the client fetch bytes directly from object
+  // storage rather than proxying them through the BFF.
+  http.get("/api/files/:id/download", () =>
+    HttpResponse.json({
+      download_url: "https://storage.example.com/object/sign/nexus-knowledge/user-1/file-1?token=mock-signed-token",
+      filename: "nexus-spec.pdf",
+      content_type: "application/pdf",
+      size_bytes: 145200,
+    })
+  ),
+
   // Transcription was unmocked, so the voice-input path could only ever be
   // exercised by hitting a nonexistent server. The real endpoint returns a
   // single `text` field.

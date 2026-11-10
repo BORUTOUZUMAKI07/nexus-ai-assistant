@@ -871,6 +871,22 @@ export async function deleteFile(id: string): Promise<void> {
   }
 }
 
+export interface FileDownload {
+  download_url: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+}
+
+/** Resolve a signed download URL for a file; the client navigates to it directly. */
+export async function fetchFileDownload(id: string): Promise<FileDownload> {
+  const res = await nexusFetch(`${API_BASE}/files/${id}/download`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Fetch download failed: ${res.status}`);
+  return res.json();
+}
+
 export async function ragQuery(query: string, topK = 5): Promise<{
   citations: MessageCitation[];
   query: string;

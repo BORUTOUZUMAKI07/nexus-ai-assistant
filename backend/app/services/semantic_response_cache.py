@@ -236,5 +236,83 @@ class SemanticResponseCache:
             entries = entries[:max_e]
         await self._store(user_id, model, prompt_variant, entries)
 
+    async def invalidate(
+        self,
+        user_id: str,
+        model: str,
+        prompt_variant: str = "default",
+    ) -> None:
+        """Drop the whole bucket for ``(user_id, model, prompt_variant)``.
+
+        Called after a new assistant message so a previously cached answer for
+        the same question can no longer be served as stale. Fail-open: a store
+        error is logged and swallowed -- a missed invalidation just means one
+        extra cache hit, never a failed request.
+        """
+        if not settings.RESPONSE_CACHE_ENABLED:
+            return
+        key = _bucket_key(user_id, model, prompt_variant)
+        try:
+            await self._cache.delete(key)
+            logger.debug(
+                "semantic_response_cache_invalidated",
+                user_id=user_id,
+                model=model,
+                prompt_variant=prompt_variant,
+            )
+        except Exception as exc:
+            logger.warning(
+                "semantic_response_cache_invalidate_failed",
+                error_type=type(exc).__name__,
+            )
+
+    async def warm(
+        self,
+        user_id: str,
+        model: str,
+        entries: list[dict[str, Any]],
+        prompt_variant: str = "default",
+    ) -> None:
+        """Pre-populate the bucket with pre-computed entries.
+
+        Each entry must carry ``query`` plus ``content``/``tokens_input``/
+        ``tokens_output``/``cost_usd``. Embeddings are computed on write so a
+        later ``get()`` skips the embedding call entirely. Fail-open.
+        """
+        if not (settings.RESPONSE_CACHE_ENABLED and settings.RESPONSE_CACHE_SEMANTIC_ENABLED):
+            return
+        if not entries:
+            return
+        prepared: list[dict[str, Any]] = []
+        for entry in entries:
+            query = entry.get("query")
+            if not query:
+                continue
+            normalized = _normalize_query(query)
+            if len(normalized) < settings.RESPONSE_CACHE_MIN_LENGTH:
+                continue
+            vector = await self._embed(normalized)
+            if not vector:
+                continue
+            prepared.append(
+                {
+                    "query": normalized,
+                    "embedding": vector,
+                    "content": entry.get("content", ""),
+                    "tokens_input": int(entry.get("tokens_input") or 0),
+                    "tokens_output": int(entry.get("tokens_output") or 0),
+                    "cost_usd": float(entry.get("cost_usd") or 0.0),
+                }
+            )
+        if not prepared:
+            return
+        existing = await self._load(user_id, model, prompt_variant)
+        existing = [e for e in existing if e.get("query") not in {p["query"] for p in prepared}]
+        combined = prepared + existing
+        max_e = settings.RESPONSE_CACHE_SEMANTIC_MAX_ENTRIES
+        if len(combined) > max_e:
+            combined = combined[:max_e]
+        await self._store(user_id, model, prompt_variant, combined)
+
 
 semantic_response_cache = SemanticResponseCache()

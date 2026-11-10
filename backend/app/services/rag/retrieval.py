@@ -55,8 +55,9 @@ async def _embed_with_gemini(
     all_embeddings: list[list[float]] = []
 
     async with httpx.AsyncClient(timeout=45.0) as client:
-        for i in range(0, len(texts), 100):
-            batch = texts[i : i + 100]
+        batch_size = settings.RAG_EMBEDDING_BATCH_SIZE
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
             if len(batch) == 1:
                 url = f"https://generativelanguage.googleapis.com/v1beta/{clean_model}:embedContent"
                 payload = {

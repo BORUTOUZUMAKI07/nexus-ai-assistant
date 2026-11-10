@@ -11,12 +11,14 @@ from backend.app.api.deps import (
     get_db,
     get_file_service,
     get_rag_service,
+    get_read_db,
     require_idempotency_key,
 )
 from backend.app.core.config import settings
 from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.domain.file.schemas import (
     FileChunkResponse,
+    FileDownloadResponse,
     FileIndexStatusResponse,
     FileResponse,
     RAGQueryRequest,
@@ -120,7 +122,7 @@ async def list_files(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=1000000),
     current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_read_db),
     file_svc: FileService = Depends(get_file_service),
 ):
     """List all files belonging to the authenticated user (paginated)."""
@@ -137,7 +139,7 @@ async def list_files(
 async def get_chunks(
     file_id: UUID,
     current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_read_db),
     file_svc: FileService = Depends(get_file_service),
 ):
     """Retrieve parsed text chunks for a specific file."""
@@ -185,6 +187,34 @@ async def get_index_status(
         )
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)
+
+
+@router.get("/{file_id}/download", response_model=FileDownloadResponse)
+async def download_file(
+    file_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+    file_svc: FileService = Depends(get_file_service),
+):
+    """Return a signed download URL for a file the user owns.
+
+    The client downloads directly from object storage via the signed URL,
+    so object bytes never transit the BFF.
+    """
+    try:
+        download_url, filename, content_type, size_bytes = await file_svc.get_download_url(
+            file_id=file_id,
+            user_id=current_user.id,
+            session=session,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message)
+    return FileDownloadResponse(
+        download_url=download_url,
+        filename=filename,
+        content_type=content_type,
+        size_bytes=size_bytes,
+    )
 
 
 @router.post("/rag/query", response_model=RAGQueryResult)

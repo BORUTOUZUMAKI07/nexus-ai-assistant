@@ -149,7 +149,12 @@ class SupabaseStorageClient(IStorageService):
                 raise RuntimeError(f"Supabase Storage download failed: {resp.status_code}")
 
     async def get_public_url(self, storage_path: str) -> str:
-        """Get a signed URL for temporary access (60 min expiry)."""
+        """Get a signed URL for temporary access (60 min expiry).
+
+        When ``settings.ASSET_BASE_URL`` is configured, the Supabase host is
+        rewritten to the CDN/edge host so asset bytes are served from the edge
+        rather than transiting the API origin.
+        """
         await self._ensure_bucket()
         path = _normalize_storage_path(storage_path)
 
@@ -161,7 +166,16 @@ class SupabaseStorageClient(IStorageService):
             )
             if resp.status_code == 200:
                 data = resp.json()
-                return f"{settings.SUPABASE_URL}/storage/v1{data['signedURL']}"
+                signed_url = f"{settings.SUPABASE_URL}/storage/v1{data['signedURL']}"
+                if settings.ASSET_BASE_URL:
+                    from urllib.parse import urlparse
+
+                    parsed = urlparse(signed_url)
+                    cdn_url = f"{settings.ASSET_BASE_URL.rstrip('/')}{parsed.path}"
+                    if parsed.query:
+                        cdn_url += f"?{parsed.query}"
+                    return cdn_url
+                return signed_url
             else:
                 raise RuntimeError(f"Supabase Storage sign URL failed: {resp.status_code}")
 

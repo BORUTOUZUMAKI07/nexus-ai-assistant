@@ -54,6 +54,7 @@ from backend.app.services.observability.cost_tracking import cost_tracking_servi
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.run_events import citation_payloads, finished_run_payloads
 from backend.app.services.run_log import RunBroker, RunWriter, run_broker
+from backend.app.services.semantic_response_cache import semantic_response_cache
 from backend.app.services.usage_service import UsageService
 
 logger = structlog.get_logger(__name__)
@@ -114,6 +115,7 @@ _WRITER_ANSWER_NODES = frozenset({"synthesizer"})
 # signal, because it describes work that is not happening.
 _NODE_STATUS_LABELS = {
     "bootstrap": "Preparing the conversation",
+    "model_router": "Routing to the right model",
     "planner": "Planning the answer",
     "tree_of_thoughts": "Weighing alternative plans",
     "orchestrator": "Choosing an approach",
@@ -511,6 +513,14 @@ async def iter_graph_frames(
             # is replaced by the sanitised final text_delta from the writer when
             # it lands. The client replaces message content on each patch, so no
             # duplication is visible; the final frame wins.
+            #
+            # The synthesizer's own raw draft is deliberately NOT forwarded here:
+            # it arrives before PII redaction and the confidence hedge, and the
+            # sanitised text comes through the writer's text_delta drip. Forwarding
+            # both puts the answer on the wire twice.
+            node_meta = event.get("metadata") or {}
+            if node_meta.get("langgraph_node") == "synthesizer":
+                return
             chunk = event.get("data", {}).get("chunk")
             if chunk and hasattr(chunk, "content") and chunk.content:
                 _streamed_tokens = True
@@ -916,6 +926,12 @@ async def _persist_reply(
                 completion_tokens=comp_tok,
             )
             await session.commit()
+            # Invalidate the semantic cache bucket so a freshly persisted
+            # answer cannot be served stale on a repeated question.
+            await semantic_response_cache.invalidate(
+                user_id=str(user_id),
+                model=response_model,
+            )
             # Fire-and-forget: an endpoint that is slow, down or retrying must
             # not delay the `done` frame the user is waiting on.
             _spawn_webhook_dispatch(

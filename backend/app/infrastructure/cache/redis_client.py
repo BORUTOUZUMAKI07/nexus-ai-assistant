@@ -132,11 +132,6 @@ class RedisService(ICacheService):
             -- dropped from tables, causing index out of range errors)
             return {1, ""}
         end
-            -- Return empty string instead of nil to prevent nil being dropped
-            -- from the Lua table when passed to Python (nil values are
-            -- dropped from tables, causing index out of range errors)
-            return {1, ""}
-        end
 
         -- First use: claim the jti
         redis.call('SET', used_key, '1', 'EX', ttl)

@@ -51,6 +51,13 @@ class FileIndexStatusResponse(BaseModel):
     updated_at: datetime
 
 
+class FileDownloadResponse(BaseModel):
+    download_url: str
+    filename: str
+    content_type: str
+    size_bytes: int
+
+
 class RAGQueryRequest(BaseModel):
     query: str = Field(min_length=1)
     file_ids: list[UUID] | None = None

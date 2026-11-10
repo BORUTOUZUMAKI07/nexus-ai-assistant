@@ -144,7 +144,9 @@ def _forget_published_result(cache: MemoryCache, token: str) -> None:
     Without this a duplicate is always inside the window and is served the
     winner's tokens, so the replay path is never reached.
     """
-    _await(cache.delete(f"refresh:race:{decode_token(token)['jti']}"))
+    jti = decode_token(token)["jti"]
+    _await(cache.delete(f"refresh:race:{jti}"))
+    cache.race_response.pop(jti, None)
 
 
 def test_duplicate_inside_the_window_replays_the_first_result(cache):

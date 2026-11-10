@@ -12,7 +12,7 @@ from backend.app.domain.user.models import User
 from backend.app.domain.user.repository import UserRepository
 from backend.app.infrastructure.cache.base import ICacheService
 from backend.app.infrastructure.cache.redis_client import get_cache_service
-from backend.app.infrastructure.database.session import get_db_session
+from backend.app.infrastructure.database.session import get_db_session, get_read_db_session
 from backend.app.infrastructure.resilience.guards import IdempotencyGuard
 from backend.app.infrastructure.storage.base import IStorageService
 
@@ -29,6 +29,12 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_PREFIX}/auth/lo
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async for session in get_db_session():
+        yield session
+
+
+async def get_read_db() -> AsyncGenerator[AsyncSession, None]:
+    """Yield a read-only session (read replica when configured, else primary)."""
+    async for session in get_read_db_session():
         yield session
 
 

@@ -12,10 +12,10 @@ import { checkAuth } from "@/lib/auth";
  * providers this UI doesn't know about yet — so a newly configured backend
  * provider still shows a button instead of being silently dropped.
  */
-const PROVIDER_LABELS: Record<string, string> = {
+const PROVIDER_LABELS: Record<string, string> = Object.assign(Object.create(null), {
   google: "Google",
   github: "GitHub",
-};
+});
 
 /** Fallback icon for providers this UI doesn't have a glyph for. */
 function ProviderGlyphFallback() {
@@ -39,10 +39,10 @@ function ProviderGlyphFallback() {
 /**
  * Provider glyph per provider, with a fallback for unknown providers.
  */
-const PROVIDER_GLYPHS: Record<string, React.ReactNode> = {
+const PROVIDER_GLYPHS: Record<string, React.ReactNode> = Object.assign(Object.create(null), {
   google: <GoogleGlyph />,
   github: <GitHubGlyph />,
-};
+});
 
 /**
  * The failure codes the OAuth callback redirects back with (`/signin?error=…`).
@@ -202,6 +202,10 @@ export default function SignInPage() {
     const controller = new AbortController();
     void listOAuthProviders({ signal: controller.signal }).then((providers) => {
       if (controller.signal.aborted) return;
+      if (!Array.isArray(providers)) {
+        setOAuthProviders([]);
+        return;
+      }
       const usable = providers
         .filter((p) => p.configured)
         // Every configured provider gets a button: known ones use their glyph

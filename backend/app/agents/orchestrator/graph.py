@@ -54,7 +54,7 @@ logger = structlog.get_logger(__name__)
 _compiled_graph: Any | None = None
 
 
-def model_router_node(state: AgentState) -> dict:
+async def model_router_node(state: AgentState) -> dict:
     """Auto-route each turn to fast_chat vs complex_reasoning based on task
     complexity, unless the user explicitly picked a group via the picker.
     Also compacts older conversation turns into a summary when the history
@@ -71,7 +71,7 @@ def model_router_node(state: AgentState) -> dict:
     # Context compaction: if history exceeds COMPACT_AFTER_TURNS turns, summarize
     # older turns into a single summary message and keep only the recent window.
     # This prevents context-window exhaustion on long threads.
-    compact_result = _maybe_compact(messages)
+    compact_result = await _maybe_compact(messages)
     if compact_result:
         return {**compact_result, **{
             "answer_model": decision.model,
@@ -95,7 +95,7 @@ _COMPACT_AFTER_TURNS = 20
 _COMPACT_KEEP_LAST = 8
 
 
-def _maybe_compact(messages: list) -> dict | None:
+async def _maybe_compact(messages: list) -> dict | None:
     """Return compaction patch if history is too long, else None."""
     # Count user+assistant turns (pairs)
     turn_count = sum(1 for m in messages if getattr(m, "type", "") in ("human", "ai"))
@@ -119,16 +119,12 @@ def _maybe_compact(messages: list) -> dict | None:
     # Build the summary using a fast model call. If it fails, skip compaction
     # (better to have full history than none).
     try:
-        import asyncio
-
         from backend.app.infrastructure.ai.litellm_client import ai_client
 
-        summary = asyncio.get_event_loop().run_until_complete(
-            ai_client.completion(
-                messages=[{"role": "user", "content": summary_prompt}],
-                model="gpt-4o-mini",
-                temperature=0.1,
-            )
+        summary = await ai_client.completion(
+            messages=[{"role": "user", "content": summary_prompt}],
+            model="gpt-4o-mini",
+            temperature=0.1,
         )
     except Exception:
         return None

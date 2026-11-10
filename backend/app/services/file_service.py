@@ -194,6 +194,26 @@ class FileService:
             raise ResourceNotFoundError(resource_type="File", identifier=str(file_id))
         return await repo.get_chunks_by_file(file_id)
 
+    async def get_download_url(
+        self,
+        *,
+        file_id: UUID,
+        user_id: UUID,
+        session: AsyncSession,
+    ) -> tuple[str, str, str, int]:
+        """Return a signed download URL for a file the user owns.
+
+        Verifies ownership first, then asks the storage backend for a
+        time-limited signed URL so the client downloads directly from object
+        storage instead of proxying bytes through the BFF.
+        """
+        repo = FileRepository(session)
+        db_file = await repo.get_by_id(file_id, user_id=user_id)
+        if not db_file:
+            raise ResourceNotFoundError(resource_type="File", identifier=str(file_id))
+        signed = await self._storage.get_public_url(db_file.storage_path)
+        return signed, db_file.original_filename, db_file.mime_type, db_file.size_bytes
+
     async def delete_file(
         self,
         *,

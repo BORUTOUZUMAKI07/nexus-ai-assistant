@@ -222,6 +222,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field(
         default="postgresql+asyncpg://nexus:nexus@localhost:5432/nexus_dev"
     )
+    # Optional read-replica DSN. When set, read-only queries route to a separate
+    # engine so read traffic does not contend with writes on the primary.
+    # Left unset, reads fall back to DATABASE_URL (single-engine behaviour).
+    DATABASE_READ_URL: str | None = None
     # Echo every SQL statement to the console. Off by default even in
     # development — on by default it floods the dev console with every
     # sqlalchemy query (pg_catalog table checks, etc.).
@@ -353,6 +357,11 @@ class Settings(BaseSettings):
     #
     # The upload ceiling is MAX_UPLOAD_SIZE_MB (enforced in api/v1/files.py).
     STORAGE_BUCKET: str = Field(default="nexus-knowledge", description="Supabase Storage bucket name")
+    # Optional CDN / edge host in front of object storage. When set, signed
+    # download URLs are rewritten to this host so asset bytes are served from
+    # the edge rather than transiting the API origin. Left unset, downloads use
+    # the Supabase storage host directly.
+    ASSET_BASE_URL: str | None = None
 
     # ── Prompt templates ──────────────────────────────────────────────────────
     # Single source of truth, computed at import so the default works in any
@@ -540,6 +549,16 @@ class Settings(BaseSettings):
         default=6.0,
         description="Hard ceiling on the HyDE call. Retrieval must not wait on "
         "generation, so this fails to the template rather than to an error.",
+    )
+
+    # Batch size for Gemini embedContent/batchEmbedContents calls. The Gemini API
+    # accepts up to 100 texts per batch; this ceiling keeps each request bounded
+    # while allowing an operator to lower it for tighter per-call cost control.
+    RAG_EMBEDDING_BATCH_SIZE: int = Field(
+        default=100,
+        ge=1,
+        le=100,
+        description="Max texts per embedding batch (Gemini API hard limit is 100)",
     )
 
     # Query decomposition (multi-hop retrieval). Multi-query rewriting produces

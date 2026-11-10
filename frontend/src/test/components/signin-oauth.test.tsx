@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { act, fireEvent, render, screen, waitFor } from "@/test/test-utils"
 import SignInPage from "@/app/signin/page"
-import { listOAuthProviders, type OAuthProviderInfo } from "@/lib/api"
+import { listOAuthProviders, startOAuthLogin, type OAuthProviderInfo } from "@/lib/api"
 
 vi.mock("@/lib/api", () => ({
   listOAuthProviders: vi.fn(async (): Promise<OAuthProviderInfo[]> => []),
@@ -11,6 +11,7 @@ vi.mock("@/lib/api", () => ({
 }))
 
 const mockedListOAuthProviders = vi.mocked(listOAuthProviders)
+const mockedStartOAuthLogin = vi.mocked(startOAuthLogin)
 
 const { routerMock } = vi.hoisted(() => ({
   routerMock: { replace: vi.fn(), push: vi.fn() },
@@ -26,6 +27,8 @@ describe("Sign-in page OAuth", () => {
   beforeEach(() => {
     routerMock.replace.mockClear()
     assign.mockReset()
+    mockedListOAuthProviders.mockReset()
+    mockedStartOAuthLogin.mockReset()
     Object.defineProperty(window, "location", {
       value: { ...window.location, assign },
       configurable: true,
@@ -37,6 +40,11 @@ describe("Sign-in page OAuth", () => {
     mockedListOAuthProviders.mockImplementation(async () => [
       { name: "google", configured: true },
     ])
+    mockedStartOAuthLogin.mockResolvedValue({
+      authorization_url: "https://idp.example/authorize?state=test-oauth-state&code_challenge_method=S256",
+      state: "test-oauth-state",
+      provider: "google",
+    })
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -56,6 +64,11 @@ describe("Sign-in page OAuth", () => {
     mockedListOAuthProviders.mockImplementation(async () => [
       { name: "github", configured: true },
     ])
+    mockedStartOAuthLogin.mockResolvedValue({
+      authorization_url: "https://idp.example/authorize?state=test-oauth-state&code_challenge_method=S256",
+      state: "test-oauth-state",
+      provider: "github",
+    })
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -75,6 +88,7 @@ describe("Sign-in page OAuth", () => {
     mockedListOAuthProviders.mockImplementation(async () => [
       { name: "google", configured: true },
     ])
+    mockedStartOAuthLogin.mockRejectedValue(new Error("Single sign-on is not configured."))
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
@@ -133,9 +147,7 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("ignores a provider list served with a failure status", async () => {
-    mockedListOAuthProviders.mockResolvedValue([
-      { name: "google", configured: true },
-    ])
+    mockedListOAuthProviders.mockImplementation(async () => [])
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))

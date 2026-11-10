@@ -44,6 +44,37 @@ engine: AsyncEngine = create_async_engine(
     connect_args={"statement_cache_size": 0, "max_cached_statement_lifetime": 0},
 )
 
+# Read-replica engine, lazily created only when DATABASE_READ_URL is set.
+# When unset, all reads fall back to the write engine (single-engine behaviour).
+_read_engine: AsyncEngine | None = None
+
+
+def get_read_engine() -> AsyncEngine:
+    """Return the read-replica engine, or the write engine when no replica is configured.
+
+    Created lazily so a deployment without a read replica pays no engine cost.
+    """
+    global _read_engine
+    if _read_engine is not None:
+        return _read_engine
+    if settings.DATABASE_READ_URL:
+        _read_engine = create_async_engine(
+            settings.DATABASE_READ_URL,
+            echo=settings.DATABASE_ECHO,
+            future=True,
+            poolclass=NullPool,
+            connect_args={"statement_cache_size": 0, "max_cached_statement_lifetime": 0},
+        )
+        logger.info("database_read_engine_created")
+    else:
+        _read_engine = engine
+    return _read_engine
+
+
+def get_write_engine() -> AsyncEngine:
+    """Return the write (primary) engine."""
+    return engine
+
 
 async def init_db() -> None:
     """
@@ -69,6 +100,8 @@ async def init_db() -> None:
 async def close_db() -> None:
     """Disposes of engine connections upon application shutdown."""
     await engine.dispose()
+    if _read_engine is not None and _read_engine is not engine:
+        await _read_engine.dispose()
     logger.info("database_engine_disposed")
 
 
