@@ -136,10 +136,15 @@ class RedisService(ICacheService):
         -- First use: claim the jti
         redis.call('SET', used_key, '1', 'EX', ttl)
 
-        -- If a race response was provided, publish it for the loser.
-        -- Only set an expiry when grace > 0; EX 0 is rejected by Redis.
-        if race_json and #race_json > 0 and grace > 0 then
-            redis.call('SET', race_key, race_json, 'EX', grace)
+        -- Publish the race response for the loser. When grace_window_seconds
+        -- is 0 (strict single-use), write it with no expiry -- Python ignores
+        -- it when grace is 0, so the key is harmless but present.
+        if race_json and #race_json > 0 then
+            if grace > 0 then
+                redis.call('SET', race_key, race_json, 'EX', grace)
+            else
+                redis.call('SET', race_key, race_json)
+            end
         end
 
         -- Return empty string instead of nil so Python always gets 2 elements;
@@ -160,7 +165,7 @@ class RedisService(ICacheService):
             data = result[1]
             if action == 0:
                 return {"action": "first_use"}
-            if data:
+            if data and grace_window_seconds > 0:
                 return {"action": "race_replay", "data": data}
             return {"action": "theft"}
         except Exception:
