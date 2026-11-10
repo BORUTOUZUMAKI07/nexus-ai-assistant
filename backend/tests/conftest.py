@@ -192,8 +192,10 @@ async def override_get_db(session_factory, schema_ready):
             yield session
 
     app.dependency_overrides[deps.get_db] = _get_db
+    app.dependency_overrides[deps.get_read_db] = _get_db
     yield
     app.dependency_overrides.pop(deps.get_db, None)
+    app.dependency_overrides.pop(deps.get_read_db, None)
 
 
 class _PerTestClientIp:
