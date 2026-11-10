@@ -19,8 +19,7 @@ to the FastAPI backend (`localhost:8000`) with credentials/cookies attached.
 - **BFF proxy**: route handlers in `src/app/api/**` forward via the shared
   helper in `src/lib/proxy.ts` (reads the JWT cookie → `Authorization: Bearer`
   header); `src/proxy.ts` is the edge middleware that server-side-gates `/app`.
-  Backend address resolution: `BACKEND_URL` → legacy `NEXT_PUBLIC_API_URL` →
-  `http://127.0.0.1:8000`.
+  Backend address resolution: `BACKEND_URL` → `http://127.0.0.1:8000`.
 - **Stack**: Next 16.4.2 · React 19.2.8 · TypeScript 5 · Tailwind 4 ·
   Radix UI + `cmdk` · `lucide-react` · `motion` · `sonner` · Vitest 4 ·
   Playwright · MSW (test mocking).
@@ -38,8 +37,7 @@ The backend must be running (`make backend` from the repo root, or see
 [`../backend/README.md`](../backend/README.md)). Local infra (Postgres, Redis,
 Qdrant) comes from `docker compose up -d` at the repo root.
 
-To point at a non-default backend, set `BACKEND_URL` in `.env.local` (a
-legacy `NEXT_PUBLIC_API_URL` is also honored; fallback is
+To point at a non-default backend, set `BACKEND_URL` in `.env.local` (fallback is
 `http://127.0.0.1:8000` — see `src/lib/proxy.ts`).
 
 ## Scripts

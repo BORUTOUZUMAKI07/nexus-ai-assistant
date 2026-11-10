@@ -13,11 +13,9 @@ import { NextResponse } from "next/server";
 // Server-only backend address. Do NOT use a NEXT_PUBLIC_ variable here: this
 // value must never reach the client bundle (it exposes the internal host/port
 // and bakes the address in at build time). BACKEND_URL is read from the
-// server environment at request time; the NEXT_PUBLIC_API_URL fallback keeps
-// older local setups working.
+// server environment at request time.
 const BACKEND_URL =
   process.env.BACKEND_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
   "http://127.0.0.1:8000";
 
 /**

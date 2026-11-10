@@ -159,9 +159,8 @@ npm run build              # next build (standalone output)
 npm run start              # NODE_ENV=production server (scripts/serve.js)
 ```
 
-Point the frontend at the backend via `BACKEND_URL` (server-side env; a legacy
-`NEXT_PUBLIC_API_URL` is also honored, falling back to
-`http://127.0.0.1:8000`). The BFF route handlers under `frontend/src/app/api/**`
+Point the frontend at the backend via `BACKEND_URL` (server-side env; falls back
+to `http://127.0.0.1:8000`). The BFF route handlers under `frontend/src/app/api/**`
 forward requests with cookies. Frontend `package.json` pins **next 16.4.2**,
 react 19.2.8, typescript 5, vitest 4, playwright.
 

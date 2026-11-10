@@ -7,9 +7,7 @@
   "framework": "nextjs",
   "regions": ["iad1"],
   "build": {
-    "env": {
-      "NEXT_PUBLIC_API_URL": "@backend_url"
-    }
+    "env": {}
   },
   "crons": []
 }
