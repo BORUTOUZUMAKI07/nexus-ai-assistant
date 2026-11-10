@@ -4,7 +4,7 @@ import SignInPage from "@/app/signin/page"
 import { listOAuthProviders, type OAuthProviderInfo } from "@/lib/api"
 
 vi.mock("@/lib/api", () => ({
-  listOAuthProviders: vi.fn(async () => [] as OAuthProviderInfo[]),
+  listOAuthProviders: vi.fn(async (): Promise<OAuthProviderInfo[]> => []),
   registerUser: vi.fn(),
   loginUser: vi.fn(),
   startOAuthLogin: vi.fn(),
@@ -164,7 +164,7 @@ describe("Sign-in page OAuth", () => {
   })
 
   it("tolerates a malformed provider list", async () => {
-    mockedListOAuthProviders.mockImplementation(async () => "not-an-array")
+    mockedListOAuthProviders.mockImplementation(async (): Promise<OAuthProviderInfo[]> => ["not-an-array" as unknown as OAuthProviderInfo])
     render(<SignInPage />)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
