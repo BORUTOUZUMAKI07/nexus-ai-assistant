@@ -22,9 +22,8 @@ import math
 from typing import Any
 
 import structlog
-
-from app.core.config import settings
-from app.infrastructure.cache.redis_client import redis_service
+from backend.app.core.config import settings
+from backend.app.infrastructure.cache.redis_client import redis_service
 
 logger = structlog.get_logger(__name__)
 
@@ -32,7 +31,7 @@ _PREFIX = "response_cache:sem:v1:"
 
 
 def _normalize_query(text: str) -> str:
-    from app.infrastructure.cache.response_cache import normalize_query
+    from backend.app.infrastructure.cache.response_cache import normalize_query
 
     return normalize_query(text)
 
