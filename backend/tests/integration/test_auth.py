@@ -213,6 +213,7 @@ async def test_refresh_token_rotation_and_reuse_detection(client, redis_backend)
 
     # A duplicate inside the window is the two-tab race: same tokens, not a
     # rival rotation that would silently invalidate the other tab.
+    client.cookies.clear()
     duplicate = await client.post(
         "/api/v1/auth/refresh",
         json={"refresh_token": refresh_token},
@@ -223,6 +224,7 @@ async def test_refresh_token_rotation_and_reuse_detection(client, redis_backend)
     # Age the grace entry out so the replay is unambiguously late, rather than
     # sleeping through the window.
     await redis_backend.delete(f"refresh:race:{jti}")
+    client.cookies.clear()
 
     # Past the window it is theft again: refused, and the family is killed.
     replay = await client.post(

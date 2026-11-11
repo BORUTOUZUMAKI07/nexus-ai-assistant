@@ -100,6 +100,9 @@ async def test_duplicate_refresh_returns_the_same_tokens_not_a_second_rotation(
         "/api/v1/auth/refresh", json={"refresh_token": original}
     )
     assert first.status_code == 200
+    # Clear the rotated refresh cookie so the duplicate re-presents the original
+    # token from the body (simulating a second tab that still holds the old cookie).
+    client.cookies.clear()
     duplicate = await client.post(
         "/api/v1/auth/refresh", json={"refresh_token": original}
     )
@@ -126,6 +129,7 @@ async def test_replay_outside_the_grace_window_still_revokes_the_family(
 
     # Age the grace entry out, simulating a replay long after the race.
     await redis_backend.delete(f"refresh:race:{decode_token(original)['jti']}")
+    client.cookies.clear()
 
     replay = await client.post(
         "/api/v1/auth/refresh", json={"refresh_token": original}
@@ -134,6 +138,7 @@ async def test_replay_outside_the_grace_window_still_revokes_the_family(
 
     # And the whole family is now dead, not just the one token.
     rotated = first.json()["refresh_token"]
+    client.cookies.clear()
     after = await client.post(
         "/api/v1/auth/refresh", json={"refresh_token": rotated}
     )
@@ -180,6 +185,7 @@ async def test_reuse_revokes_one_sign_in_not_every_device(client, redis_backend)
     assert first.status_code == 200
 
     await redis_backend.delete(f"refresh:race:{decode_token(stolen_device_token)['jti']}")
+    client.cookies.clear()
 
     replay = await client.post(
         "/api/v1/auth/refresh", json={"refresh_token": stolen_device_token}
@@ -187,6 +193,7 @@ async def test_reuse_revokes_one_sign_in_not_every_device(client, redis_backend)
     assert replay.status_code == 401
 
     # The phone's session is a different family and must be untouched.
+    client.cookies.clear()
     phone_refresh = await client.post(
         "/api/v1/auth/refresh", json={"refresh_token": phone_token}
     )
@@ -222,6 +229,7 @@ async def test_replay_wait_is_bounded_by_a_sub_window(client, redis_backend):
     # legitimate in-window duplicate, and with a narrow window the wait would be
     # capped by the window rather than by the service bound.
     await redis_backend.delete(f"refresh:race:{decode_token(original)['jti']}")
+    client.cookies.clear()
     original_window = settings.REFRESH_REUSE_GRACE_SECONDS
     settings.REFRESH_REUSE_GRACE_SECONDS = 60
     try:
@@ -251,6 +259,7 @@ async def test_grace_window_of_zero_restores_strict_single_use(client, redis_bac
             "/api/v1/auth/refresh", json={"refresh_token": original}
         )
         assert first.status_code == 200
+        client.cookies.clear()
         duplicate = await client.post(
             "/api/v1/auth/refresh", json={"refresh_token": original}
         )
