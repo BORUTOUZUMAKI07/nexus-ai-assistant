@@ -17,8 +17,7 @@ import hashlib
 from pathlib import Path
 
 import structlog
-
-from app.core.config import settings
+from backend.app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 

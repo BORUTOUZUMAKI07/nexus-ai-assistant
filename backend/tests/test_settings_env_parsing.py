@@ -18,8 +18,7 @@ crash.
 from __future__ import annotations
 
 import pytest
-
-from app.core.config import Settings
+from backend.app.core.config import Settings
 
 
 def _settings(monkeypatch: pytest.MonkeyPatch, **env: str) -> Settings:

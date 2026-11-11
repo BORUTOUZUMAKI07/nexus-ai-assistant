@@ -52,7 +52,7 @@ migrate-history: ## Show migration history
 UVICORN_LOOP := --loop backend.app.infrastructure.common.event_loop:event_loop_factory
 
 backend: ## Start FastAPI backend (hot reload)
-	cd backend && $(UV) run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 $(UVICORN_LOOP)
+	$(UV) run --project backend uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000 $(UVICORN_LOOP)
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
 frontend: ## Start Next.js frontend dev server
@@ -67,7 +67,7 @@ frontend-build: ## Build frontend for production
 # ─── Development (all together) ───────────────────────────────────────────────
 dev: infra ## Start all services + backend + frontend concurrently
 	@echo "Starting backend and frontend..."
-	@powershell -Command "Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd backend; uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 $(UVICORN_LOOP)'"
+	@powershell -Command "Start-Process powershell -ArgumentList '-NoExit', '-Command', 'uv run --project backend uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000 $(UVICORN_LOOP)'"
 	@powershell -Command "Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd frontend; npm run dev'"
 	@echo ""
 	@echo "╔═══════════════════════════════════════════════╗"

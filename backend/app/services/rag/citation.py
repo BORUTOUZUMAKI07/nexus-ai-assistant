@@ -7,8 +7,7 @@ import re
 from typing import Any
 
 import structlog
-
-from app.domain.file.schemas import RAGCitation
+from backend.app.domain.file.schemas import RAGCitation
 
 logger = structlog.get_logger(__name__)
 

@@ -12,24 +12,23 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-
-from app.core.config import settings
-from app.domain.file.schemas import RAGCitation, RAGQueryResult
-from app.services.observability.tracing import trace_span
-from app.services.rag.answer_coverage import grade_answer_coverage
-from app.services.rag.base import IReranker, IRetriever, IRewriter
-from app.services.rag.citation import CitationService
-from app.services.rag.citation import (
+from backend.app.core.config import settings
+from backend.app.domain.file.schemas import RAGCitation, RAGQueryResult
+from backend.app.services.observability.tracing import trace_span
+from backend.app.services.rag.answer_coverage import grade_answer_coverage
+from backend.app.services.rag.base import IReranker, IRetriever, IRewriter
+from backend.app.services.rag.citation import CitationService
+from backend.app.services.rag.citation import (
     citation_service as _default_citation_service,
 )
-from app.services.rag.query_decomposition import (
+from backend.app.services.rag.query_decomposition import (
     query_decomposer_service as _default_decomposer,
 )
-from app.services.rag.query_rewriter import (
+from backend.app.services.rag.query_rewriter import (
     query_rewriter_service as _default_rewriter,
 )
-from app.services.rag.reranking import reranker as _default_reranker
-from app.services.rag.retrieval import (
+from backend.app.services.rag.reranking import reranker as _default_reranker
+from backend.app.services.rag.retrieval import (
     retrieval_service as _default_retrieval_service,
 )
 

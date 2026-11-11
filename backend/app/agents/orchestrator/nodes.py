@@ -982,8 +982,13 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
         # Vector store unreachable â†’ keep the CRAG fallback (regression guard).
         verdict, score = VERDICT_UNRELATED, 0.0
         needs_web_search = True
-    elif not getattr(result, "citations", None):
-        # Healthy empty index (no user docs): no slow web scrape for general chat.
+    elif result is None or not getattr(result, "citations", None):
+        # Either RAG came back empty-handed (the except above) or the index is
+        # healthy but has no user docs: no slow web scrape for general chat.
+        # The `result is None` half is not decorative -- `getattr` tells mypy
+        # nothing about the union, so without it the branch below cannot use
+        # `result.citations` without an AttributeError on a None.
+
         verdict, score = VERDICT_UNRELATED, 0.0
         needs_web_search = wants_recency
     else:

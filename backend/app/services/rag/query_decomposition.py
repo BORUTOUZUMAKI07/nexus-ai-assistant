@@ -16,8 +16,7 @@ from __future__ import annotations
 import re
 
 import structlog
-
-from app.core.config import settings
+from backend.app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
