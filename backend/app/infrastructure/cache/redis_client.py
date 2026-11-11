@@ -109,41 +109,38 @@ class RedisService(ICacheService):
         replays the winner's tokens (race replay, within grace window) or is
         treated as theft (no race response published).
 
-        Returns a dict with one of:
-          {"action": "first_use"}        -- key was absent, we claimed it
-          {"action": "race_replay", "data": str} -- jti already used, race response cached
-          {"action": "theft"}            -- jti already used, no race response (stolen token)
+        Returns a list with one of:
+          [0, ""]                  -- key was absent, we claimed it
+          [1, cached_json]         -- jti already used, race response cached
+          [1, ""]                  -- jti already used, no race response (stolen token)
         """
         script = """
         local used_key = KEYS[1]
         local race_key = KEYS[2]
         local race_json = ARGV[1]
-        local grace_window = tonumber(ARGV[2])
 
         local existing = redis.call('GET', used_key)
         if existing then
             -- Already consumed: check if the winner published a race response
             local cached = redis.call('GET', race_key)
             if cached then
-                return {action = 1, data = cached}
+                return {1, cached}
             end
             -- Return empty string instead of nil to prevent nil being dropped
             -- from the Lua table when passed to Python (nil values are
             -- dropped from tables, causing index out of range errors)
-            return {action = 1, data = ""}
+            return {1, ""}
         end
 
         -- First use: claim the jti (persists forever, no TTL)
         redis.call('SET', used_key, '1')
 
-        -- Publish the winner's tokens for the loser, but only within the
-        -- grace window. When grace_window is 0 there is no replay window at
-        -- so every duplicate is treated as theft (strict single-use).
-        if grace_window and grace_window > 0 and race_json and #race_json > 0 then
-            redis.call('SET', race_key, race_json, 'EX', grace_window)
+        -- Publish the winner's tokens for the loser (Python decides grace window)
+        if race_json and #race_json > 0 then
+            redis.call('SET', race_key, race_json)
         end
 
-        return {action = 0, data = ""}
+        return {0, ""}
         """
         try:
             result = await self.client.eval(
@@ -152,7 +149,6 @@ class RedisService(ICacheService):
                 f"refresh:used:{jti}",
                 f"refresh:race:{jti}",
                 race_response or "",
-                str(grace_window_seconds),
             )
             action = int(result[0])
             data = result[1]
