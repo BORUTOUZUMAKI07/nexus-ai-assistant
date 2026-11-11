@@ -10,8 +10,10 @@ import { QueryClient } from "@tanstack/react-query";
  *
  * - retry: 1 — one silent retry absorbs a transient network blip without
  *   turning a slow backend into three sequential failures for the user.
- * - staleTime: 30s — a list revalidates in the background once it is older than
- *   half a minute; a fresh tab switch renders instantly from cache.
+ * - staleTime: 30s default — a list revalidates in the background once it is
+ *   older than half a minute; a fresh tab switch renders instantly from cache.
+ * - gcTime: 10min — idle queries are evicted after ten minutes so long-lived
+ *   sessions do not grow the cache without bound.
  * - refetchOnWindowFocus: false — this is a chat application; losing focus to a
  *   code editor and coming back is not a signal to refetch every open query.
  */
@@ -21,6 +23,7 @@ export function createQueryClient(): QueryClient {
       queries: {
         retry: 1,
         staleTime: 30_000,
+        gcTime: 600_000,
         refetchOnWindowFocus: false,
       },
     },

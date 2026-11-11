@@ -1,8 +1,7 @@
 "use client";
 
 import React, { useState, useCallback, useEffect, useRef } from "react";
-import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+import dynamic from "next/dynamic";
 import { useCopyFeedback, useCopyToggle } from "@/lib/clipboard";
 import { modelDisplayName } from "@/lib/models";
 import {
@@ -36,6 +35,39 @@ import {
 } from "lucide-react";
 import { ArtifactItem } from "./ArtifactCanvas";
 import { NexusMark } from "./NexusMark";
+
+// react-syntax-highlighter is heavy (~150KB gzipped) and only needed for code
+// blocks inside assistant messages. Load it dynamically on the client so it is
+// not part of the initial SSR payload or the main client bundle.
+const SyntaxHighlighterBlock = dynamic(
+  async () => {
+    const mod = await import("react-syntax-highlighter");
+    const { vscDarkPlus } = await import(
+      "react-syntax-highlighter/dist/esm/styles/prism"
+    );
+    const PrismLight = mod.PrismLight as React.ComponentType<any>;
+    return ({ children, language, ...props }: any) => (
+      <PrismLight
+        language={language || "text"}
+        style={vscDarkPlus}
+        customStyle={{
+          margin: 0,
+          padding: "1rem",
+          background: "var(--code-block-bg)",
+          borderRadius: 0,
+          fontSize: "13px",
+          lineHeight: "1.6",
+        }}
+        codeTagProps={{ className: "!bg-transparent !p-0 !m-0 !border-0 font-mono" }}
+        showLineNumbers={false}
+        {...props}
+      >
+        {children}
+      </PrismLight>
+    );
+  },
+  { ssr: false, loading: () => null }
+);
 
 export interface PlanReviewItem {
   id: string;
@@ -414,22 +446,9 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
         </button>
       </div>
       <div className="px-5 py-4 overflow-x-auto">
-        <SyntaxHighlighter
-          language={language || "text"}
-          style={vscDarkPlus}
-          customStyle={{
-            margin: 0,
-            padding: "1rem",
-            background: "var(--code-block-bg)",
-            borderRadius: 0,
-            fontSize: "13px",
-            lineHeight: "1.6",
-          }}
-          codeTagProps={{ className: "!bg-transparent !p-0 !m-0 !border-0 font-mono" }}
-          showLineNumbers={false}
-        >
-          {code}
-        </SyntaxHighlighter>
+        <SyntaxHighlighterBlock language={language || "text"}>
+        {code}
+      </SyntaxHighlighterBlock>
       </div>
     </div>
   );

@@ -7,7 +7,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchWithSessionRecovery,
   fetchConversation,
@@ -291,7 +291,16 @@ function isServerId(id: string): boolean {
 }
 
 export function useNexusChat(options: UseNexusChatOptions = {}) {
-  const [messages, setMessages] = useState<NexusMessage[]>([]);
+  // Transcript backed by a Map keyed on message id so streamed patches are O(1)
+  // instead of an O(n) array walk on every token. `messagesEpoch` bumps state to
+  // trigger a re-render; the derived `messages` array reuses every unchanged
+  // message object reference so React.memo children skip re-render.
+  const messagesMapRef = useRef<Map<string, NexusMessage>>(new Map());
+  const [messagesEpoch, setMessagesEpoch] = useState(0);
+  const messages = useMemo(
+    () => [...messagesMapRef.current.values()],
+    [messagesEpoch]
+  );
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -315,11 +324,10 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   const queuedRef = useRef<QueuedMessage[]>([]);
 
   // Always-current copies of options and loading state for async callbacks.
-  // Updated in an effect, never during render. (`messagesRef` is different: it
-  // is written by `updateMessages` alone -- the only caller of `setMessages` --
-  // so the queue drain can read the just-finished turn synchronously.)
+  // Updated in an effect, never during render. (`messagesMapRef` is different: it
+  // is the synchronous source of truth for the transcript, read by `updateMessages`
+  // and by the queue drain before React has committed a state update.)
   const optionsRef = useRef(options);
-  const messagesRef = useRef(messages);
   // Bumped by every `updateMessages`, and read by the history loader to detect
   // that it has been overtaken. See the comment there -- the conversation-ownership
   // check alone cannot distinguish "untouched" from "a turn started under me".
@@ -378,20 +386,21 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       // the answer already streaming back. The writers invalidate; the loader
       // checks.
       transcriptEpochRef.current += 1;
-      // Compute from the ref and write it back synchronously rather than
-      // letting React call a functional updater during the next render. The
-      // queue drain starts the following turn in the *same tick* the current
-      // run finishes, and it reads `messagesRef.current` to build the backend
-      // history -- with a render-scheduled updater that read would miss the
-      // final streamed patch, so the next turn would be sent without the tail
-      // of the answer it is replying to.
-      const prev = messagesRef.current;
+      // Read from the Map ref and write back synchronously rather than letting
+      // React call a functional updater during the next render. The queue drain
+      // starts the following turn in the *same tick* the current run finishes,
+      // and it reads `messagesMapRef.current` to build the backend history --
+      // with a render-scheduled updater that read would miss the final streamed
+      // patch, so the next turn would be sent without the tail of the answer
+      // it is replying to.
+      const prev = [...messagesMapRef.current.values()];
       const next =
         typeof value === "function"
           ? (value as (p: NexusMessage[]) => NexusMessage[])(prev)
           : value;
-      messagesRef.current = next;
-      setMessages(next);
+      messagesMapRef.current = new Map();
+      for (const m of next) messagesMapRef.current.set(m.id, m);
+      setMessagesEpoch((e) => e + 1);
     },
     []
   );
@@ -479,7 +488,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
    * not re-adopted — one that is already a UUID is not this turn's to relabel.
    */
   const adoptPersistedIds = useCallback((rows: NexusMessage[]) => {
-    const current = messagesRef.current;
+    const current = [...messagesMapRef.current.values()];
     if (!current.length || !rows.length) return;
     const swaps: Array<[string, string]> = [];
     for (let i = 1; i <= current.length; i += 1) {
@@ -546,7 +555,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         model,
       };
 
-      const history = messagesRef.current;
+      const history = [...messagesMapRef.current.values()];
       // A resend that carries `reuseUserMessageId` is re-asking a row that is
       // already the last turn in the list (edit-and-resend keeps the edited
       // row). Appending another optimistic user bubble on top renders the
@@ -613,13 +622,17 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         content: string,
         annos: NexusAnnotation[]
       ) => {
-        updateMessages((prev) =>
-          prev.map((m) =>
-            m.id === messageId
-              ? { ...m, content, annotations: annos.length > 0 ? annos : m.annotations }
-              : m
-          )
-        );
+        const existing = messagesMapRef.current.get(messageId);
+        if (!existing) return;
+        // O(1): touch only the matching message, leave every other reference
+        // untouched so React.memo children skip re-render.
+        const updated = {
+          ...existing,
+          content,
+          annotations: annos.length > 0 ? annos : existing.annotations,
+        };
+        messagesMapRef.current.set(messageId, updated);
+        setMessagesEpoch((e) => e + 1);
       };
 
       // One transcript write per painted frame, not per token frame. See
@@ -725,11 +738,14 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
             // Report the model that actually answered, not the picker's label:
             // a provider fallback must be visible in the transcript rather than
             // hidden behind the group the user chose.
-            updateMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsgId ? { ...m, model: resolvedModel } : m
-              )
-            );
+            const existing = messagesMapRef.current.get(assistantMsgId);
+            if (existing) {
+              messagesMapRef.current.set(assistantMsgId, {
+                ...existing,
+                model: resolvedModel,
+              });
+              setMessagesEpoch((e) => e + 1);
+            }
           },
           onConversationCreated: (id) => {
             // A conversation the client did not name: the run id read off the
@@ -848,7 +864,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     // rejected. The resend itself is appended to the now-empty queue.
     clearQueued();
 
-    const msgs = messagesRef.current;
+    const msgs = [...messagesMapRef.current.values()];
     const lastUser = [...msgs].reverse().find((m) => m.role === "user");
     if (!lastUser) return;
     const idx = msgs.findIndex((m) => m.id === lastUser.id);
@@ -903,7 +919,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
    *
    * The backend truncates everything after the edited message, so the client
    * does the same *before* resending: the resend is built from
-   * ``messagesRef.current``, and a stale assistant reply left in the list would
+   * ``messagesMapRef.current``, and a stale assistant reply left in the list would
    * be sent back to the model as context for a question it never answered.
    */
   const editAndResend = useCallback(
@@ -912,7 +928,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       const trimmed = content.trim();
       if (!trimmed) return;
 
-      const msgs = messagesRef.current;
+      const msgs = [...messagesMapRef.current.values()];
       const idx = msgs.findIndex((m) => m.id === messageId);
       if (idx === -1) return;
 
@@ -940,7 +956,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           : msgs.slice(0, idx)
       );
       // Resend through the normal send path, which appends a fresh user turn and
-      // its answer. `messagesRef.current` is now the truncated list, so the
+      // its answer. `messagesMapRef.current` is now the truncated list, so the
       // request context is exactly the edited conversation. The server already
       // holds this turn -- it was edited in place, not deleted -- so its id goes
       // back with the resend and the row is adopted instead of stored twice.
@@ -988,7 +1004,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       // Drop the ask *and* the stale reply it produced. The backend removed the
       // reply; removing the preceding user turn here lets `sendMessage` append a
       // clean one, so the transcript ends with exactly one prompt and one answer.
-      const msgs = messagesRef.current;
+      const msgs = [...messagesMapRef.current.values()];
       const idx = msgs.findIndex((m) => m.id === messageId);
       updateMessages(() => {
         if (idx === -1) return msgs;
@@ -1159,7 +1175,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         // proving "no id never means already rendered" passed with the guard
         // deleted, because the call site was already short-circuiting. One place
         // decides, and it is the function whose name is the decision.
-        if (hasAnswer(messagesRef.current, readMessageId(probe))) {
+        if (hasAnswer([...messagesMapRef.current.values()], readMessageId(probe))) {
           forgetRun(conversationId);
           await probe.body.cancel();
           return;
@@ -1198,19 +1214,17 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         // The rejoin replays a finished run, so it can emit its whole stream of
         // frames in one burst — the same coalescing applies, and `finally` writes
         // the final text even if the replay is cut short.
-        const rejoinPatcher = coalescePatches((content, annos) =>
-          updateMessages((prev) =>
-            prev.map((m) =>
-              m.id === rejoinedId
-                ? {
-                    ...m,
-                    content,
-                    annotations: annos.length > 0 ? annos : m.annotations,
-                  }
-                : m
-            )
-          )
-        );
+        const rejoinPatcher = coalescePatches((content, annos) => {
+          const existing = messagesMapRef.current.get(rejoinedId);
+          if (!existing) return;
+          const updated = {
+            ...existing,
+            content,
+            annotations: annos.length > 0 ? annos : existing.annotations,
+          };
+          messagesMapRef.current.set(rejoinedId, updated);
+          setMessagesEpoch((e) => e + 1);
+        });
 
         await consumeChatStream(probe.body, {
           patch: rejoinPatcher.patch,
@@ -1482,29 +1496,28 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           image_data_url: string;
           model: string;
         };
-        updateMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsgId
-              ? {
-                  ...m,
-                  content: "Here's the image you asked for.",
-                  imageDataUrl: data.image_data_url,
-                  model: data.model,
-                }
-              : m
-          )
-        );
+        const existing = messagesMapRef.current.get(assistantMsgId);
+        if (existing) {
+          messagesMapRef.current.set(assistantMsgId, {
+            ...existing,
+            content: "Here's the image you asked for.",
+            imageDataUrl: data.image_data_url,
+            model: data.model,
+          });
+          setMessagesEpoch((e) => e + 1);
+        }
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Image generation failed";
         setError(new Error(message));
-        updateMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsgId
-              ? { ...m, content: `I couldn't generate that image. ${message}` }
-              : m
-          )
-        );
+        const existing = messagesMapRef.current.get(assistantMsgId);
+        if (existing) {
+          messagesMapRef.current.set(assistantMsgId, {
+            ...existing,
+            content: `I couldn't generate that image. ${message}`,
+          });
+          setMessagesEpoch((e) => e + 1);
+        }
       } finally {
         setIsLoading(false);
       }

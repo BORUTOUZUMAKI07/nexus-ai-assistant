@@ -117,7 +117,7 @@ class RedisService(ICacheService):
         script = """
         local used_key = KEYS[1]
         local race_key = KEYS[2]
-        local race_json = ARGV[3]
+        local race_json = ARGV[1]
 
         local existing = redis.call('GET', used_key)
         if existing then

@@ -67,12 +67,24 @@ def _point_settings_at_container(async_url: str) -> None:
     e2e live tier was creating ``checkpoint*`` tables in Supabase, and when
     that hosted session-mode port was unreachable the API refused to start at
     all. Setting the attribute mutates the same object every consumer holds.
+
+    Both ``DATABASE_URL`` (the write engine) and ``DATABASE_READ_URL`` (the
+    read-replica engine used by ``get_read_engine`` / ``get_read_db_session``)
+    must move. Only repointing ``DATABASE_URL`` leaves ``get_read_engine()``
+    bound to whatever ``DATABASE_READ_URL`` was frozen at import time — which
+    on a developer machine still resolves to ``localhost:5432`` where no
+    Postgres is running, producing ``OSError: Connect call failed`` in every
+    read path (file listings, chunk reads, usage lookups).
     """
     try:
         from backend.app.core.config import settings
     except Exception:  # pragma: no cover - settings import is always available in tests
         return
     settings.DATABASE_URL = async_url
+    # Repoint the read-replica URL too, otherwise read queries still hit the
+    # stale localhost:5432 default while writes go to the container.
+    if getattr(settings, "DATABASE_READ_URL", None):
+        settings.DATABASE_READ_URL = async_url
     # An explicit checkpoint DSN outranks DATABASE_URL, so it has to move too.
     if getattr(settings, "LANGGRAPH_CHECKPOINT_DSN", None):
         settings.LANGGRAPH_CHECKPOINT_DSN = async_url.replace(

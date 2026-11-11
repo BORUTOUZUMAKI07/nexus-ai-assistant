@@ -393,6 +393,12 @@ export const handlers = [
     HttpResponse.json({ authenticated: false })
   ),
 
+  // Health check: the BFF probes /api/v1/health on the backend. A mock keeps
+  // api-parity green and lets the health route be exercised from components.
+  http.get("/api/health", () =>
+    HttpResponse.json({ status: "ok", service: "nexus-backend" })
+  ),
+
   http.post("/api/auth/logout", () =>
     HttpResponse.json({ message: "Logged out successfully" })
   ),
