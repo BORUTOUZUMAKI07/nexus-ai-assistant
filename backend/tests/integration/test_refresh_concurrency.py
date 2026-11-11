@@ -178,11 +178,27 @@ async def test_reuse_revokes_one_sign_in_not_every_device(client, redis_backend)
     stolen_device_token = await sign_in_on_another_device()
     phone_token = await sign_in_on_another_device()
 
+    # The refresh route prefers the httpOnly cookie over the body, and both
+    # sign-ins above left theirs in this shared client's jar -- the *phone's*
+    # token by the time we get here. Without this clear the exchange below
+    # would rotate the phone's session and leave the stolen token unused, so
+    # the replay further down would be a legitimate first use (200) and this
+    # test would be asserting the wrong thing entirely.
+    client.cookies.clear()
+
     # Redeem the stolen one, then replay it late: a detected theft.
     first = await client.post(
         "/api/v1/auth/refresh", json={"refresh_token": stolen_device_token}
     )
     assert first.status_code == 200
+    # The rotation must belong to the stolen token's sign-in. This is the
+    # assertion that pins down *which* token the exchange consumed: if the
+    # jar is ever left in place again, this fails here, with a cause, instead
+    # of surfacing below as a mysterious 200 on a replay of an unused token.
+    stolen_family = decode_token(stolen_device_token).get("fam")
+    assert decode_token(first.json()["refresh_token"]).get("fam") == stolen_family, (
+        "the exchange rotated a different session than the token it was given"
+    )
 
     await redis_backend.delete(f"refresh:race:{decode_token(stolen_device_token)['jti']}")
     client.cookies.clear()
