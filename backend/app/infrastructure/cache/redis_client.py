@@ -102,7 +102,7 @@ class RedisService(ICacheService):
         race_response: str | None = None,
     ) -> dict[str, Any]:
         """
-        Atomically rotate a single-use refresh token via Redis.
+        Atomically rotate a single-use refresh token via a Lua script.
 
         Uses SET NX on ``refresh:used:{jti}`` so exactly one caller wins and
         mints new tokens; any duplicate presentation of the same jti either
@@ -114,21 +114,51 @@ class RedisService(ICacheService):
           {"action": "race_replay", "data": str} -- jti already used, race response cached
           {"action": "theft"}            -- jti already used, no race response (stolen token)
         """
-        used_key = f"refresh:used:{jti}"
-        race_key = f"refresh:race:{jti}"
+        script = """
+        local used_key = KEYS[1]
+        local race_key = KEYS[2]
+        local race_json = ARGV[1]
 
-        existing = await self.client.get(used_key)
-        if existing:
-            cached = await self.client.get(race_key)
-            if cached:
-                return {"action": "race_replay", "data": cached}
+        local existing = redis.call('GET', used_key)
+        if existing then
+            -- Already consumed: check if the winner published a race response
+            local cached = redis.call('GET', race_key)
+            if cached then
+                return {1, cached}
+            end
+            -- Return empty string instead of nil to prevent nil being dropped
+            -- from the Lua table when passed to Python (nil values are
+            -- dropped from tables, causing index out of range errors)
+            return {1, ""}
+        end
+
+        -- First use: claim the jti
+        redis.call('SET', used_key, '1')
+
+        -- Publish the winner's tokens for the loser (Python decides grace window)
+        if race_json and #race_json > 0 then
+            redis.call('SET', race_key, race_json)
+        end
+
+        return {0, ""}
+        """
+        try:
+            result = await self.client.eval(
+                script,
+                2,
+                f"refresh:used:{jti}",
+                f"refresh:race:{jti}",
+                race_response or "",
+            )
+            action = int(result[0])
+            data = result[1]
+            if action == 0:
+                return {"action": "first_use"}
+            if data and grace_window_seconds > 0:
+                return {"action": "race_replay", "data": data}
             return {"action": "theft"}
-
-        await self.client.setex(used_key, ttl_seconds, "1")
-        if race_response and len(race_response) > 0:
-            await self.client.setex(race_key, ttl_seconds, race_response)
-
-        return {"action": "first_use"}
+        except Exception:
+            raise
 
 
 # Singleton instance for backwards-compatibility
