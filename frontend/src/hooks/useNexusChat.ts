@@ -7,7 +7,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchWithSessionRecovery,
   fetchConversation,
@@ -292,15 +292,11 @@ function isServerId(id: string): boolean {
 
 export function useNexusChat(options: UseNexusChatOptions = {}) {
   // Transcript backed by a Map keyed on message id so streamed patches are O(1)
-  // instead of an O(n) array walk on every token. `messagesEpoch` bumps state to
-  // trigger a re-render; the derived `messages` array reuses every unchanged
-  // message object reference so React.memo children skip re-render.
+  // instead of an O(n) array walk on every token. `messages` is the render-facing
+  // state (updated alongside the map in `updateMessages`); React.memo children see
+  // unchanged message object references and skip re-render.
   const messagesMapRef = useRef<Map<string, NexusMessage>>(new Map());
-  const [messagesEpoch, setMessagesEpoch] = useState(0);
-  const messages = useMemo(
-    () => [...messagesMapRef.current.values()],
-    [messagesEpoch]
-  );
+  const [messages, setMessages] = useState<NexusMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -400,7 +396,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           : value;
       messagesMapRef.current = new Map();
       for (const m of next) messagesMapRef.current.set(m.id, m);
-      setMessagesEpoch((e) => e + 1);
+      setMessages(next);
     },
     []
   );
@@ -632,7 +628,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           annotations: annos.length > 0 ? annos : existing.annotations,
         };
         messagesMapRef.current.set(messageId, updated);
-        setMessagesEpoch((e) => e + 1);
+        setMessages((prev) => prev.map((m) => (m.id === messageId ? updated : m)));
       };
 
       // One transcript write per painted frame, not per token frame. See
@@ -740,11 +736,11 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
             // hidden behind the group the user chose.
             const existing = messagesMapRef.current.get(assistantMsgId);
             if (existing) {
-              messagesMapRef.current.set(assistantMsgId, {
-                ...existing,
-                model: resolvedModel,
-              });
-              setMessagesEpoch((e) => e + 1);
+              const updated = { ...existing, model: resolvedModel };
+              messagesMapRef.current.set(assistantMsgId, updated);
+              setMessages((prev) =>
+                prev.map((m) => (m.id === assistantMsgId ? updated : m))
+              );
             }
           },
           onConversationCreated: (id) => {
@@ -1223,7 +1219,9 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
             annotations: annos.length > 0 ? annos : existing.annotations,
           };
           messagesMapRef.current.set(rejoinedId, updated);
-          setMessagesEpoch((e) => e + 1);
+          setMessages((prev) =>
+            prev.map((m) => (m.id === rejoinedId ? updated : m))
+          );
         });
 
         await consumeChatStream(probe.body, {
@@ -1498,13 +1496,16 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         };
         const existing = messagesMapRef.current.get(assistantMsgId);
         if (existing) {
-          messagesMapRef.current.set(assistantMsgId, {
+          const updated = {
             ...existing,
             content: "Here's the image you asked for.",
             imageDataUrl: data.image_data_url,
             model: data.model,
-          });
-          setMessagesEpoch((e) => e + 1);
+          };
+          messagesMapRef.current.set(assistantMsgId, updated);
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantMsgId ? updated : m))
+          );
         }
       } catch (err) {
         const message =
@@ -1512,11 +1513,14 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         setError(new Error(message));
         const existing = messagesMapRef.current.get(assistantMsgId);
         if (existing) {
-          messagesMapRef.current.set(assistantMsgId, {
+          const updated = {
             ...existing,
             content: `I couldn't generate that image. ${message}`,
-          });
-          setMessagesEpoch((e) => e + 1);
+          };
+          messagesMapRef.current.set(assistantMsgId, updated);
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantMsgId ? updated : m))
+          );
         }
       } finally {
         setIsLoading(false);

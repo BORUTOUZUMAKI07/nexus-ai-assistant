@@ -118,29 +118,32 @@ class RedisService(ICacheService):
         local used_key = KEYS[1]
         local race_key = KEYS[2]
         local race_json = ARGV[1]
+        local grace_window = tonumber(ARGV[2])
 
         local existing = redis.call('GET', used_key)
         if existing then
             -- Already consumed: check if the winner published a race response
             local cached = redis.call('GET', race_key)
             if cached then
-                return {1, cached}
+                return {action = 1, data = cached}
             end
             -- Return empty string instead of nil to prevent nil being dropped
             -- from the Lua table when passed to Python (nil values are
             -- dropped from tables, causing index out of range errors)
-            return {1, ""}
+            return {action = 1, data = ""}
         end
 
         -- First use: claim the jti (persists forever, no TTL)
         redis.call('SET', used_key, '1')
 
-        -- Publish the winner's tokens for the loser (Python decides grace window)
-        if race_json and #race_json > 0 then
-            redis.call('SET', race_key, race_json)
+        -- Publish the winner's tokens for the loser, but only within the
+        -- grace window. When grace_window is 0 there is no replay window at
+        -- so every duplicate is treated as theft (strict single-use).
+        if grace_window and grace_window > 0 and race_json and #race_json > 0 then
+            redis.call('SET', race_key, race_json, 'EX', grace_window)
         end
 
-        return {0, ""}
+        return {action = 0, data = ""}
         """
         try:
             result = await self.client.eval(
@@ -149,13 +152,12 @@ class RedisService(ICacheService):
                 f"refresh:used:{jti}",
                 f"refresh:race:{jti}",
                 race_response or "",
+                str(grace_window_seconds),
             )
-            action = int(result[0])
-            data = result[1]
-            if action == 0:
+            if result["action"] == 0:
                 return {"action": "first_use"}
-            if data and grace_window_seconds > 0:
-                return {"action": "race_replay", "data": data}
+            if result["data"] and grace_window_seconds > 0:
+                return {"action": "race_replay", "data": result["data"]}
             return {"action": "theft"}
         except Exception:
             raise
