@@ -437,7 +437,7 @@ async def iter_graph_frames(
     ── Custom streams: you must ask for them, in string form. ──
 
     Measured against langgraph 1.2.11, one variable at a time in a fresh process
-    (``tests/test_stream_custom_event_trap.py`` runs the measurement; do not trust
+    (``tests/agents/test_stream_custom_event_trap.py`` runs the measurement; do not trust
     this comment over that test):
 
       astream_events(v2)                        -> 0 payloads
@@ -490,7 +490,7 @@ async def iter_graph_frames(
         # is what delivers the synthesizer's progressive `text_delta` frames to
         # the client; without it those writes are silently dropped. The list
         # form `["custom"]` is the trap -- it subscribes to nothing, and a typo
-        # suppresses the root deltas too (tests/test_stream_custom_event_trap.py
+        # suppresses the root deltas too (tests/agents/test_stream_custom_event_trap.py
         # measures both, one variable at a time).
         stream_mode="custom",
     ):

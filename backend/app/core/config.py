@@ -32,7 +32,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 # no longer matched the example file, so it silently stopped protecting it.
 #
 # The production validator rejects any of these by value. Keep this set in sync
-# with backend/.env.example; tests/test_config_secrets.py fails if they drift.
+# with backend/.env.example; tests/security/test_config_secrets.py fails if they drift.
 PUBLISHED_EXAMPLE_SECRETS: frozenset[str] = frozenset(
     {
         # Current .env.example text.

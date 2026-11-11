@@ -279,7 +279,7 @@ def _build_workflow() -> StateGraph:
     #
     # NO_RETRY_NODES and TIMEOUTS must both name every node here; the
     # registration check at the bottom of this function enforces the first, and
-    # tests/test_node_policies.py enforces the second.
+    # tests/agents/test_node_policies.py enforces the second.
     _add(workflow, "bootstrap", bootstrap_node)
     _add(workflow, "model_router", model_router_node)
     _add(workflow, "planner", planner_node)

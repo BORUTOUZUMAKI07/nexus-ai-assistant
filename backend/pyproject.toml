@@ -198,7 +198,7 @@ ignore = ["E501", "E712"]
 # Importing a fixture function into a test module is how pytest makes it
 # resolvable by name, so F811 fires on every test that takes that fixture as a
 # parameter. That is the intended shape of the file, not a redefinition.
-"tests/test_run_interrupt_resume.py" = ["F811"]
+"tests/agents/test_run_interrupt_resume.py" = ["F811"]
 
 [tool.mypy]
 strict = true

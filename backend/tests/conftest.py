@@ -34,7 +34,7 @@ import os  # noqa: E402
 import tempfile  # noqa: E402
 
 # Guard 1 -- LangSmith. backend/.env sets LANGSMITH_TRACING=true because the
-# *app* should trace, and pytest loads that file. tests/test_node_policies.py
+# *app* should trace, and pytest loads that file. tests/agents/test_node_policies.py
 # compiles a real StateGraph, so one local suite run uploaded 120 spans into the
 # LangSmith project (measured 2026-10-05) and mixed pytest fixtures in with real
 # conversation traces. Nothing failed; the pollution was only visible from the

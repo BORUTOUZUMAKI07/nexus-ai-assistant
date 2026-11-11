@@ -41,7 +41,7 @@ against this app's real dependencies, that means it *would* repeat:
 Three attempts against a misconfigured API key is how a deployment mistake turns
 into a rate-limit incident, and a retried `IntegrityError` is a duplicate row.
 So the predicate below disagrees with upstream in **both** directions, and
-`tests/test_node_policies.py` asserts the full disagreement in both directions
+`tests/agents/test_node_policies.py` asserts the full disagreement in both directions
 rather than only the half that motivates the file.
 
 The other measured trap, which is worse

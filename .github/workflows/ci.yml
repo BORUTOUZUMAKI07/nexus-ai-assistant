@@ -222,4 +222,4 @@ jobs:
         env:
           RUN_LLM_EVAL_GATES: "1"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: uv run pytest tests/test_prompt_regression_gate.py tests/test_live_eval_gates.py
+        run: uv run pytest tests/evaluation/test_prompt_regression_gate.py tests/evaluation/test_live_eval_gates.py

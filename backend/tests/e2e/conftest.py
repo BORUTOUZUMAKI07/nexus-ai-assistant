@@ -98,7 +98,7 @@ def _stub_auth_rate_limits(monkeypatch):
     ``auth:register:{ip}`` bucket — the register limit of 5/min makes the
     suite throttle *itself* with 429s halfway through, regardless of how fast
     or slow the run is. The throttle is a production anti-brute-force control
-    already covered by the unit tier (tests/test_rate_limit.py patches
+    already covered by the unit tier (tests/api/test_rate_limit.py patches
     ``check_rate_limit`` directly); here it only gets in the way of the honest
     network + server + DB lifecycle this tier exists to exercise.
 

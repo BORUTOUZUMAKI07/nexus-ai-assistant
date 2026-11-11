@@ -88,7 +88,7 @@ COVERAGE_QUESTION = DecisionQuestion.score(
 # Note what is deliberately NOT a fourth label: "the passage contradicts the
 # question". Contradiction is orthogonal to how much a passage answers, so it has
 # no position on this legend -- every ordering is a lie (see the reverted attempt
-# recorded in tests/test_answer_coverage.py). It is already handled as a drop,
+# recorded in tests/rag/test_answer_coverage.py). It is already handled as a drop,
 # because the version clause routes contradicting text to `does_not_answer`;
 # surfacing it to the user is a citation-panel concern, not a coverage one, and
 # asking it as a second question would double the cost of a stage that is off by
