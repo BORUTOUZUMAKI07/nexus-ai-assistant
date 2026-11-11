@@ -45,26 +45,45 @@ const SyntaxHighlighterBlock = dynamic(
     const { vscDarkPlus } = await import(
       "react-syntax-highlighter/dist/esm/styles/prism"
     );
-    const PrismLight = mod.PrismLight as React.ComponentType<any>;
-    return ({ children, language, ...props }: any) => (
-      <PrismLight
-        language={language || "text"}
-        style={vscDarkPlus}
-        customStyle={{
-          margin: 0,
-          padding: "1rem",
-          background: "var(--code-block-bg)",
-          borderRadius: 0,
-          fontSize: "13px",
-          lineHeight: "1.6",
-        }}
-        codeTagProps={{ className: "!bg-transparent !p-0 !m-0 !border-0 font-mono" }}
-        showLineNumbers={false}
-        {...props}
-      >
-        {children}
-      </PrismLight>
-    );
+    const PrismLight = mod.PrismLight as unknown as React.ComponentType<{
+      children?: React.ReactNode;
+      language?: string;
+      style?: unknown;
+      customStyle?: unknown;
+      codeTagProps?: unknown;
+      showLineNumbers?: boolean;
+      [key: string]: unknown;
+    }>;
+
+    function SyntaxHighlighterBlock(props: {
+      children: React.ReactNode;
+      language?: string;
+      className?: string;
+    }) {
+      return (
+        <PrismLight
+          language={props.language || "text"}
+          style={vscDarkPlus}
+          customStyle={{
+            margin: 0,
+            padding: "1rem",
+            background: "var(--code-block-bg)",
+            borderRadius: 0,
+            fontSize: "13px",
+            lineHeight: "1.6",
+          }}
+          codeTagProps={{
+            className: "!bg-transparent !p-0 !m-0 !border-0 font-mono",
+          }}
+          showLineNumbers={false}
+          className={props.className}
+        >
+          {props.children}
+        </PrismLight>
+      );
+    }
+
+    return SyntaxHighlighterBlock;
   },
   { ssr: false, loading: () => null }
 );

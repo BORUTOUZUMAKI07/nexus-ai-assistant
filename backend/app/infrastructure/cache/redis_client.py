@@ -154,10 +154,12 @@ class RedisService(ICacheService):
                 race_response or "",
                 str(grace_window_seconds),
             )
-            if result["action"] == 0:
+            action = int(result[0])
+            data = result[1]
+            if action == 0:
                 return {"action": "first_use"}
-            if result["data"] and grace_window_seconds > 0:
-                return {"action": "race_replay", "data": result["data"]}
+            if data and grace_window_seconds > 0:
+                return {"action": "race_replay", "data": data}
             return {"action": "theft"}
         except Exception:
             raise
