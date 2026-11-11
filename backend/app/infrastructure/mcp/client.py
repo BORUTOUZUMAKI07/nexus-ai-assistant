@@ -12,9 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
+import subprocess  # nosec B404 - launching a stdio MCP server is the feature
 from dataclasses import dataclass, field
 from typing import Any
+
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -91,7 +95,12 @@ class MCPClient:
     async def _initialize_stdio(
         self, name: str, proc: asyncio.subprocess.Process
     ) -> None:
-        assert proc.stdin and proc.stdout
+        if proc.stdin is None or proc.stdout is None:
+            # A real check, not an assert: asserts vanish under -O, and this
+            # is what keeps a write to None from becoming an AttributeError.
+            raise RuntimeError(
+                f"MCP server {name} was started without usable stdio pipes"
+            )
         init_msg = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -191,8 +200,12 @@ class MCPClient:
             except Exception:
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # The process is already gone or unreachable; shutdown has
+                    # nothing left to do, but a silent pass hides a real leak.
+                    logger.warning(
+                        "mcp_server_kill_failed", error=type(exc).__name__
+                    )
         self._processes.clear()
         self._initialized = False
 

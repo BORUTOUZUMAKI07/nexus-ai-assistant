@@ -109,6 +109,12 @@ class RedisService(ICacheService):
         replays the winner's tokens (race replay, within grace window) or is
         treated as theft (no race response published).
 
+        Both entries carry a TTL: the used marker lives for the life of the
+        token it consumed, and the race entry lives for exactly
+        ``grace_window_seconds``. That second TTL *is* the grace window. Without
+        it the window was only a flag Python checked on read, so a captured
+        token replayed days later was still answered with the winner's session.
+
         Returns a dict with one of:
           {"action": "first_use"}        -- key was absent, we claimed it
           {"action": "race_replay", "data": str} -- jti already used, race response cached
@@ -118,6 +124,8 @@ class RedisService(ICacheService):
         local used_key = KEYS[1]
         local race_key = KEYS[2]
         local race_json = ARGV[1]
+        local grace = tonumber(ARGV[2])
+        local ttl = tonumber(ARGV[3])
 
         local existing = redis.call('GET', used_key)
         if existing then
@@ -132,12 +140,14 @@ class RedisService(ICacheService):
             return {1, ""}
         end
 
-        -- First use: claim the jti
-        redis.call('SET', used_key, '1')
+        -- First use: claim the jti, keeping the marker for as long as the
+        -- token it consumed could still be presented.
+        redis.call('SET', used_key, '1', 'EX', ttl)
 
-        -- Publish the winner's tokens for the loser (Python decides grace window)
-        if race_json and #race_json > 0 then
-            redis.call('SET', race_key, race_json)
+        -- Publish the winner's tokens for the loser. The expiry *is* the grace
+        -- window: once it lapses a replay has no cached response and is theft.
+        if race_json and #race_json > 0 and grace and grace > 0 then
+            redis.call('SET', race_key, race_json, 'EX', grace)
         end
 
         return {0, ""}
@@ -148,7 +158,11 @@ class RedisService(ICacheService):
                 2,
                 f"refresh:used:{jti}",
                 f"refresh:race:{jti}",
-                race_response or "",
+                # Nothing to replay when the window is off: with no TTL to
+                # apply the script would cache the winner's tokens forever.
+                (race_response or "") if grace_window_seconds > 0 else "",
+                grace_window_seconds,
+                max(1, ttl_seconds),
             )
             action = int(result[0])
             data = result[1]

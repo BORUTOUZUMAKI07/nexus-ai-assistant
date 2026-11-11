@@ -109,9 +109,11 @@ class _ExportBreaker:
                 consecutive_failures=self._failures,
                 cooldown_seconds=self._cooldown,
                 detail=(
-                    "the collector did not accept an export (a Render free "
-                    "instance returns 502 while it wakes), so exports are "
-                    "dropped without retrying until the cool-off ends"
+                    "the collector did not accept an export: a Render free "
+                    "instance answers 502 while it wakes, and a 401 there means "
+                    "the collector's OTLP_AUTH_USER/OTLP_AUTH_PASSWORD do not "
+                    "match this app's. Exports are dropped without retrying "
+                    "until the cool-off ends"
                 ),
             )
 

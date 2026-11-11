@@ -538,7 +538,7 @@ class AuthService:
         response = TokenResponse(
             access_token=access_token,
             refresh_token=new_refresh,
-            token_type="bearer",
+            token_type="bearer",  # nosec B106 - auth scheme, not a credential
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             refresh_expires_in=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         )
@@ -577,7 +577,7 @@ class AuthService:
             return TokenResponse(
                 access_token=cached["access_token"],
                 refresh_token=cached["refresh_token"],
-                token_type="bearer",
+                token_type="bearer",  # nosec B106 - auth scheme, not a credential
                 expires_in=cached["expires_in"],
                 refresh_expires_in=cached["refresh_expires_in"],
             )

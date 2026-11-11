@@ -75,5 +75,9 @@ class ICacheService(ABC):
         {"action": "race_replay", "data": str} when already used but a race
         response is cached, or {"action": "theft"} when already used with no
         cached response (stolen token).
+
+        Implementations must expire the used marker after ``ttl_seconds`` and
+        the cached race response after ``grace_window_seconds``: an entry that
+        never expires turns the grace window into a permanent replay allowance.
         """
         pass
