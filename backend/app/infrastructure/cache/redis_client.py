@@ -124,9 +124,9 @@ class RedisService(ICacheService):
                 return {"action": "race_replay", "data": cached}
             return {"action": "theft"}
 
-        await self.client.set(used_key, "1", ex=ttl_seconds)
+        await self.client.setex(used_key, ttl_seconds, "1")
         if race_response and len(race_response) > 0:
-            await self.client.set(race_key, race_response, ex=ttl_seconds)
+            await self.client.setex(race_key, ttl_seconds, race_response)
 
         return {"action": "first_use"}
 
