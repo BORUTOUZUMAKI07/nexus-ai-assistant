@@ -118,6 +118,7 @@ class RedisService(ICacheService):
         local used_key = KEYS[1]
         local race_key = KEYS[2]
         local race_json = ARGV[1]
+        local ttl = tonumber(ARGV[2])
 
         local existing = redis.call('GET', used_key)
         if existing then
@@ -132,12 +133,12 @@ class RedisService(ICacheService):
             return {1, ""}
         end
 
-        -- First use: claim the jti (persists forever, no TTL)
-        redis.call('SET', used_key, '1')
+        -- First use: claim the jti (persists for the token lifetime)
+        redis.call('SET', used_key, '1', 'EX', ttl)
 
         -- Publish the winner's tokens for the loser (Python decides grace window)
         if race_json and #race_json > 0 then
-            redis.call('SET', race_key, race_json)
+            redis.call('SET', race_key, race_json, 'EX', ttl)
         end
 
         return {0, ""}
@@ -149,6 +150,7 @@ class RedisService(ICacheService):
                 f"refresh:used:{jti}",
                 f"refresh:race:{jti}",
                 race_response or "",
+                str(ttl_seconds),
             )
             action = int(result[0])
             data = result[1]
