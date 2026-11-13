@@ -65,4 +65,19 @@ EXPOSE 8000
 #
 # `exec` keeps uvicorn as PID 1 so SIGTERM reaches it directly instead of being
 # swallowed by the shell, which is what triggers that graceful path at all.
-CMD ["sh", "-c", "exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-1} --timeout-graceful-shutdown 20"]
+#
+# `alembic upgrade head` before uvicorn: production skips `create_all`
+# (init_db returns early when ENVIRONMENT=production), so the schema is only
+# whatever the last migration run produced. Nothing applied migrations on
+# deploy, so the deployed database fell behind the models and every conversation
+# read failed with `column messages.cost_usd does not exist`. The run is
+# non-fatal on purpose -- a migration failure must not take a serving instance
+# down with it; the app then reports DATABASE_SCHEMA_OUT_OF_DATE (503) instead
+# of an opaque 500, and the log line says which column is missing.
+#
+# ALLOW_REMOTE_MIGRATIONS=1 is the explicit opt-in the guard in
+# app/core/db_target.py requires for a non-local database (that guard exists
+# because a local `alembic upgrade head` once ran against production by
+# accident). Setting it here scopes the permission to this container's start-up
+# and to nobody's laptop.
+CMD ["sh", "-c", "cd /app/backend && { ALLOW_REMOTE_MIGRATIONS=1 alembic upgrade head 2>&1 | tail -20 || echo migration_failed_continuing; }; cd /app && exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-1} --timeout-graceful-shutdown 20"]
