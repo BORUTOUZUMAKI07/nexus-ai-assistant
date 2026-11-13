@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { render, screen } from "@/test/test-utils"
-import { UsageView } from "@/components/UsageView"
+import { UsageView } from "@/features/usage/UsageView"
 
 describe("UsageView", () => {
   it("shows live telemetry once the usage endpoint responds", async () => {

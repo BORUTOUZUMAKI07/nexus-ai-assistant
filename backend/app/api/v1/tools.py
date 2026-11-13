@@ -18,9 +18,9 @@ from backend.app.domain.tool.schemas import ToolApprovalRequest
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.resilience.rate_limit import rate_limit
 from backend.app.mcp.client import mcp_client
-from backend.app.services.conversation_service import ConversationService
-from backend.app.services.tool_service import ToolService
+from backend.app.services.conversations.service import ConversationService
 from backend.app.services.tools.elicitations import ElicitationService
+from backend.app.services.tools.service import ToolService
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 

@@ -34,7 +34,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.app.services.run_executor import _message_text, _persist_reply  # noqa: E402
+from backend.app.services.runs.executor import _message_text, _persist_reply  # noqa: E402
 
 # -- the content flattener --------------------------------------------------
 
@@ -150,7 +150,7 @@ async def _null_span(name: Any = "", attrs: Any = None):
 
 @pytest.fixture(autouse=True)
 def _stub_the_row_writers(monkeypatch: pytest.MonkeyPatch):
-    import backend.app.services.run_executor as ex
+    import backend.app.services.runs.executor as ex
 
     _ConversationService.WRITTEN = []
     _UsageService.LOGGED = []

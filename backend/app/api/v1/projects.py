@@ -9,7 +9,7 @@ from uuid import UUID
 from backend.app.api.deps import get_current_user, get_db
 from backend.app.domain.conversation.schemas import ProjectCreate, ProjectResponse, ProjectUpdate
 from backend.app.domain.user.models import User
-from backend.app.services.project_service import ProjectService
+from backend.app.services.projects.service import ProjectService
 from fastapi import APIRouter, Depends
 from sqlmodel.ext.asyncio.session import AsyncSession
 

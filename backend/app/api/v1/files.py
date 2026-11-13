@@ -26,8 +26,8 @@ from backend.app.domain.file.schemas import (
 )
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.resilience.rate_limit import rate_limit
-from backend.app.services.file_service import FileService
-from backend.app.services.rag_service import RAGService
+from backend.app.services.files.service import FileService
+from backend.app.services.rag.service import RAGService
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi import File as FastAPIFile
 from sqlmodel.ext.asyncio.session import AsyncSession

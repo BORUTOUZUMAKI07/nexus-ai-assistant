@@ -244,7 +244,7 @@ def test_on_custom_event_is_only_an_internal_touch_handler():
 def test_our_finished_run_frames_never_used_a_custom_stream():
     """Why none of the above has bitten us yet: critique / quality / artifact
     are read post-run via `aget_state`, not streamed mid-run."""
-    from backend.app.services.run_events import finished_run_events
+    from backend.app.services.runs.events import finished_run_events
 
     frames = finished_run_events(
         {"critique": "too thin", "revision_count": 2, "evidence_score": 0.4}

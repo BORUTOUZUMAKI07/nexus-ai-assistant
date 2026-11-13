@@ -17,7 +17,7 @@ from uuid import uuid4
 import pytest
 from backend.app.domain.user.models import UserMemory
 from backend.app.domain.user.repository import UserRepository
-from backend.app.services.memory_lifecycle import (
+from backend.app.services.memory.lifecycle import (
     fact_slot,
     find_superseded,
     partition_new_memories_with_supersede,

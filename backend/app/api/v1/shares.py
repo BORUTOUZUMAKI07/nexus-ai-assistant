@@ -10,7 +10,7 @@ import structlog
 from backend.app.api.deps import get_current_user, get_share_service
 from backend.app.core.config import settings
 from backend.app.domain.user.models import User
-from backend.app.services.share_service import ShareService
+from backend.app.services.shares.service import ShareService
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 

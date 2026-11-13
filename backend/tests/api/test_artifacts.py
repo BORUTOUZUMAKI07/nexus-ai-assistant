@@ -16,7 +16,7 @@ from backend.app.core.exceptions import ResourceNotFoundError
 from backend.app.domain.artifact.models import Artifact, ArtifactVersion
 from backend.app.domain.artifact.schemas import ArtifactCreate, ArtifactVersionCreate
 from backend.app.main import app
-from backend.app.services.artifact_service import ArtifactService
+from backend.app.services.artifacts.service import ArtifactService
 from backend.tests.fakes import FakeSession
 from httpx import ASGITransport, AsyncClient
 
@@ -109,7 +109,7 @@ async def test_delete_foreign_artifact_404():
 # ─────────────────────────────────────────────────────────────────────
 
 def _apply_overrides(fake: FakeSession, user):
-    from backend.app.services.conversation_service import ConversationService
+    from backend.app.services.conversations.service import ConversationService
 
     async def _override_db():
         yield fake

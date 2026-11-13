@@ -10,8 +10,8 @@ from uuid import uuid4
 import pytest
 from backend.app.domain.org.models import Organization, OrganizationInvite, OrganizationMember
 from backend.app.domain.user.models import User
-from backend.app.services import org_service as org_module
-from backend.app.services.org_service import OrganizationService
+from backend.app.services.orgs import service as org_module
+from backend.app.services.orgs.service import OrganizationService
 from fakes import FakeSession
 
 

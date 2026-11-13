@@ -235,7 +235,7 @@ async def test_the_synthesizer_asks_the_user_question_when_tot_ran(monkeypatch):
     Reverting the derivation (back to ``messages[-1]``) makes the captured prompt
     start with the ToT synthesis instead of the question.
     """
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     captured: list[dict] = []
 

@@ -4,25 +4,25 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { Sidebar } from "@/components/Sidebar";
+import { Sidebar } from "@/components/layout/Sidebar";
 import {
   ChatArea,
   MessageItem,
   CitationItem,
   ToolCallItem,
   PlanReviewItem,
-} from "@/components/ChatArea";
-import { ChatInput, SendMessageOptions } from "@/components/ChatInput";
-import { ArtifactCanvas, ArtifactItem } from "@/components/ArtifactCanvas";
-import PlanHistory from "@/components/PlanHistory";
-import SavedArtifacts from "@/components/SavedArtifacts";
-import { CitationInspector } from "@/components/CitationInspector";
-import { AuthModal } from "@/components/AuthModal";
+} from "@/features/chat/ChatArea";
+import { ChatInput, SendMessageOptions } from "@/features/chat/ChatInput";
+import { ArtifactCanvas, ArtifactItem } from "@/features/chat/ArtifactCanvas";
+import PlanHistory from "@/features/workspace/PlanHistory";
+import SavedArtifacts from "@/features/workspace/SavedArtifacts";
+import { CitationInspector } from "@/features/chat/CitationInspector";
+import { AuthModal } from "@/features/auth/AuthModal";
 import { Menu, Moon, Sun, Sliders } from "lucide-react";
 import { toast } from "sonner";
-import { CommandPalette } from "@/components/CommandPalette";
-import { KeyboardShortcutsGuide } from "@/components/KeyboardShortcuts";
-import { ModelComparison } from "@/components/ModelComparison";
+import { CommandPalette } from "@/components/layout/CommandPalette";
+import { KeyboardShortcutsGuide } from "@/components/layout/KeyboardShortcuts";
+import { ModelComparison } from "@/features/chat/ModelComparison";
 import {
   createConversation,
   deleteConversation,
@@ -100,27 +100,27 @@ const TabSkeleton: React.FC<{ rows?: number }> = ({ rows = 4 }) => (
 );
 
 const KnowledgeView = dynamic(
-  () => import("@/components/KnowledgeView").then((m) => m.KnowledgeView),
+  () => import("@/features/workspace/KnowledgeView").then((m) => m.KnowledgeView),
   { ssr: false, loading: () => <TabSkeleton rows={3} /> },
 );
 
 const UsageView = dynamic(
-  () => import("@/components/UsageView").then((m) => m.UsageView),
+  () => import("@/features/usage/UsageView").then((m) => m.UsageView),
   { ssr: false, loading: () => <TabSkeleton /> },
 );
 
 const SettingsView = dynamic(
-  () => import("@/components/SettingsView").then((m) => m.SettingsView),
+  () => import("@/features/settings/SettingsView").then((m) => m.SettingsView),
   { ssr: false, loading: () => <TabSkeleton rows={5} /> },
 );
 
 const AdminView = dynamic(
-  () => import("@/components/AdminView").then((m) => m.AdminView),
+  () => import("@/features/admin/AdminView").then((m) => m.AdminView),
   { ssr: false, loading: () => <TabSkeleton rows={6} /> },
 );
 
 const ProjectsView = dynamic(
-  () => import("@/components/ProjectsView").then((m) => m.ProjectsView),
+  () => import("@/features/workspace/ProjectsView").then((m) => m.ProjectsView),
   { ssr: false, loading: () => <TabSkeleton rows={3} /> },
 );
 

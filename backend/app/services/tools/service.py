@@ -16,7 +16,7 @@ from backend.app.core.exceptions import (
 )
 from backend.app.domain.tool.repository import ToolRepository
 from backend.app.domain.tool.schemas import ToolApprovalRequest
-from backend.app.services.hook_service import HookService
+from backend.app.services.hooks.service import HookService
 from backend.app.services.tools.elicitations import ELICITATION_TOOL_NAME
 from backend.app.services.tools.tool_gateway import tool_gateway
 from sqlmodel.ext.asyncio.session import AsyncSession

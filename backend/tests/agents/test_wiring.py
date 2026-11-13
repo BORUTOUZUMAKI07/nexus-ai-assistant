@@ -18,7 +18,7 @@ from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.observability.cost_tracking import (
     cost_tracking_service,
 )
-from backend.app.services.prompt_compiler import prompt_compiler
+from backend.app.services.prompts.compiler import prompt_compiler
 from backend.app.services.tools.evidence_gate import EVIDENCE_THRESHOLD, evidence_gate
 
 
@@ -79,7 +79,7 @@ async def test_usage_service_log_usage_persists_the_schema_it_is_handed():
     """
     from backend.app.domain.usage.models import UsageLog
     from backend.app.domain.usage.schemas import UsageLogCreate
-    from backend.app.services.usage_service import UsageService
+    from backend.app.services.usage.service import UsageService
     from backend.tests.fakes import FakeSession
 
     session = FakeSession()
@@ -282,7 +282,7 @@ async def test_synthesizer_bounds_revisions_when_critic_keeps_rejecting(monkeypa
 
 @pytest.mark.asyncio
 async def test_prompt_compiler_static_context_cache_hit(monkeypatch):
-    from backend.app.services import prompt_compiler as pc_module
+    from backend.app.services.prompts import compiler as pc_module
 
     monkeypatch.setattr(
         pc_module,
@@ -297,7 +297,7 @@ async def test_prompt_compiler_static_context_cache_hit(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_prompt_compiler_static_context_miss_compiles_and_falls_back_when_redis_down(monkeypatch):
-    from backend.app.services import prompt_compiler as pc_module
+    from backend.app.services.prompts import compiler as pc_module
 
     written = {}
 
@@ -323,7 +323,7 @@ async def test_prompt_compiler_static_context_miss_compiles_and_falls_back_when_
 
 @pytest.mark.asyncio
 async def test_prompt_compiler_static_context_skips_caching_for_dynamic_inputs(monkeypatch):
-    from backend.app.services import prompt_compiler as pc_module
+    from backend.app.services.prompts import compiler as pc_module
 
     async def raise_get(_key):
         raise AssertionError("should not even read cache for dynamic input")

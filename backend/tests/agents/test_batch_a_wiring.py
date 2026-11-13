@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import structlog
 from backend.app.core.logging import bind_request_context, clear_request_context
-from backend.app.services.context_compiler import ContextCompiler
+from backend.app.services.conversations.context import ContextCompiler
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
 
@@ -196,7 +196,7 @@ def test_clear_request_context_is_safe_to_call_twice():
 
 async def test_load_active_skills_fails_open(monkeypatch):
     """A database failure must degrade to "no skills", never fail the chat turn."""
-    from backend.app.services import prompt_service
+    from backend.app.services.prompts import service as prompt_service
 
     class Boom:
         async def __aenter__(self):
@@ -213,7 +213,7 @@ async def test_load_active_skills_fails_open(monkeypatch):
 
 async def test_load_active_skills_returns_rows(monkeypatch):
     from backend.app.domain.prompt.models import Skill
-    from backend.app.services import prompt_service
+    from backend.app.services.prompts import service as prompt_service
 
     class FakeRepo:
         def __init__(self, session):
@@ -323,7 +323,7 @@ async def test_stream_route_passes_compiled_prompt_and_skills(monkeypatch):
     from backend.app.api.v1 import conversations as conv_mod
     from backend.app.domain.user.models import User
     from backend.app.main import app
-    from backend.app.services import run_executor as run_exec_mod
+    from backend.app.services.runs import executor as run_exec_mod
     from backend.tests.fakes import FakeRunSession, FakeRunStore
     from httpx import ASGITransport, AsyncClient
 
@@ -413,7 +413,7 @@ async def test_stream_route_survives_prompt_compile_failure(monkeypatch):
     from backend.app.api.v1 import conversations as conv_mod
     from backend.app.domain.user.models import User
     from backend.app.main import app
-    from backend.app.services import run_executor as run_exec_mod
+    from backend.app.services.runs import executor as run_exec_mod
     from backend.tests.fakes import FakeRunSession, FakeRunStore
     from httpx import ASGITransport, AsyncClient
 
@@ -515,7 +515,7 @@ async def test_stream_route_runs_the_executor_through_its_own_session_factory(mo
     from backend.app.api.v1 import conversations as conv_mod
     from backend.app.domain.user.models import User
     from backend.app.main import app
-    from backend.app.services import run_executor as run_exec_mod
+    from backend.app.services.runs import executor as run_exec_mod
     from backend.tests.fakes import FakeRunSession, FakeRunStore
     from httpx import ASGITransport, AsyncClient
 
@@ -596,7 +596,7 @@ async def test_stream_route_adopts_a_reused_user_turn_instead_of_appending(
     from backend.app.api.v1 import conversations as conv_mod
     from backend.app.domain.user.models import User
     from backend.app.main import app
-    from backend.app.services import run_executor as run_exec_mod
+    from backend.app.services.runs import executor as run_exec_mod
     from backend.tests.fakes import FakeRunSession, FakeRunStore
     from httpx import ASGITransport, AsyncClient
 
@@ -687,7 +687,7 @@ async def test_stream_route_surfaces_a_rejected_reuse_instead_of_appending(
     from backend.app.api.v1 import conversations as conv_mod
     from backend.app.domain.user.models import User
     from backend.app.main import app
-    from backend.app.services import run_executor as run_exec_mod
+    from backend.app.services.runs import executor as run_exec_mod
     from backend.tests.fakes import FakeRunSession, FakeRunStore
     from httpx import ASGITransport, AsyncClient
 

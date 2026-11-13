@@ -33,8 +33,8 @@ import {
   Pencil,
   Trash2,
 } from "lucide-react";
-import { ArtifactItem } from "./ArtifactCanvas";
-import { NexusMark } from "./NexusMark";
+import { ArtifactItem } from "@/features/chat/ArtifactCanvas";
+import { NexusMark } from "@/components/shared/NexusMark";
 
 // react-syntax-highlighter is heavy (~150KB gzipped) and only needed for code
 // blocks inside assistant messages. Load it dynamically on the client so it is

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import AppErrorState from "@/components/AppErrorState";
+import AppErrorState from "@/components/shared/AppErrorState";
 
 /**
  * Root route error boundary (Client Component, per the Next error.js

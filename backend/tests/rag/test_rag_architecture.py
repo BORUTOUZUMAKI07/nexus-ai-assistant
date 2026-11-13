@@ -26,7 +26,7 @@ from backend.app.services.rag.critique import (
 )
 from backend.app.services.rag.query_rewriter import QueryRewriterService
 from backend.app.services.rag.retrieval import RetrievalService
-from backend.app.services.rag_service import RAGService
+from backend.app.services.rag.service import RAGService
 from backend.app.services.tools.web_search import WebSearchService
 
 rewriter = QueryRewriterService()
@@ -568,7 +568,7 @@ def test_the_default_rag_service_has_a_decision_client_wired():
     service built with the default constructor and no client would pass every
     other test in this file while coverage never once ran in production.
     """
-    from backend.app.services.rag_service import rag_service
+    from backend.app.services.rag.service import rag_service
 
     assert rag_service._decision_client is not None
 

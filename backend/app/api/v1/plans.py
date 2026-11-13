@@ -27,8 +27,8 @@ from backend.app.domain.plan.schemas import (
     PlanRequest,
 )
 from backend.app.domain.user.models import User
-from backend.app.services.conversation_service import ConversationService
-from backend.app.services.plan_service import PlanService
+from backend.app.services.billing.plans import PlanService
+from backend.app.services.conversations.service import ConversationService
 from fastapi import APIRouter, Depends, HTTPException
 
 router = APIRouter(tags=["plans"])

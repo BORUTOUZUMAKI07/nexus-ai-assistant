@@ -8,13 +8,13 @@ a revert harness deleted its emission outright and **no test changed result** --
 the row still went to the database, the API still worked, the canvas still had
 the document, and the user was simply never told.
 
-They now come from `services/run_events.py`, a pure function. This file is what
+They now come from `services/runs/events.py`, a pure function. This file is what
 makes deleting the artifact frame fail.
 """
 
 import json
 
-from backend.app.services.run_events import finished_run_events, sse_frame
+from backend.app.services.runs.events import finished_run_events, sse_frame
 
 DOCUMENT_RUN = {
     "critique": "a bit thin",

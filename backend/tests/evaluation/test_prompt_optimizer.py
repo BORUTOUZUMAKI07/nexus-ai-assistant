@@ -3,7 +3,7 @@ Unit tests for the automated prompt-optimization loop (propose → score → pro
 """
 import pytest
 from backend.app.domain.optimization.models import PromptOptimizationRun
-from backend.app.services.prompt_optimizer import (
+from backend.app.services.prompts.optimizer import (
     PromptOptimizationService,
     _case_score,
     _parse_candidates,

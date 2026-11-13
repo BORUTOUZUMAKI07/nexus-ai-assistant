@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 from backend.app.domain.experiment.models import BanditReward
-from backend.app.services.bandit_service import BanditService
+from backend.app.services.confidence.bandit import BanditService
 from backend.tests.fakes import FakeSession
 
 
@@ -51,7 +51,7 @@ def _monkeypatch_definition(monkeypatch, definition):
             return definition
 
     monkeypatch.setattr(
-        "backend.app.services.bandit_service.experiment_service",
+        "backend.app.services.confidence.bandit.experiment_service",
         FakeExperimentService(),
     )
 

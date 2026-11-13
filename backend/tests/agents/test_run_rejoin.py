@@ -42,9 +42,9 @@ import pytest
 from backend.app.domain.run.models import AgentRun, RunEvent
 from backend.app.domain.run.repository import RunRepository
 from backend.app.domain.run.service import RunService
-from backend.app.services import run_executor
-from backend.app.services.run_executor import execute_run, iter_graph_frames
-from backend.app.services.run_log import (
+from backend.app.services.runs import executor as run_executor
+from backend.app.services.runs.executor import execute_run, iter_graph_frames
+from backend.app.services.runs.log import (
     SUBSCRIBER_QUEUE_SIZE,
     RunBroker,
     RunWriter,
@@ -767,7 +767,7 @@ async def test_every_graph_node_has_a_status_label():
     point at. Checked against the graph itself so the two cannot drift.
     """
     from backend.app.agents.orchestrator.graph import _build_workflow
-    from backend.app.services.run_executor import _NODE_STATUS_LABELS
+    from backend.app.services.runs.executor import _NODE_STATUS_LABELS
 
     registered = set(_build_workflow().nodes)
     assert set(_NODE_STATUS_LABELS) == registered
@@ -1180,7 +1180,7 @@ async def test_execute_run_binds_the_users_byok_key_for_the_graph(
     """
     from backend.app.core.security import encrypt_api_key
     from backend.app.domain.user.models import APIKey as _APIKey
-    from backend.app.services.byok import byok_keys
+    from backend.app.services.llm.byok import byok_keys
 
     user_id = uuid4()
     key_row = _APIKey(
@@ -1541,7 +1541,7 @@ async def test_a_replayed_post_run_frame_is_byte_identical_to_the_old_wire_forma
     path against the old definition rather than against a hand-copied string that
     would drift with it.
     """
-    from backend.app.services.run_events import finished_run_events
+    from backend.app.services.runs.events import finished_run_events
 
     _, events = await _post_run_frames_on_the_wire(session_factory, broker)
     produced = [run_executor.encode_frame(e.payload) for e in events]

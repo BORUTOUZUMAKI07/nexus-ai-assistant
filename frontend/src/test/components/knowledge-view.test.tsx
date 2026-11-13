@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
-import { KnowledgeView } from "@/components/KnowledgeView"
+import { KnowledgeView } from "@/features/workspace/KnowledgeView"
 
 function clearCookie() {
   document.cookie.split(";").forEach((c) => {

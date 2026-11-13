@@ -20,8 +20,8 @@ from backend.app.infrastructure.resilience.guards import (
     TaskLockStore,
     singleton_lock,
 )
-from backend.app.services import conversation_service as conv_module
-from backend.app.services.conversation_service import ConversationService
+from backend.app.services.conversations import service as conv_module
+from backend.app.services.conversations.service import ConversationService
 from fakes import FakeSession
 
 # ── Circuit breaker ──────────────────────────────────────────────────────────

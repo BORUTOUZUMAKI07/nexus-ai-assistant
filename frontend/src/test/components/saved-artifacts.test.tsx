@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest"
 import { render, screen, fireEvent } from "@/test/test-utils"
-import SavedArtifacts from "@/components/SavedArtifacts"
-import type { ArtifactItem } from "@/components/ArtifactCanvas"
+import SavedArtifacts from "@/features/workspace/SavedArtifacts"
+import type { ArtifactItem } from "@/features/chat/ArtifactCanvas"
 
 const saved: ArtifactItem = {
   id: "art-1",

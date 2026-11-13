@@ -8,7 +8,7 @@ every structured call -- including the artifact classifier -- was invisible to
 import ast
 from pathlib import Path
 
-import backend.app.services.structured_output as so
+import backend.app.services.llm.structured_output as so
 import pytest
 
 

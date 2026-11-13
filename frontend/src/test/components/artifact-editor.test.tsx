@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
-import { ArtifactCanvas, ArtifactItem } from "@/components/ArtifactCanvas"
+import { ArtifactCanvas, ArtifactItem } from "@/features/chat/ArtifactCanvas"
 
 const SAVED: ArtifactItem = {
   id: "art-1",

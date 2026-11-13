@@ -12,7 +12,7 @@ from backend.app.infrastructure.vector.base import IVectorStore
 from backend.app.infrastructure.vector.qdrant_client import (
     vector_db as _default_vector_db,
 )
-from backend.app.services.byok import get_byok_key
+from backend.app.services.llm.byok import get_byok_key
 from backend.app.services.rag.base import IRetriever
 
 logger = structlog.get_logger(__name__)

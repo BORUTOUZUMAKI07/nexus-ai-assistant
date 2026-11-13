@@ -32,9 +32,9 @@ from backend.app.domain.user.schemas import (
 )
 from backend.app.infrastructure.cache.redis_client import get_cache_service, redis_service
 from backend.app.infrastructure.resilience.rate_limit import rate_limit_anon
-from backend.app.services.auth_service import AuthService
-from backend.app.services.oauth_service import OAuthProviderRegistry, OAuthService
-from backend.app.services.two_factor_service import TwoFactorService
+from backend.app.services.auth.oauth import OAuthProviderRegistry, OAuthService
+from backend.app.services.auth.service import AuthService
+from backend.app.services.auth.two_factor import TwoFactorService
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordRequestForm

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { render, screen, fireEvent } from "@/test/test-utils"
-import PlanHistory from "@/components/PlanHistory"
+import PlanHistory from "@/features/workspace/PlanHistory"
 import type { PlanItem } from "@/lib/api"
 
 const plan = (over: Partial<PlanItem> = {}): PlanItem => ({

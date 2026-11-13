@@ -509,7 +509,7 @@ class TestThePrompt:
         assert len(answer_coverage.COVERAGE_LABELS) == 3
 
     def test_the_labels_are_a_closed_set_the_model_cannot_widen(self):
-        from backend.app.services.decision import DecisionQuestion
+        from backend.app.services.confidence.decision import DecisionQuestion
 
         question = answer_coverage.COVERAGE_QUESTION
         assert isinstance(question, DecisionQuestion)
@@ -636,7 +636,7 @@ class TestTheLegendIsAnOrdinalScale:
         either ordering, which is why an earlier version of this test passed
         against a fully reversed legend.
         """
-        from backend.app.services.decision import SOURCE_LOGPROBS, Decision
+        from backend.app.services.confidence.decision import SOURCE_LOGPROBS, Decision
 
         def graded(distribution: dict[str, float]) -> float | None:
             return Decision(
@@ -655,7 +655,7 @@ class TestTheLegendIsAnOrdinalScale:
 
     def test_the_ends_of_the_scale_are_zero_and_one(self):
         """A reversed legend would silently swap these two, not fail loudly."""
-        from backend.app.services.decision import SOURCE_LOGPROBS, Decision
+        from backend.app.services.confidence.decision import SOURCE_LOGPROBS, Decision
 
         def graded(label: str) -> float | None:
             distribution = {name: 0.0 for name in answer_coverage.COVERAGE_LABELS}
@@ -705,7 +705,7 @@ class TestTheLegendIsAnOrdinalScale:
         key were filled in unconditionally, and a report showing `graded_value: 0.0`
         next to `source: deterministic` reads as "measured, and it scored nothing".
         """
-        from backend.app.services.decision import SOURCE_DETERMINISTIC
+        from backend.app.services.confidence.decision import SOURCE_DETERMINISTIC
 
         chunks = [chunk(0), chunk(1)]
         client = DecisionClient([ruled("does_not_answer"), ruled("does_not_answer")])

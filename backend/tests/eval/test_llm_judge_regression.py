@@ -44,7 +44,7 @@ class TestLLMJudgeRegression:
         min_score = case["min_overall_score"]
 
         # Route through the actual assistant stream to get a real answer.
-        from backend.app.services.run_executor import stream_run
+        from backend.app.services.runs.executor import stream_run
 
         answer_parts = []
         for frame in stream_run(

@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { CurrentYear } from "@/components/CurrentYear";
-import { NexusMark } from "@/components/NexusMark";
-import { ScrollReveal } from "@/components/ScrollReveal";
+import { CurrentYear } from "@/components/shared/CurrentYear";
+import { NexusMark } from "@/components/shared/NexusMark";
+import { ScrollReveal } from "@/components/shared/ScrollReveal";
 import { ROUTING_TIERS } from "@/lib/models";
 import {
   ArrowRight,

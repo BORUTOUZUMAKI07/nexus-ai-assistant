@@ -26,10 +26,10 @@ from uuid import uuid4
 
 import pytest
 from backend.app.domain.webhook.models import WebhookEndpoint
-from backend.app.services.webhook_service import WebhookService
+from backend.app.services.webhooks.service import WebhookService
 from fakes import FakeSession
 
-# Documented wire contract (mirrored in app/services/webhook_service.py).
+# Documented wire contract (mirrored in app/services/webhooks/service.py).
 DOCUMENTED_HEADERS = {
     "Content-Type": "application/json",
     "X-Nexus-Event": None,  # filled per delivery

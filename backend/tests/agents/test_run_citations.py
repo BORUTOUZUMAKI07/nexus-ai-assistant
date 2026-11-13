@@ -37,17 +37,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.app.domain.run.service import RunService  # noqa: E402
-from backend.app.services.run_events import (  # noqa: E402
+from backend.app.services.runs.events import (  # noqa: E402
     MAX_CITATION_FRAMES,
     citation_payloads,
     finished_run_payloads,
 )
-from backend.app.services.run_executor import (  # noqa: E402
+from backend.app.services.runs.executor import (  # noqa: E402
     _persist_reply,
     _run_citations,
     execute_run,
 )
-from backend.app.services.run_log import RunBroker  # noqa: E402
+from backend.app.services.runs.log import RunBroker  # noqa: E402
 from backend.tests.fakes import FakeRunSession, FakeRunStore  # noqa: E402
 
 
@@ -203,7 +203,7 @@ def _stub_the_row_writers(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any
     as *recorders* rather than mocks of the function under test, because the whole
     subject here is which arguments reached the writer (project guidelines).
     """
-    import backend.app.services.run_executor as ex
+    import backend.app.services.runs.executor as ex
 
     _ConversationService.WRITTEN = []
     monkeypatch.setattr(ex, "ConversationService", _ConversationService)

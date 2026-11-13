@@ -1,7 +1,7 @@
 """
 Unit tests for deterministic canary/shadow experiment bucketing.
 """
-from backend.app.services.experiments import (
+from backend.app.services.experiments.service import (
     ExperimentService,
     bucketed_variant,
     variant_for,

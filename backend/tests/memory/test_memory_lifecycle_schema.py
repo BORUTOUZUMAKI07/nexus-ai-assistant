@@ -17,7 +17,7 @@ import pathlib
 
 import backend.app.infrastructure.database.engine  # noqa: F401  (populates metadata)
 import pytest
-from backend.app.services.memory_lifecycle import CONFIDENCE_FLOOR, INITIAL_CONFIDENCE
+from backend.app.services.memory.lifecycle import CONFIDENCE_FLOOR, INITIAL_CONFIDENCE
 from sqlmodel import SQLModel
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]

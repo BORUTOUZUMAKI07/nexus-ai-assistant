@@ -9,7 +9,7 @@ from backend.app.domain.prompt.models import PromptVersion
 from backend.app.domain.redteam.models import RedTeamRun
 from backend.app.domain.system.models import AuditLog
 from backend.app.domain.usage.models import EvaluationLog, UsageLog
-from backend.app.services.audit_service import (
+from backend.app.services.audit.service import (
     AuditService,
     eu_ai_act_classification,
     retention_statement,

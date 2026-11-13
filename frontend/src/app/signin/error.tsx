@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import AppErrorState from "@/components/AppErrorState";
+import AppErrorState from "@/components/shared/AppErrorState";
 
 /**
  * Sign-in route error boundary — same branded fallback, tuned for the auth

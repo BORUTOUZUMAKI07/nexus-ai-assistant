@@ -16,8 +16,8 @@ from backend.app.infrastructure.resilience.rate_limit import (
     org_scoped_key,
     rate_limit,
 )
-from backend.app.services.org_service import OrganizationService
-from backend.app.services.usage_service import UsageService
+from backend.app.services.orgs.service import OrganizationService
+from backend.app.services.usage.service import UsageService
 from fakes import FakeSession
 from fastapi import Request, Response
 

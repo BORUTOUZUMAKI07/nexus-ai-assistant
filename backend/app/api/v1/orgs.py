@@ -10,8 +10,8 @@ from backend.app.api.deps import get_current_user, get_org_service, get_usage_se
 from backend.app.core.config import settings
 from backend.app.domain.usage.schemas import OrgUsageSummaryResponse
 from backend.app.domain.user.models import User
-from backend.app.services.org_service import OrganizationService
-from backend.app.services.usage_service import UsageService
+from backend.app.services.orgs.service import OrganizationService
+from backend.app.services.usage.service import UsageService
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 

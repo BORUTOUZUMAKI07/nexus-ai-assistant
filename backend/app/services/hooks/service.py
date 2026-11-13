@@ -41,7 +41,7 @@ class HookService:
         policies apply to them. Delegates to OrganizationService so multi-tenant
         scoping (hooks, rate limits, usage rollups) shares one resolver.
         """
-        from backend.app.services.org_service import OrganizationService
+        from backend.app.services.orgs.service import OrganizationService
 
         return await OrganizationService(self._session).resolve_org_id(user_id)
 

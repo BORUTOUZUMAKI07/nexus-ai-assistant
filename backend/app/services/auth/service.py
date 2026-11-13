@@ -31,9 +31,9 @@ from backend.app.domain.user.schemas import (
     UserCreate,
 )
 from backend.app.infrastructure.cache.redis_client import get_cache_service
-from backend.app.services.email_service import build_email_link, email_service, escape_html
-from backend.app.services.oauth_service import OAuthIdentity
-from backend.app.services.two_factor_service import TwoFactorService
+from backend.app.services.auth.oauth import OAuthIdentity
+from backend.app.services.auth.two_factor import TwoFactorService
+from backend.app.services.notifications.email import build_email_link, email_service, escape_html
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)

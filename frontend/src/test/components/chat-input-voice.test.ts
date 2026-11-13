@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { isLikelySilenceHallucination } from "@/components/ChatInput"
+import { isLikelySilenceHallucination } from "@/features/chat/ChatInput"
 
 /**
  * Whisper does not return "" for silence; it returns something plausible.

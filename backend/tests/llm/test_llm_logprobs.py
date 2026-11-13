@@ -1,6 +1,6 @@
 """Tests for logprob plumbing in the LiteLLM client.
 
-`services/decision.py` is only as good as this. Everything upstream can be
+`services/confidence/decision.py` is only as good as this. Everything upstream can be
 correct and the layer still degrades to nothing if `complete()` does not forward
 the logprobs request or reports absence as an empty list -- and no test caught
 either, because every decision test injects a fake client and never runs this

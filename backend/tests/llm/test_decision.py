@@ -1,4 +1,4 @@
-"""Tests for the typed-decision layer (services/decision.py).
+"""Tests for the typed-decision layer (services/confidence/decision.py).
 
 The whole point of this module is that a probability means something specific:
 it came from a real distribution read off the model, not from a number the model
@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 from backend.app.core.config import settings
-from backend.app.services.decision import (
+from backend.app.services.confidence.decision import (
     SOURCE_DETERMINISTIC,
     SOURCE_LOGPROBS,
     Decision,

@@ -33,16 +33,16 @@ from backend.app.infrastructure.ai.litellm_client import (
     resolve_provider,
 )
 from backend.app.infrastructure.cache.response_cache import response_cache
-from backend.app.services.context_compiler import context_compiler
-from backend.app.services.conversation_service import ConversationService
+from backend.app.services.conversations.context import context_compiler
+from backend.app.services.conversations.service import ConversationService
 from backend.app.services.evaluation.guardrail_service import guardrail_service
 from backend.app.services.evaluation.quality_service import quality_service
-from backend.app.services.experiments import experiment_service
+from backend.app.services.experiments.service import experiment_service
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.tracing import trace_span
-from backend.app.services.prompt_compiler import prompt_compiler
-from backend.app.services.usage_service import UsageService
+from backend.app.services.prompts.compiler import prompt_compiler
+from backend.app.services.usage.service import UsageService
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -100,7 +100,7 @@ async def send_message_sync(
     # declares bandit: true. Cold start explores uniformly; then exploits the
     # empirically-best variant from recorded rewards. Fail-open.
     try:
-        from backend.app.services.bandit_service import bandit_service
+        from backend.app.services.confidence.bandit import bandit_service
 
         bandit_choice = await bandit_service.select(
             usage_svc._repo.session, "chat_system_prompt", str(current_user.id)
@@ -140,7 +140,7 @@ async def send_message_sync(
     )
     if cache_hit_payload is None:
         try:
-            from backend.app.services.semantic_response_cache import semantic_response_cache
+            from backend.app.services.memory.semantic_cache import semantic_response_cache
 
             sem = await semantic_response_cache.get(
                 str(current_user.id), target_model, sanitized_content, prompt_variant=experiment_variant
@@ -179,7 +179,7 @@ async def send_message_sync(
             prompt_variant=experiment_variant,
         )
         try:
-            from backend.app.services.semantic_response_cache import semantic_response_cache
+            from backend.app.services.memory.semantic_cache import semantic_response_cache
 
             await semantic_response_cache.set(
                 str(current_user.id),
@@ -253,7 +253,7 @@ async def send_message_sync(
     # 8. Outbound webhook dispatch (best-effort, non-blocking): any active
     #    message.completed endpoints the user registered receive a signed event.
     try:
-        from backend.app.services.webhook_service import WebhookService
+        from backend.app.services.webhooks.service import WebhookService
 
         wh_svc = WebhookService(usage_svc._repo.session)
         await wh_svc.dispatch_event(

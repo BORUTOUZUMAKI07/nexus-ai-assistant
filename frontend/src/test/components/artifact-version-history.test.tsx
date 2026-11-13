@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
-import { ArtifactCanvas } from "@/components/ArtifactCanvas"
+import { ArtifactCanvas } from "@/features/chat/ArtifactCanvas"
 
 // ArtifactCanvas fetches version history for persisted artifacts. Stub just that
 // one call; everything else in the component is presentational.

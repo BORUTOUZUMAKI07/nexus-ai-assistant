@@ -36,7 +36,7 @@ from typing import Any
 
 import structlog
 from backend.app.core.config import settings
-from backend.app.services.decision import (
+from backend.app.services.confidence.decision import (
     SOURCE_LOGPROBS,
     Decision,
     DecisionQuestion,

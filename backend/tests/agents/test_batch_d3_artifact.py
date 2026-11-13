@@ -14,7 +14,7 @@ than through a mock that would pass regardless:
 """
 
 import pytest
-from backend.app.services.artifact_intent import (
+from backend.app.services.artifacts.intent import (
     IntentConfig,
     classify_media,
     decide,
@@ -70,7 +70,7 @@ class _RecordingClassifier:
 @pytest.fixture
 def classifier(monkeypatch):
     rec = _RecordingClassifier()
-    import backend.app.services.structured_output as so
+    import backend.app.services.llm.structured_output as so
 
     monkeypatch.setattr(so, "structured_service", rec)
     return rec
@@ -288,7 +288,7 @@ async def test_a_single_fence_is_not_a_code_artifact(classifier):
 
 
 def _fences(text: str) -> list[str]:
-    from backend.app.services.artifact_intent import _FENCE
+    from backend.app.services.artifacts.intent import _FENCE
 
     return _FENCE.findall(text)
 
@@ -343,7 +343,7 @@ async def test_a_classifier_that_cannot_be_reached_decides_nothing(monkeypatch):
     It also must not raise: this layer is optional by construction, and the two
     free layers have already had their say.
     """
-    import backend.app.services.structured_output as so
+    import backend.app.services.llm.structured_output as so
 
     class _Broken:
         async def generate_structured(self, **kwargs):
@@ -367,7 +367,7 @@ async def test_the_classifier_schema_cannot_express_anything_but_a_yes():
     second field is ever added here, the guarantee is gone and this test should
     fail rather than be quietly updated.
     """
-    from backend.app.services.artifact_intent import _ArtifactVerdict
+    from backend.app.services.artifacts.intent import _ArtifactVerdict
 
     assert set(_ArtifactVerdict.model_fields) == {"is_durable_artifact"}
 
@@ -895,7 +895,7 @@ def test_the_run_event_frames_helper_is_used_by_the_run():
     route = (root / "app" / "api" / "v1" / "conversations.py").read_text(
         encoding="utf-8"
     )
-    executor = (root / "app" / "services" / "run_executor.py").read_text(
+    executor = (root / "app" / "services" / "runs" / "executor.py").read_text(
         encoding="utf-8"
     )
 

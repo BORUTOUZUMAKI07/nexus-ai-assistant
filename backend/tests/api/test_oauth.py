@@ -33,9 +33,8 @@ from backend.app.core.exceptions import AuthenticationError
 from backend.app.domain.user.models import User, UserSettings
 from backend.app.domain.user.schemas import TokenResponse, TwoFactorChallengeResponse
 from backend.app.main import app
-from backend.app.services import oauth_service as oauth_module
-from backend.app.services.auth_service import AuthService
-from backend.app.services.oauth_service import (
+from backend.app.services.auth import oauth as oauth_module
+from backend.app.services.auth.oauth import (
     GitHubOAuthProvider,
     GoogleOAuthProvider,
     OAuthProviderRegistry,
@@ -43,6 +42,7 @@ from backend.app.services.oauth_service import (
     _normalize_google_userinfo,
     _select_verified_email,
 )
+from backend.app.services.auth.service import AuthService
 from backend.tests.fakes import FakeSession
 from httpx import ASGITransport, AsyncClient
 
@@ -541,7 +541,7 @@ def test_complete_login_uses_the_stored_verifier_for_exchange():
 # ─── AuthService.oauth_login ────────────────────────────────────────────────
 
 def _identity(**overrides):
-    from backend.app.services.oauth_service import OAuthIdentity
+    from backend.app.services.auth.oauth import OAuthIdentity
 
     base = dict(
         provider="oidc",
@@ -1188,7 +1188,7 @@ class _FakeCache:
 
 
 def _fresh_cache_store(monkeypatch, fake: _FakeCache):
-    from backend.app.services.oauth_service import _CacheOAuthStateStore
+    from backend.app.services.auth.oauth import _CacheOAuthStateStore
 
     monkeypatch.setattr(oauth_module, "get_cache_service", lambda: fake)
     # The dict is a class attribute, shared across instances; clear it so a
@@ -1242,7 +1242,7 @@ def test_cache_state_store_bounds_its_process_local_fallback(monkeypatch):
     login. The cache is forced down here so the local path is the only one and
     the shared store cannot mask what the local dict does.
     """
-    from backend.app.services.oauth_service import _CacheOAuthStateStore
+    from backend.app.services.auth.oauth import _CacheOAuthStateStore
 
     fake = _FakeCache(fail=True)
     store = _fresh_cache_store(monkeypatch, fake)

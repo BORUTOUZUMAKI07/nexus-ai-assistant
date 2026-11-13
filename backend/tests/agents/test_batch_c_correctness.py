@@ -16,7 +16,7 @@ from backend.app.core.credential_check import (
     validate_credential,
     validate_settings,
 )
-from backend.app.services.confidence_action import (
+from backend.app.services.confidence.action import (
     NEVER_HEDGE_BELOW,
     apply_confidence_action,
     should_hedge,
@@ -214,7 +214,7 @@ async def _run(monkeypatch, decision):
     singleton's method, not a module-level name in nodes.
     """
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     async def fake_completion(**kwargs):
         return "Paris is the capital of France, a well established fact."
@@ -244,7 +244,7 @@ async def test_synthesizer_annotates_a_low_confidence_answer(monkeypatch):
 async def _run_with_research(monkeypatch, subagent_outputs):
     """Drive synthesizer_node and capture the exact messages it sends."""
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     captured: dict = {}
 
@@ -321,7 +321,7 @@ async def test_a_refusal_despite_findings_is_reasked_exactly_once(monkeypatch):
     """The backstop: a model that refuses while holding evidence gets one
     corrective re-ask, and the answer that comes back is what the user sees."""
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     calls: list[str] = []
     replies = iter(
@@ -368,7 +368,7 @@ async def test_a_second_refusal_delivers_the_researchers_synthesis(monkeypatch):
     question, so it is what gets delivered instead.
     """
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     calls: list[str] = []
 
@@ -402,7 +402,7 @@ async def test_a_second_refusal_delivers_the_researchers_synthesis(monkeypatch):
 async def test_a_sourced_answer_is_never_reasked(monkeypatch):
     """The retry costs a model call, so a correct first draft must not pay it."""
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     calls: list[str] = []
 
@@ -435,7 +435,7 @@ async def test_a_sourced_answer_is_never_reasked(monkeypatch):
 async def test_without_findings_a_refusal_is_returned_untouched(monkeypatch):
     """There is no evidence to answer from, so re-asking would just be noise."""
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     calls: list[str] = []
 
@@ -493,7 +493,7 @@ async def test_the_rag_directive_travels_with_the_passages(monkeypatch):
     """A system-tail instruction alone did not move the model; the correction
     has to sit in the same message as the retrieved passage."""
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     captured: dict = {}
 
@@ -530,7 +530,7 @@ async def test_the_rag_directive_travels_with_the_passages(monkeypatch):
 
 async def test_a_document_grounded_refusal_is_reasked_with_the_passage(monkeypatch):
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     calls: list[str] = []
     replies = iter(
@@ -569,7 +569,7 @@ async def test_a_document_grounded_refusal_is_reasked_with_the_passage(monkeypat
 async def test_a_second_document_refusal_delivers_the_retrieved_passage(monkeypatch):
     """Bounded, and the user still gets the evidence instead of a refusal."""
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     calls: list[str] = []
 
@@ -602,7 +602,7 @@ async def test_a_second_document_refusal_delivers_the_retrieved_passage(monkeypa
 async def test_a_grounded_document_answer_is_not_reasked(monkeypatch):
     """A correct first draft must not pay for the retry."""
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     calls: list[str] = []
 

@@ -19,7 +19,7 @@ from backend.app.core.config import settings
 from backend.app.domain.base_repository import BaseRepository
 from backend.app.domain.optimization.models import PromptOptimizationRun
 from backend.app.infrastructure.ai.litellm_client import ai_client
-from backend.app.services.structured_parse import (
+from backend.app.services.llm.structured_parse import (
     extract_json_array,
     extract_json_object,
     strip_code_fence,

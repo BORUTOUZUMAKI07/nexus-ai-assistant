@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
-import { SettingsView } from "@/components/SettingsView"
+import { SettingsView } from "@/features/settings/SettingsView"
 
 describe("SettingsView", () => {
   beforeEach(() => {

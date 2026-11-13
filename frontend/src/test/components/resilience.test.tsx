@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
-import { KnowledgeView } from "@/components/KnowledgeView"
-import { UsageView } from "@/components/UsageView"
-import { AdminView } from "@/components/AdminView"
+import { KnowledgeView } from "@/features/workspace/KnowledgeView"
+import { UsageView } from "@/features/usage/UsageView"
+import { AdminView } from "@/features/admin/AdminView"
 
 describe("resilience - real error states (no fabricated fallbacks)", () => {
   beforeEach(() => {

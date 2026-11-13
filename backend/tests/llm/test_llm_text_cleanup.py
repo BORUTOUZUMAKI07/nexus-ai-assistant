@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 from backend.app.infrastructure.ai.litellm_client import LiteLLMService
 from backend.app.infrastructure.resilience.guards import CircuitBreaker, InFlightLimiter
-from backend.app.services.llm_text_cleanup import strip_model_artifacts
+from backend.app.services.llm.text_cleanup import strip_model_artifacts
 
 # The exact shape that reached the user, kept verbatim so this test fails if the
 # span pattern is loosened.

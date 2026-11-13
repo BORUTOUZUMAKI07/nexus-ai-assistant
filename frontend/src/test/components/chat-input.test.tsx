@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen, fireEvent } from "@/test/test-utils"
-import { ChatInput } from "@/components/ChatInput"
+import { ChatInput } from "@/features/chat/ChatInput"
 
 describe("ChatInput", () => {
   const onSendMessage = vi.fn()

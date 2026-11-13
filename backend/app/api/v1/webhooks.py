@@ -6,7 +6,7 @@ from uuid import UUID
 import structlog
 from backend.app.api.deps import get_current_user, get_webhook_service
 from backend.app.domain.user.models import User
-from backend.app.services.webhook_service import WebhookService
+from backend.app.services.webhooks.service import WebhookService
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 

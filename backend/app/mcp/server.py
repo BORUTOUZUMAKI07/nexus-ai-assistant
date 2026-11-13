@@ -447,7 +447,7 @@ async def create_artifact(
     from backend.app.domain.artifact.schemas import ArtifactCreate
     from backend.app.domain.conversation.repository import ConversationRepository
     from backend.app.infrastructure.database.session import async_session_factory
-    from backend.app.services.artifact_service import ArtifactService
+    from backend.app.services.artifacts.service import ArtifactService
 
     # The owning user is ALWAYS the authenticated caller. A caller-supplied
     # `user_id` is never trusted: an authenticated MCP client that passed a

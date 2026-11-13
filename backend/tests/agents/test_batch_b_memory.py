@@ -10,7 +10,7 @@ Each test fails if its corresponding fix is reverted:
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from backend.app.services.memory_lifecycle import (
+from backend.app.services.memory.lifecycle import (
     CONFIDENCE_FLOOR,
     apply_reinforcement,
     decayed_confidence,

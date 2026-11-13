@@ -3,7 +3,7 @@
 import React from "react";
 import { createPortal } from "react-dom";
 import { X, BookOpen, ExternalLink, Sparkles, Copy, Check } from "lucide-react";
-import { CitationItem } from "./ChatArea";
+import { CitationItem } from "@/features/chat/ChatArea";
 import { useCopyToggle } from "@/lib/clipboard";
 
 export interface CitationInspectorProps {

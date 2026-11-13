@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
-import { AdminView } from "@/components/AdminView"
+import { AdminView } from "@/features/admin/AdminView"
 
 describe("AdminView", () => {
   beforeEach(() => {

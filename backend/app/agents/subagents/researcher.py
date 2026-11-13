@@ -57,11 +57,11 @@ from urllib.parse import urlsplit
 import structlog
 from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
-from backend.app.services.rag.base import needs_scraping
-from backend.app.services.structured_parse import (
+from backend.app.services.llm.structured_parse import (
     extract_json_array,
     extract_json_object,
 )
+from backend.app.services.rag.base import needs_scraping
 from backend.app.services.tools.web_search import web_search_service
 
 logger = structlog.get_logger(__name__)

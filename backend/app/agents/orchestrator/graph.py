@@ -562,7 +562,7 @@ async def lifespan_graph() -> AsyncIterator[None]:
                 # node via langgraph.config.get_store(). This repo has zero
                 # get_store() call sites -- long-term memory is mem0
                 # (services/memory.py) mirrored into the user_memories table
-                # (services/memory_lifecycle.py) and read through AgentState.
+                # (services/memory/lifecycle.py) and read through AgentState.
                 # Passing a store nothing reads was the same defect class as
                 # the ResilientPostgresSaver that LangGraph silently discarded
                 # at compile(): wired in, never used, invisible to every test.

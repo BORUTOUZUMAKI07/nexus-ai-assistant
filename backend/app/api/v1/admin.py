@@ -15,8 +15,8 @@ from backend.app.domain.usage.models import CostLog
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.cache.redis_client import redis_client
 from backend.app.infrastructure.database.engine import check_database_health
-from backend.app.services.account_service import AccountService
-from backend.app.services.hook_service import HookService
+from backend.app.services.auth.account import AccountService
+from backend.app.services.hooks.service import HookService
 from backend.app.services.monitoring.drift_service import DriftService
 from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.viewer import (
@@ -416,7 +416,7 @@ async def get_bandit_stats(
     ε-greedy bandit status: empirical win rates per experiment variant
     from the persisted reward stream, plus the configured exploration rate.
     """
-    from backend.app.services.bandit_service import bandit_service
+    from backend.app.services.confidence.bandit import bandit_service
 
     try:
         stats = await bandit_service.stats(session)
@@ -475,7 +475,7 @@ async def run_optimization(
     candidate rewrites, score against the golden case set, promote the winner
     if it beats the baseline, and persist the run.
     """
-    from backend.app.services.prompt_optimizer import prompt_optimizer_service
+    from backend.app.services.prompts.optimizer import prompt_optimizer_service
 
     run = await prompt_optimizer_service.run(
         session,
@@ -506,7 +506,7 @@ async def get_audit_report(
     provenance, red-team battery, GDPR evidence, eval histogram, and the EU AI
     Act classification statement.
     """
-    from backend.app.services.audit_service import AuditService
+    from backend.app.services.audit.service import AuditService
 
     return await AuditService(session).report()
 
@@ -517,7 +517,7 @@ async def list_redteam_runs(
     admin: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
     """Recent persisted red-team runs (defense-rate history for the audit trail)."""
-    from backend.app.services.audit_service import AuditService
+    from backend.app.services.audit.service import AuditService
 
     runs = await AuditService(session).redteam_runs(limit=5)
     return {"runs": runs}
@@ -528,6 +528,6 @@ async def get_eu_act_classification(
     admin: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
     """Static EU AI Act classification statement for the audit/readiness view."""
-    from backend.app.services.audit_service import eu_ai_act_classification
+    from backend.app.services.audit.service import eu_ai_act_classification
 
     return eu_ai_act_classification()

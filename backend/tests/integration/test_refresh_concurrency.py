@@ -21,7 +21,7 @@ import uuid
 import pytest
 from backend.app.core.config import settings
 from backend.app.core.security import decode_token
-from backend.app.services.auth_service import _REPLAY_PUBLISH_WAIT_SECONDS
+from backend.app.services.auth.service import _REPLAY_PUBLISH_WAIT_SECONDS
 
 
 async def _signed_in(client, prefix: str) -> tuple[str, str]:

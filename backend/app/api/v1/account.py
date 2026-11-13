@@ -7,7 +7,7 @@ import structlog
 from backend.app.api.deps import get_account_service, get_current_user, get_db
 from backend.app.domain.system.models import AuditLog
 from backend.app.domain.user.models import User
-from backend.app.services.account_service import AccountService
+from backend.app.services.auth.account import AccountService
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlmodel.ext.asyncio.session import AsyncSession

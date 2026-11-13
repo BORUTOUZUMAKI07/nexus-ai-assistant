@@ -15,7 +15,7 @@ from backend.app.domain.user.schemas import (
     UserSettingsResponse,
     UserSettingsUpdate,
 )
-from backend.app.services.user_settings_service import UserSettingsService
+from backend.app.services.settings.service import UserSettingsService
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 router = APIRouter(prefix="/settings", tags=["settings"])

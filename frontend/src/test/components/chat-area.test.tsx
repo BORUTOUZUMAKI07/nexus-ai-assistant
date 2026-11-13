@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
-import { ChatArea } from "@/components/ChatArea"
+import { ChatArea } from "@/features/chat/ChatArea"
 
 describe("ChatArea", () => {
   const assistant = {

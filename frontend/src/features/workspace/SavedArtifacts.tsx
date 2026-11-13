@@ -1,7 +1,7 @@
 "use client";
 
 import { FileCode } from "lucide-react";
-import type { ArtifactItem } from "@/components/ArtifactCanvas";
+import type { ArtifactItem } from "@/features/chat/ArtifactCanvas";
 
 /**
  * The way back into artifacts saved in earlier sessions.

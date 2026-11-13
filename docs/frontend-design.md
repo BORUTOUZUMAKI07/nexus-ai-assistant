@@ -27,7 +27,7 @@ never dark-by-default for anonymous visitors.
 The **brand mark** is the Nexus node-glyph — a bold "N" whose diagonal is a
 chain of nodes — on an Electric Acid Lime tile. See
 `frontend/public/nexus-logo.svg`, `frontend/src/app/icon.svg` (favicon), and the
-`NexusMark` React component (`frontend/src/components/NexusMark.tsx`) used for
+`NexusMark` React component (`frontend/src/components/shared/NexusMark.tsx`) used for
 the assistant avatar and the landing navbar. The old purple→cyan tile and the
 lucide `Bot` avatar were removed 2026-10-14 (product-owner request).
 
@@ -51,7 +51,7 @@ lucide `Bot` avatar were removed 2026-10-14 (product-owner request).
   "never chose" from "chose dark". Local persistence keeps Paper default intact
   with zero backend changes. Do not "fix" this.
 - Theme switching lives in **Settings → Appearance**
-  (`src/components/AppearanceSettings.tsx`): Light/Dark/System cards only — the
+  (`src/features/settings/AppearanceSettings.tsx`): Light/Dark/System cards only — the
   accent swatch picker and the command-palette accent entries were removed with
   the swaps.
 

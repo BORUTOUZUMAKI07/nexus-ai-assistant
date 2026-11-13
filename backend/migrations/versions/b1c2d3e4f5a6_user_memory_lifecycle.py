@@ -19,7 +19,7 @@ The added columns:
     facts here; without this column the two stores could not be linked at all.
   * ``retrieval_count`` / ``last_used_at`` — write-back targets. A memory that
     is repeatedly recalled and useful earns confidence; one that is never
-    touched decays toward the floor (see services/memory_lifecycle.py).
+    touched decays toward the floor (see services/memory/lifecycle.py).
   * ``scope``    — "user" for a standing preference, "conversation" for context
     that should not outlive its thread.
 
@@ -87,7 +87,7 @@ _NEW_INDEXES: tuple[tuple[str, str, str], ...] = (
 )
 
 # Honest starting confidence, matching INITIAL_CONFIDENCE in
-# services/memory_lifecycle.py. The model default is only applied on insert,
+# services/memory/lifecycle.py. The model default is only applied on insert,
 # so existing rows need this explicitly.
 _INITIAL_CONFIDENCE = 0.7
 

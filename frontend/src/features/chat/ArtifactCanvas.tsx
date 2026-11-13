@@ -20,7 +20,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { fetchArtifact, type ArtifactVersionItem } from "@/lib/api";
-import { DiffViewer } from "@/components/DiffViewer";
+import { DiffViewer } from "@/features/chat/DiffViewer";
 
 export interface ArtifactItem {
   id: string;

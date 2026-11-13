@@ -14,7 +14,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { FileWarning, Loader2, MessageSquare } from "lucide-react";
-import { MarkdownRenderer } from "@/components/ChatArea";
+import { MarkdownRenderer } from "@/features/chat/ChatArea";
 
 type SharedMessage = {
   role: string;

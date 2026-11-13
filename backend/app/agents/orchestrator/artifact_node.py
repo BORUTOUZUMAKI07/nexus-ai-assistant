@@ -7,7 +7,7 @@ artifact generated from an earlier draft would be a different document from the
 one in the chat.
 
 What this node deliberately does *not* do is generate content. The decision and
-all the metadata live in ``services/artifact_intent.py``; the body is the
+all the metadata live in ``services/artifacts/intent.py``; the body is the
 synthesizer's ``response_text``, verbatim. See that module for why a second
 generation would be both expensive and wrong.
 
@@ -26,7 +26,7 @@ import structlog
 from backend.app.agents.orchestrator.state import AgentState
 from backend.app.core.config import settings
 from backend.app.core.spend import budget_exhausted
-from backend.app.services.artifact_intent import IntentConfig, decide
+from backend.app.services.artifacts.intent import IntentConfig, decide
 
 logger = structlog.get_logger(__name__)
 

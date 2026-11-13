@@ -30,19 +30,19 @@ from backend.app.infrastructure.ai.litellm_client import (
 )
 from backend.app.infrastructure.database.session import async_session_factory
 from backend.app.infrastructure.resilience.rate_limit import rate_limit
-from backend.app.services.byok import bind_byok_keys, load_user_byok_keys, reset_byok_keys
-from backend.app.services.conversation_service import ConversationService
+from backend.app.services.conversations.service import ConversationService
 from backend.app.services.evaluation.guardrail_service import guardrail_service
-from backend.app.services.org_service import OrganizationService
-from backend.app.services.prompt_compiler import prompt_compiler
-from backend.app.services.prompt_service import load_active_skills
-from backend.app.services.run_executor import (
+from backend.app.services.llm.byok import bind_byok_keys, load_user_byok_keys, reset_byok_keys
+from backend.app.services.orgs.service import OrganizationService
+from backend.app.services.prompts.compiler import prompt_compiler
+from backend.app.services.prompts.service import load_active_skills
+from backend.app.services.runs.executor import (
     encode_frame,
     execute_run,
     spawn_run_task,
 )
-from backend.app.services.run_log import tail_run
-from backend.app.services.usage_service import UsageService
+from backend.app.services.runs.log import tail_run
+from backend.app.services.usage.service import UsageService
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -242,8 +242,8 @@ async def stream_conversation(
 
     Starts a durable run and then *reads* it. The graph no longer runs inside
     this response's generator, so the reply survives a refresh; the frames this
-    returns are produced by ``services/run_executor.py`` and read back out of
-    ``services/run_log.py``. ``rejoin_run_stream`` below serves the same log, so
+    returns are produced by ``services/runs/executor.py`` and read back out of
+    ``services/runs/log.py``. ``rejoin_run_stream`` below serves the same log, so
     a client that reconnects mid-answer gets the frames it missed rather than a
     truncated reply that looks finished.
     """

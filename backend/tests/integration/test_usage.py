@@ -5,7 +5,7 @@ import pytest
 from backend.app.domain.usage.repository import UsageRepository
 from backend.app.domain.usage.schemas import EvaluationLogCreate, UsageLogCreate
 from backend.app.services.observability.cost_tracking import cost_tracking_service
-from backend.app.services.org_service import OrganizationService
+from backend.app.services.orgs.service import OrganizationService
 
 
 @pytest.mark.asyncio

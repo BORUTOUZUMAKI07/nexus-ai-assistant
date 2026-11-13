@@ -5,7 +5,7 @@ in the plan-service planner (JSON schema first, repair pass second, heuristic la
 import json
 
 import pytest
-from backend.app.services import plan_service as plan_module
+from backend.app.services.billing import plans as plan_module
 
 
 async def _fake_completion(sequence, captured=None):

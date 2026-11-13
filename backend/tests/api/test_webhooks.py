@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 from backend.app.core.config import settings
 from backend.app.domain.webhook.models import WebhookDelivery, WebhookEndpoint
-from backend.app.services.webhook_service import (
+from backend.app.services.webhooks.service import (
     WebhookService,
     retry_failed_deliveries,
 )
@@ -252,7 +252,7 @@ def test_delivery_revalidates_the_target_before_sending():
 
 
 def test_default_sender_posts_the_bytes_it_signed(monkeypatch):
-    import backend.app.services.webhook_service as ws_mod
+    import backend.app.services.webhooks.service as ws_mod
 
     captured = {}
 

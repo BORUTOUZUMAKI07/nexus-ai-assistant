@@ -9,7 +9,7 @@ from typing import Any
 import structlog
 from backend.app.domain.conversation.models import Message
 from backend.app.infrastructure.ai.litellm_client import ai_client
-from backend.app.services.prompt_compiler import load_prompt
+from backend.app.services.prompts.compiler import load_prompt
 
 logger = structlog.get_logger(__name__)
 

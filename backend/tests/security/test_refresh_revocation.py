@@ -31,7 +31,7 @@ from backend.app.core.security import (
 )
 from backend.app.domain.user.models import User
 from backend.app.domain.user.schemas import TokenResponse
-from backend.app.services.auth_service import AuthService
+from backend.app.services.auth.service import AuthService
 from backend.tests.fakes import FakeSession
 
 
@@ -108,7 +108,7 @@ def cache(monkeypatch):
     """Point AuthService at an in-memory cache for the duration of a test."""
     fake = MemoryCache()
     monkeypatch.setattr(
-        "backend.app.services.auth_service.get_cache_service", lambda: fake
+        "backend.app.services.auth.service.get_cache_service", lambda: fake
     )
     return fake
 
@@ -227,7 +227,7 @@ def test_revocation_marker_is_written_with_a_refresh_lifetime(cache):
 def test_family_revocation_can_be_disabled(cache, monkeypatch):
     """REFRESH_REVOKE_ON_REUSE=False refuses the replay but revokes nothing."""
     monkeypatch.setattr(
-        "backend.app.services.auth_service.settings.REFRESH_REVOKE_ON_REUSE", False
+        "backend.app.services.auth.service.settings.REFRESH_REVOKE_ON_REUSE", False
     )
     _fake, svc, user = _seeded_service()
     token = create_refresh_token(subject=user.id, family_id="fam-nocascade")
@@ -268,7 +268,7 @@ def test_family_check_fails_open_when_cache_is_unavailable(monkeypatch):
             raise ConnectionError("redis down")
 
     monkeypatch.setattr(
-        "backend.app.services.auth_service.get_cache_service", lambda: BrokenCache()
+        "backend.app.services.auth.service.get_cache_service", lambda: BrokenCache()
     )
     _fake, svc, user = _seeded_service()
 
@@ -340,7 +340,7 @@ def test_clearing_the_revocation_fails_open_when_cache_is_unavailable(monkeypatc
             raise ConnectionError("redis down")
 
     monkeypatch.setattr(
-        "backend.app.services.auth_service.get_cache_service",
+        "backend.app.services.auth.service.get_cache_service",
         lambda: BrokenDeleteCache(),
     )
     _fake, svc, user = _seeded_service()

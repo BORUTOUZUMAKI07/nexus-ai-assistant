@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
-import { AuthModal } from "@/components/AuthModal"
+import { AuthModal } from "@/features/auth/AuthModal"
 
 describe("AuthModal", () => {
   const onClose = vi.fn()

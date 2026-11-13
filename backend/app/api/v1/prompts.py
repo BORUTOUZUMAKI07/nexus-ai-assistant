@@ -10,7 +10,7 @@ from backend.app.domain.prompt.schemas import (
     SkillResponse,
 )
 from backend.app.domain.user.models import User
-from backend.app.services.prompt_service import PromptService
+from backend.app.services.prompts.service import PromptService
 from fastapi import APIRouter, Depends, status
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])

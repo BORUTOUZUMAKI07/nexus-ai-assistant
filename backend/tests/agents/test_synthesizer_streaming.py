@@ -49,7 +49,7 @@ def synth_env(monkeypatch):
     ``nodes.ai_client.completion``.
     """
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
     monkeypatch.setattr(

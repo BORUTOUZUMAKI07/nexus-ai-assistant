@@ -579,7 +579,7 @@ class Settings(BaseSettings):
         description="Queries shorter than this are never multi-hop.",
     )
 
-    # ── Typed decisions (services/decision.py) ─────────────────────────────────
+    # ── Typed decisions (services/confidence/decision.py) ─────────────────────────────────
     # A decision reads the model's real per-token scores over a closed set of
     # answers. It must never ask a chat model how sure it is: that returns a
     # number the model invented, and it is indistinguishable from a measured

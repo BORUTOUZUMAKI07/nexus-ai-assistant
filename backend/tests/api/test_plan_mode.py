@@ -16,12 +16,12 @@ from backend.app.domain.conversation.models import Conversation
 from backend.app.domain.plan.models import Plan
 from backend.app.domain.plan.schemas import PlanResponse
 from backend.app.main import app
-from backend.app.services.conversation_service import ConversationService
-from backend.app.services.plan_service import (
+from backend.app.services.billing.plans import (
     PlanService,
     _heuristic_plan,
     _parse_plan_json,
 )
+from backend.app.services.conversations.service import ConversationService
 from backend.tests.fakes import FakeSession
 from httpx import ASGITransport, AsyncClient
 

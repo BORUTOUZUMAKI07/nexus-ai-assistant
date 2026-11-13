@@ -14,7 +14,7 @@ runs **without** a model call at all.
 from __future__ import annotations
 
 import pytest
-from backend.app.services.context_compiler import ContextCompiler
+from backend.app.services.conversations.context import ContextCompiler
 
 
 def _msg(role: str, chars: int, token_marker: str = "x") -> dict:
@@ -31,7 +31,7 @@ def compiler():
 
 def _summary_calls(monkeypatch) -> list:
     """Record any summarisation call. The funnel must not need one to trim."""
-    from backend.app.services import context_compiler as module
+    from backend.app.services.conversations import context as module
 
     calls: list = []
 
@@ -125,7 +125,7 @@ async def test_synthesizer_trims_overflow_instead_of_buying_a_summary(monkeypatc
     This one drives the real node, so it fails if the funnel is bypassed.
     """
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     summarised: list = []
     sent: list = []

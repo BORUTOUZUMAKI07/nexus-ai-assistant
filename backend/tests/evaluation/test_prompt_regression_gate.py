@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.asyncio
 async def test_compiled_system_prompt_passes_golden_gate():
     from backend.app.services.evaluation.regression_service import prompt_regression_gate
-    from backend.app.services.prompt_compiler import prompt_compiler
+    from backend.app.services.prompts.compiler import prompt_compiler
 
     system_prompt = await prompt_compiler.compile_system_prompt_cached()
     report = await prompt_regression_gate.evaluate_prompt(system_prompt=system_prompt)

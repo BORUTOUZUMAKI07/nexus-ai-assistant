@@ -2,8 +2,8 @@
 Unit tests for Prompt Compiler and Attention Budget Context Compactor.
 """
 from backend.app.domain.prompt.models import Skill
-from backend.app.services.context_compiler import context_compiler
-from backend.app.services.prompt_compiler import prompt_compiler
+from backend.app.services.conversations.context import context_compiler
+from backend.app.services.prompts.compiler import prompt_compiler
 
 
 def test_prompt_compiler_ordering():

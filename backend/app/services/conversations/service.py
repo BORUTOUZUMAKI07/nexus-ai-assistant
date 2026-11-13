@@ -315,7 +315,7 @@ class ConversationService:
             variant = metadata.get("prompt_variant")
             if not variant or variant == "default" or feedback not in ("thumbs_up", "thumbs_down"):
                 return
-            from backend.app.services.bandit_service import bandit_service
+            from backend.app.services.confidence.bandit import bandit_service
 
             reward = 1.0 if feedback == "thumbs_up" else 0.0
             await bandit_service.record_reward(

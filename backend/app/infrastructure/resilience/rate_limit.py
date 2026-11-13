@@ -134,7 +134,7 @@ def org_scoped_key(scope: str, user_id: UUID, org_id: UUID | None) -> str:
 
 
 async def _resolve_org_id_for_user(session: AsyncSession, user_id: UUID) -> UUID | None:
-    from backend.app.services.org_service import OrganizationService
+    from backend.app.services.orgs.service import OrganizationService
 
     return await OrganizationService(session).resolve_org_id(user_id)
 

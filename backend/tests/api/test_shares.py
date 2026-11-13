@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from backend.app.domain.conversation.models import Conversation, Message
 from backend.app.domain.share.models import ConversationShare
-from backend.app.services.share_service import ShareService
+from backend.app.services.shares.service import ShareService
 from fakes import FakeSession
 
 

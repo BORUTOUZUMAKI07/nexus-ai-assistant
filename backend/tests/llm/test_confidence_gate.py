@@ -4,7 +4,7 @@ Unit tests for the calibrated confidence gate (composite score + decision).
 from dataclasses import dataclass
 
 from backend.app.core.config import settings
-from backend.app.services.confidence_service import ConfidenceService
+from backend.app.services.confidence.service import ConfidenceService
 
 # Default configured threshold used when samples are too few to calibrate.
 DEFAULT_THRESHOLD = settings.CONFIDENCE_THRESHOLD

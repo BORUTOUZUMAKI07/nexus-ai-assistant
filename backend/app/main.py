@@ -138,7 +138,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     #    "Error 400: redirect_uri_mismatch"), before this service sees anything,
     #    so this line is the only evidence the deployment can produce.
     try:
-        from backend.app.services.oauth_service import log_oauth_redirect_uris
+        from backend.app.services.auth.oauth import log_oauth_redirect_uris
 
         log_oauth_redirect_uris()
     except Exception as exc:
@@ -247,7 +247,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         #     an empty registry simply means no hooks are active).
         try:
             from backend.app.infrastructure.database.session import async_session_factory
-            from backend.app.services.hook_service import HookService
+            from backend.app.services.hooks.service import HookService
             async with async_session_factory() as session:
                 await HookService(session).reload_registry()
             logger.info("hook_registry_loaded_at_startup")

@@ -15,8 +15,8 @@ from backend.app.domain.org.models import Organization, OrganizationMember
 from backend.app.domain.share.models import ConversationShare
 from backend.app.domain.usage.models import UsageLog
 from backend.app.domain.user.models import APIKey, User, UserMemory, UserSettings
-from backend.app.services import account_service as account_module
-from backend.app.services.account_service import AccountService
+from backend.app.services.auth import account as account_module
+from backend.app.services.auth.account import AccountService
 from fakes import FakeSession
 
 

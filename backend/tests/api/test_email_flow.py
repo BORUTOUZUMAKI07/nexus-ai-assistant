@@ -11,8 +11,8 @@ import pytest
 from backend.app.core.exceptions import AuthenticationError
 from backend.app.core.security import create_access_token, get_password_hash, verify_password
 from backend.app.domain.user.models import User
-from backend.app.services import auth_service as auth_module
-from backend.app.services.auth_service import AuthService
+from backend.app.services.auth import service as auth_module
+from backend.app.services.auth.service import AuthService
 
 
 def _await(coro):

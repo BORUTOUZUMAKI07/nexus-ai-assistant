@@ -8,12 +8,12 @@ brace inside a quoted value made it fail -- and because the caller fails *open*,
 the loss was a silently-missed safety/tool/recency flag, never an error.
 
 These tests pin both halves of the fix: the defensive parser
-(:mod:`backend.app.services.structured_parse`) and its use at the ARQ site,
+(:mod:`backend.app.services.llm.structured_parse`) and its use at the ARQ site,
 including the ``bool("false") is True`` trap.
 """
 from __future__ import annotations
 
-from backend.app.services.structured_parse import (
+from backend.app.services.llm.structured_parse import (
     extract_json_array,
     extract_json_object,
     strip_code_fence,

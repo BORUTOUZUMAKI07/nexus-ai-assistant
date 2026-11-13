@@ -19,9 +19,9 @@ from backend.app.domain.conversation.models import Conversation
 from backend.app.domain.hook.models import HookPolicy
 from backend.app.domain.org.models import OrganizationMember
 from backend.app.main import app
-from backend.app.services.hook_service import HookService
-from backend.app.services.tool_service import ToolService
+from backend.app.services.hooks.service import HookService
 from backend.app.services.tools.hook_registry import hook_registry
+from backend.app.services.tools.service import ToolService
 from backend.app.services.tools.tool_gateway import tool_gateway
 from backend.tests.fakes import FakeSession
 from httpx import ASGITransport, AsyncClient

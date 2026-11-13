@@ -38,7 +38,7 @@ from backend.app.domain.conversation.models import (
 )
 from backend.app.domain.conversation.repository import ConversationRepository
 from backend.app.domain.tool.models import ToolCall
-from backend.app.services.conversation_service import ConversationService
+from backend.app.services.conversations.service import ConversationService
 from backend.tests.fakes import FakeSession
 
 

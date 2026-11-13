@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import AppErrorState from "@/components/AppErrorState";
+import AppErrorState from "@/components/shared/AppErrorState";
 
 /**
  * Workspace route error boundary — catches render errors inside /app while

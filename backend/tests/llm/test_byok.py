@@ -21,7 +21,7 @@ import pytest
 from backend.app.core.security import encrypt_api_key
 from backend.app.infrastructure.ai.litellm_client import LiteLLMService
 from backend.app.infrastructure.resilience.guards import CircuitBreaker, InFlightLimiter
-from backend.app.services.byok import (
+from backend.app.services.llm.byok import (
     bind_byok_keys,
     byok_keys,
     clear_byok_keys,

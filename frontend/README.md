@@ -76,9 +76,9 @@ under PowerShell.
 | `↑`/`↓`/`Tab`/`Enter` | chat input (slash menu open) | navigate/apply slash command |
 | `Enter` | chat input | send (Shift+Enter inserts a newline) |
 
-Verified against `src/components/CommandPalette.tsx:68`,
-`src/components/ArtifactCanvas.tsx:92,97,108`, and
-`src/components/ChatInput.tsx:117-137`. Nothing else is bound.
+Verified against `src/components/layout/CommandPalette.tsx:68`,
+`src/features/chat/ArtifactCanvas.tsx:92,97,108`, and
+`src/features/chat/ChatInput.tsx:117-137`. Nothing else is bound.
 
 ## Project structure (src)
 

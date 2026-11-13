@@ -90,7 +90,7 @@ class _NoCritic:
 
 async def test_synthesizer_returns_the_snapshot_so_the_checkpointer_persists_it(monkeypatch):
     from backend.app.agents.orchestrator import nodes
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     async def fake_completion(**kwargs):
         return "A perfectly ordinary answer."

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 import { render, screen, fireEvent } from "@/test/test-utils"
-import { ArtifactCanvas } from "@/components/ArtifactCanvas"
+import { ArtifactCanvas } from "@/features/chat/ArtifactCanvas"
 
 describe("ArtifactCanvas", () => {
   const persisted = {

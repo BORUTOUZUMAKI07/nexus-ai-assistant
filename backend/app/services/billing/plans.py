@@ -16,7 +16,7 @@ from backend.app.domain.conversation.repository import ConversationRepository
 from backend.app.domain.plan.models import Plan
 from backend.app.domain.plan.repository import PlanRepository
 from backend.app.infrastructure.ai.litellm_client import ai_client
-from backend.app.services.structured_parse import extract_json_object
+from backend.app.services.llm.structured_parse import extract_json_object
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)

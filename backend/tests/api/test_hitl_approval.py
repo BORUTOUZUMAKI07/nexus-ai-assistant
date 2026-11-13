@@ -162,7 +162,7 @@ def _coder_state(coder_output: dict) -> dict:
 
 async def _synthesize(monkeypatch, coder_output: dict) -> str:
     """Run the synthesizer and return the prompt it handed the model."""
-    from backend.app.services.confidence_service import confidence_service
+    from backend.app.services.confidence.service import confidence_service
 
     captured: dict = {}
 

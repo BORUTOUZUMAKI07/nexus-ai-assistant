@@ -8,8 +8,8 @@ from backend.app.core.config import settings
 from backend.app.core.logging import logger
 from backend.app.core.spend import charge_tokens, record_provider_usage
 from backend.app.infrastructure.resilience.guards import CircuitBreaker, InFlightLimiter
-from backend.app.services.byok import get_byok_key
-from backend.app.services.llm_text_cleanup import strip_model_artifacts
+from backend.app.services.llm.byok import get_byok_key
+from backend.app.services.llm.text_cleanup import strip_model_artifacts
 from litellm import Router, completion_cost
 
 # Configure litellm global settings
@@ -639,7 +639,7 @@ class LiteLLMService:
         ``logprobs`` asks the provider for per-token log-probabilities and, when
         the provider returns them, surfaces them under ``"logprobs"`` in the
         result. This exists for the typed-decision layer in
-        ``services/decision.py``, which needs the real score of each candidate
+        ``services/confidence/decision.py``, which needs the real score of each candidate
         answer rather than a number a chat model made up when asked how sure it
         was. It defaults off and is forwarded only when requested, so no
         existing call site changes behaviour, pays for it, or depends on a

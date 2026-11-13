@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { http, HttpResponse } from "msw"
 import { server } from "@/test/mocks/server"
-import { IntegrationsSettings } from "@/components/IntegrationsSettings"
+import { IntegrationsSettings } from "@/features/settings/IntegrationsSettings"
 
 const ORG = {
   id: "org-1",

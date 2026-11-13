@@ -277,7 +277,7 @@ async def _classify(user_text: str, answer: str) -> str:
         # and a silently dead classifier layer looks exactly like a classifier
         # that decided "no" every time. This is the html2text trap: an import
         # that never resolves, hidden by a broad except.
-        from backend.app.services.structured_output import structured_service
+        from backend.app.services.llm.structured_output import structured_service
 
         verdict = await structured_service.generate_structured(
             response_model=_ArtifactVerdict,

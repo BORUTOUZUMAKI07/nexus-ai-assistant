@@ -24,9 +24,9 @@ from backend.app.core.exceptions import AuthenticationError
 from backend.app.domain.user.models import User, UserSettings
 from backend.app.domain.user.repository import UserRepository
 from backend.app.domain.user.schemas import UserCreate, UserSettingsUpdate
-from backend.app.services import auth_service as auth_module
-from backend.app.services.auth_service import AuthService
-from backend.app.services.two_factor_service import TwoFactorService
+from backend.app.services.auth import service as auth_module
+from backend.app.services.auth.service import AuthService
+from backend.app.services.auth.two_factor import TwoFactorService
 from backend.tests.fakes import FakeSession
 from pydantic import ValidationError
 
@@ -276,7 +276,7 @@ def test_per_account_bucket_is_checked_so_ip_rotation_cannot_evade(monkeypatch):
 
 def test_provider_failure_reports_failed_channel_not_dev(monkeypatch):
     """A configured-but-broken provider must not masquerade as the dev sink."""
-    from backend.app.services import email_service as mod
+    from backend.app.services.notifications import email as mod
 
     monkeypatch.setattr(mod.settings, "RESEND_API_KEY", "")
     monkeypatch.setattr(mod.settings, "SMTP_USER", "user")
@@ -299,7 +299,7 @@ def test_provider_failure_reports_failed_channel_not_dev(monkeypatch):
 
 
 def test_no_provider_still_uses_the_dev_channel(monkeypatch):
-    from backend.app.services import email_service as mod
+    from backend.app.services.notifications import email as mod
 
     monkeypatch.setattr(mod.settings, "RESEND_API_KEY", "")
     monkeypatch.setattr(mod.settings, "SMTP_USER", "")
@@ -311,7 +311,7 @@ def test_no_provider_still_uses_the_dev_channel(monkeypatch):
 
 
 def test_resend_rejection_reports_failed_without_leaking_the_provider(monkeypatch):
-    from backend.app.services import email_service as mod
+    from backend.app.services.notifications import email as mod
 
     monkeypatch.setattr(mod.settings, "RESEND_API_KEY", "test-key")
 
@@ -394,7 +394,7 @@ def test_username_allowlist_accepts_ordinary_handles():
 
 
 def test_escape_html_neutralises_markup():
-    from backend.app.services.email_service import escape_html
+    from backend.app.services.notifications.email import escape_html
 
     assert escape_html("<img src=x onerror=alert(1)>") == (
         "&lt;img src=x onerror=alert(1)&gt;"

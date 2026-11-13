@@ -7,7 +7,7 @@ There is no regeneration script for this file, and there never was one — the
 capture was an ad-hoc script run once and not kept. (An earlier version of this
 header pointed at "internal documentation"; no such section exists in current docs.
 command, so the pointer was dangling.) Re-deriving the tree means instrumenting
-`services/run_executor.py`'s `astream_events` payloads again, which is the same
+`services/runs/executor.py`'s `astream_events` payloads again, which is the same
 mechanism LangSmith itself consumes.
 
 ## Read this first: this capture never reached LangSmith

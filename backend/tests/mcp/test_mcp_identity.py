@@ -103,7 +103,7 @@ async def test_create_artifact_binds_owner_to_the_caller(monkeypatch):
     monkeypatch.setattr(server, "_authenticated_user_id", lambda: caller)
 
     import backend.app.infrastructure.database.session as sess_mod
-    import backend.app.services.artifact_service as art_mod
+    import backend.app.services.artifacts.service as art_mod
 
     monkeypatch.setattr(art_mod, "ArtifactService", _RecordingArtifacts)
     monkeypatch.setattr(sess_mod, "async_session_factory", lambda: _Ctx(object()))
@@ -123,7 +123,7 @@ async def test_create_artifact_rejects_a_foreign_user_id(monkeypatch):
     monkeypatch.setattr(server, "_authenticated_user_id", lambda: caller)
 
     import backend.app.infrastructure.database.session as sess_mod
-    import backend.app.services.artifact_service as art_mod
+    import backend.app.services.artifacts.service as art_mod
 
     monkeypatch.setattr(art_mod, "ArtifactService", _RecordingArtifacts)
     monkeypatch.setattr(sess_mod, "async_session_factory", lambda: _Ctx(object()))
@@ -141,7 +141,7 @@ async def test_create_artifact_refuses_a_conversation_the_caller_does_not_own(mo
 
     import backend.app.domain.conversation.repository as conv_mod
     import backend.app.infrastructure.database.session as sess_mod
-    import backend.app.services.artifact_service as art_mod
+    import backend.app.services.artifacts.service as art_mod
 
     calls = {"create": 0}
 
@@ -169,7 +169,7 @@ async def test_create_artifact_refuses_the_shared_key_path(monkeypatch):
     monkeypatch.setattr(server, "_authenticated_user_id", lambda: None)
 
     import backend.app.infrastructure.database.session as sess_mod
-    import backend.app.services.artifact_service as art_mod
+    import backend.app.services.artifacts.service as art_mod
 
     monkeypatch.setattr(art_mod, "ArtifactService", _RecordingArtifacts)
     monkeypatch.setattr(sess_mod, "async_session_factory", lambda: _Ctx(object()))

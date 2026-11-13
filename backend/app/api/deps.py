@@ -110,7 +110,7 @@ async def get_current_org_id(
     Multi-tenant scoping: rate-limit keys fold this in for per-org ceilings
     and usage/cost telemetry is attributed to the org for per-org rollups.
     """
-    from backend.app.services.org_service import OrganizationService
+    from backend.app.services.orgs.service import OrganizationService
 
     return await OrganizationService(session).resolve_org_id(current_user.id)
 
@@ -180,14 +180,14 @@ def get_file_service(
     Inject a fully configured FileService with concrete infrastructure implementations.
     High-level routes depend on this service, not on raw infrastructure singletons.
     """
-    from backend.app.services.file_service import FileService
+    from backend.app.services.files.service import FileService
     from backend.app.services.rag.ingest import ingestion_service
     return FileService(storage=storage, ingestion=ingestion_service)
 
 
 def get_auth_service(session: AsyncSession = Depends(get_db)) -> "AuthService":
     """Inject AuthService with database session."""
-    from backend.app.services.auth_service import AuthService
+    from backend.app.services.auth.service import AuthService
     return AuthService(session)
 
 
@@ -199,62 +199,62 @@ def get_oauth_service(request: Request) -> "OAuthService":
     registered provider whose client id is unconfigured) instead of guessing
     at a path.
     """
-    from backend.app.services.oauth_service import OAuthService
+    from backend.app.services.auth.oauth import OAuthService
     provider = str(request.path_params.get("provider", ""))
     return OAuthService.for_provider(provider)
 
 
 def get_conversation_service(session: AsyncSession = Depends(get_db)) -> "ConversationService":
     """Inject ConversationService with database session."""
-    from backend.app.services.conversation_service import ConversationService
+    from backend.app.services.conversations.service import ConversationService
     return ConversationService(session)
 
 
 def get_user_settings_service(session: AsyncSession = Depends(get_db)) -> "UserSettingsService":
     """Inject UserSettingsService with database session."""
-    from backend.app.services.user_settings_service import UserSettingsService
+    from backend.app.services.settings.service import UserSettingsService
     return UserSettingsService(session)
 
 
 def get_tool_service(session: AsyncSession = Depends(get_db)) -> "ToolService":
     """Inject ToolService with database session."""
-    from backend.app.services.tool_service import ToolService
+    from backend.app.services.tools.service import ToolService
     return ToolService(session)
 
 
 def get_prompt_service(session: AsyncSession = Depends(get_db)) -> "PromptService":
     """Inject PromptService with database session."""
-    from backend.app.services.prompt_service import PromptService
+    from backend.app.services.prompts.service import PromptService
     return PromptService(session)
 
 
 def get_usage_service(session: AsyncSession = Depends(get_db)) -> "UsageService":
     """Inject UsageService with database session."""
-    from backend.app.services.usage_service import UsageService
+    from backend.app.services.usage.service import UsageService
     return UsageService(session)
 
 
 def get_account_service(session: AsyncSession = Depends(get_db)) -> "AccountService":
     """Inject AccountService (GDPR export/erasure) with database session."""
-    from backend.app.services.account_service import AccountService
+    from backend.app.services.auth.account import AccountService
     return AccountService(session)
 
 
 def get_org_service(session: AsyncSession = Depends(get_db)) -> "OrganizationService":
     """Inject OrganizationService with database session."""
-    from backend.app.services.org_service import OrganizationService
+    from backend.app.services.orgs.service import OrganizationService
     return OrganizationService(session)
 
 
 def get_webhook_service(session: AsyncSession = Depends(get_db)) -> "WebhookService":
     """Inject WebhookService with database session."""
-    from backend.app.services.webhook_service import WebhookService
+    from backend.app.services.webhooks.service import WebhookService
     return WebhookService(session)
 
 
 def get_share_service(session: AsyncSession = Depends(get_db)) -> "ShareService":
     """Inject ShareService with database session."""
-    from backend.app.services.share_service import ShareService
+    from backend.app.services.shares.service import ShareService
     return ShareService(session)
 
 
@@ -263,7 +263,7 @@ def get_rag_service() -> "RAGService":
     from backend.app.services.rag.citation import citation_service
     from backend.app.services.rag.reranking import reranker
     from backend.app.services.rag.retrieval import retrieval_service
-    from backend.app.services.rag_service import RAGService
+    from backend.app.services.rag.service import RAGService
     return RAGService(
         retriever=retrieval_service,
         reranker=reranker,
@@ -273,12 +273,12 @@ def get_rag_service() -> "RAGService":
 
 def get_plan_service(session: AsyncSession = Depends(get_db)) -> "PlanService":
     """Inject PlanService (plan-then-approve) with database session."""
-    from backend.app.services.plan_service import PlanService
+    from backend.app.services.billing.plans import PlanService
     return PlanService(session)
 
 
 def get_artifact_service(session: AsyncSession = Depends(get_db)) -> "ArtifactService":
     """Inject ArtifactService (persisted, versioned artifacts) with database session."""
-    from backend.app.services.artifact_service import ArtifactService
+    from backend.app.services.artifacts.service import ArtifactService
     return ArtifactService(session)
 

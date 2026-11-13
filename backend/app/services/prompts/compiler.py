@@ -47,7 +47,7 @@ class PromptCompiler:
         user_memories: list[UserMemory] | None = None,
         retrieved_context: str | None = None,
     ) -> str:
-        from backend.app.services.static_corpus import static_corpus_service
+        from backend.app.services.rag.static_corpus import static_corpus_service
 
         sections: list[str] = []
 
@@ -111,7 +111,7 @@ class PromptCompiler:
         is_static = not user_memories and not retrieved_context
         cache_key = ""
         if is_static:
-            from backend.app.services.static_corpus import static_corpus_service
+            from backend.app.services.rag.static_corpus import static_corpus_service
 
             fingerprint = {
                 "base": self.base_prompt,

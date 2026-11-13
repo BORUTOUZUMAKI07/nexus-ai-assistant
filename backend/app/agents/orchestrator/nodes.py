@@ -28,19 +28,19 @@ from backend.app.infrastructure.ai.litellm_client import (
     group_primary_model,
     resolve_answer_model,
 )
-from backend.app.services.confidence_action import apply_confidence_action
-from backend.app.services.context_compiler import context_compiler
-from backend.app.services.memory import long_term_memory
-from backend.app.services.memory_lifecycle import should_persist_memory
+from backend.app.services.confidence.action import apply_confidence_action
+from backend.app.services.conversations.context import context_compiler
+from backend.app.services.llm.structured_output import (
+    structured_service,  # noqa: F401  (tests monkeypatch nodes.structured_service)
+)
+from backend.app.services.llm.structured_parse import validate_object
+from backend.app.services.memory.lifecycle import should_persist_memory
+from backend.app.services.memory.long_term import long_term_memory
 from backend.app.services.rag.critique import (
     VERDICT_UNRELATED,
     retrieval_critique_service,
 )
-from backend.app.services.rag_service import rag_service
-from backend.app.services.structured_output import (
-    structured_service,  # noqa: F401  (tests monkeypatch nodes.structured_service)
-)
-from backend.app.services.structured_parse import validate_object
+from backend.app.services.rag.service import rag_service
 from backend.app.services.tools.evidence_gate import evidence_gate
 from backend.app.services.tools.tool_gateway import tool_gateway
 from langchain_core.messages import AIMessage, HumanMessage
@@ -1707,7 +1707,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     }
     try:
         from backend.app.domain.file.schemas import RAGCitation
-        from backend.app.services.confidence_service import confidence_service
+        from backend.app.services.confidence.service import confidence_service
 
         conf_citations = [
             RAGCitation(**c) if not isinstance(c, RAGCitation) else c

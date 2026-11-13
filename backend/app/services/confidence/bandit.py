@@ -25,7 +25,7 @@ import structlog
 from backend.app.core.config import settings
 from backend.app.domain.base_repository import BaseRepository
 from backend.app.domain.experiment.models import BanditReward
-from backend.app.services.experiments import experiment_service
+from backend.app.services.experiments.service import experiment_service
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 

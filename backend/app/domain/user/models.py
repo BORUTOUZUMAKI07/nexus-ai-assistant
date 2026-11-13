@@ -82,7 +82,7 @@ class UserMemory(SQLModel, table=True):
     # Lifecycle. `confidence` used to be a hardcoded 1.0 that was never written
     # again, so every memory was permanently maximally trusted. It is now the
     # *observed* confidence: seeded low on write, raised on recall, decayed
-    # toward CONFIDENCE_FLOOR when unused (see services/memory_lifecycle.py).
+    # toward CONFIDENCE_FLOOR when unused (see services/memory/lifecycle.py).
     confidence: float = Field(default=0.7)
     # mem0's id for the same fact, so the semantic index and this table can be
     # reconciled. Null for memories that only ever existed here.

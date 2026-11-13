@@ -5,7 +5,7 @@ import asyncio
 from uuid import uuid4
 
 from backend.app.domain.conversation.models import Conversation, Message
-from backend.app.services.conversation_service import ConversationService
+from backend.app.services.conversations.service import ConversationService
 
 
 class FakeSearchRepo:

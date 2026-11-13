@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/command";
 import { MODELS } from "@/lib/models";
 import { useTheme } from "@/lib/theme";
-import type { ConversationItem } from "@/components/Sidebar";
+import type { ConversationItem } from "@/components/layout/Sidebar";
 
 export type AppTab = "chat" | "files" | "projects" | "settings" | "usage" | "admin";
 

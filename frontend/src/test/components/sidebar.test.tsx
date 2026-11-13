@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen, fireEvent } from "@/test/test-utils"
-import { Sidebar, ConversationItem } from "@/components/Sidebar"
+import { Sidebar, ConversationItem } from "@/components/layout/Sidebar"
 
 const conversations: ConversationItem[] = [
   {

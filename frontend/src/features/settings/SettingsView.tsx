@@ -30,8 +30,8 @@ import {
   settingsKeys,
   mergeAPIKey,
 } from "@/lib/queries";
-import { AppearanceSettings } from "@/components/AppearanceSettings";
-import { IntegrationsSettings } from "@/components/IntegrationsSettings";
+import { AppearanceSettings } from "@/features/settings/AppearanceSettings";
+import { IntegrationsSettings } from "@/features/settings/IntegrationsSettings";
 import { AUTOMATIC_MODEL_TIERS, MODELS, canonicalModelId, modelDisplayName } from "@/lib/models";
 
 export const SettingsView: React.FC = () => {

@@ -7,7 +7,7 @@ from uuid import UUID
 from backend.app.core.security import encrypt_api_key, get_password_hash
 from backend.app.domain.base_repository import BaseRepository
 from backend.app.domain.user.models import APIKey, User, UserMemory, UserSettings
-from backend.app.services.memory_lifecycle import (
+from backend.app.services.memory.lifecycle import (
     CONFIDENCE_FLOOR,
     INITIAL_CONFIDENCE,
     apply_reinforcement,

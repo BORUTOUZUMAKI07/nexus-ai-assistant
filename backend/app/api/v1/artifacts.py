@@ -24,8 +24,8 @@ from backend.app.domain.artifact.schemas import (
     ArtifactVersionSnapshot,
 )
 from backend.app.domain.user.models import User
-from backend.app.services.artifact_service import ArtifactService
-from backend.app.services.conversation_service import ConversationService
+from backend.app.services.artifacts.service import ArtifactService
+from backend.app.services.conversations.service import ConversationService
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])

@@ -1,9 +1,9 @@
 # Nexus AI Assistant — Keyboard Shortcuts
 
 > Every entry below was verified against source at `1f43c89`
-> (`frontend/src/components/CommandPalette.tsx`,
-> `frontend/src/components/ArtifactCanvas.tsx`,
-> `frontend/src/components/ChatInput.tsx`). These are the **only** keyboard
+> (`frontend/src/components/layout/CommandPalette.tsx`,
+> `frontend/src/features/chat/ArtifactCanvas.tsx`,
+> `frontend/src/features/chat/ChatInput.tsx`). These are the **only** keyboard
 > shortcuts the app binds today.
 
 ## Chat input

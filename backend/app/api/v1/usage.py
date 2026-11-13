@@ -7,7 +7,7 @@ from uuid import UUID
 from backend.app.api.deps import get_current_user, get_usage_service
 from backend.app.domain.usage.schemas import EvaluationLogResponse, UsageSummaryResponse
 from backend.app.domain.user.models import User
-from backend.app.services.usage_service import UsageService
+from backend.app.services.usage.service import UsageService
 from fastapi import APIRouter, Depends, Query
 
 router = APIRouter(prefix="/usage", tags=["usage"])

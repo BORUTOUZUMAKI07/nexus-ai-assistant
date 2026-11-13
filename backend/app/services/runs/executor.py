@@ -3,7 +3,7 @@ Run executor — one agent run, from graph invocation to durable completion.
 
 Extracted from the SSE endpoint's async generator so that a run's lifetime is no
 longer the HTTP request's. The endpoint is now only a *reader*: it tails this
-run's frames out of the durable log (``services/run_log.py``) and formats them as
+run's frames out of the durable log (``services/runs/log.py``) and formats them as
 SSE. Everything that decides what a frame says lives here, so a rejoining client
 is served by the same code path that produced the original stream rather than a
 reconstruction of it.
@@ -47,15 +47,15 @@ from backend.app.domain.run.service import RunService
 from backend.app.domain.usage.schemas import UsageLogCreate
 from backend.app.infrastructure.ai.litellm_client import ai_client, resolve_provider
 from backend.app.infrastructure.database.session import async_session_factory
-from backend.app.services.byok import bind_byok_keys, load_user_byok_keys, reset_byok_keys
-from backend.app.services.conversation_service import ConversationService
+from backend.app.services.conversations.service import ConversationService
 from backend.app.services.evaluation.quality_service import quality_service
+from backend.app.services.llm.byok import bind_byok_keys, load_user_byok_keys, reset_byok_keys
+from backend.app.services.memory.semantic_cache import semantic_response_cache
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.tracing import trace_span
-from backend.app.services.run_events import citation_payloads, finished_run_payloads
-from backend.app.services.run_log import RunBroker, RunWriter, run_broker
-from backend.app.services.semantic_response_cache import semantic_response_cache
-from backend.app.services.usage_service import UsageService
+from backend.app.services.runs.events import citation_payloads, finished_run_payloads
+from backend.app.services.runs.log import RunBroker, RunWriter, run_broker
+from backend.app.services.usage.service import UsageService
 
 logger = structlog.get_logger(__name__)
 
@@ -609,7 +609,7 @@ async def _post_run_frames(graph: Any, config: dict[str, Any]) -> list[dict[str,
     """Frames describing a finished run: critic state, evidence, HITL pause, done.
 
     Read post-run from the checkpointer rather than streamed mid-run; see
-    ``services/run_events.py`` for why that lives outside the router.
+    ``services/runs/events.py`` for why that lives outside the router.
     """
     frames: list[dict[str, Any]] = []
     try:
@@ -788,7 +788,7 @@ async def _dispatch_message_completed(
         # Imported here, not at module scope: `run_executor` is imported by the
         # app's startup path and this keeps the webhook layer (and its HTTP
         # client) out of that import graph.
-        from backend.app.services.webhook_service import WebhookService
+        from backend.app.services.webhooks.service import WebhookService
 
         async with async_session_factory() as session:
             delivered = await WebhookService(session).dispatch_event(

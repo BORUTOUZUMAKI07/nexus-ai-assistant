@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
-import { ProjectsView } from "@/components/ProjectsView"
+import { ProjectsView } from "@/features/workspace/ProjectsView"
 
 /**
  * ProjectsView is the first consumer of the Projects API helpers in

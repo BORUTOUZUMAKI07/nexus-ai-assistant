@@ -128,7 +128,7 @@ delivers nothing; a typo is worse, because it also silences the root deltas.
 `graph.py:354-362` documents the decision at the compile call: this repo has
 **zero `get_store()` call sites**. Long-term memory is mem0
 (`services/memory.py`) mirrored into the `user_memories` table
-(`services/memory_lifecycle.py`) and read through `AgentState`. The dead
+(`services/memory/lifecycle.py`) and read through `AgentState`. The dead
 `store=` argument was removed (A1) precisely because an unread store is the
 same defect class as the discarded checkpointer.
 
@@ -183,7 +183,7 @@ with tests and without a beta dependency:
 |---|---|
 | Human-in-the-loop tool approval | `tool_gateway.py` + permission ladder + `config/permissions.yaml` |
 | PII detection / redaction | `guardrail_service.py` |
-| Summarization / context management | `services/context_compiler.py` |
+| Summarization / context management | `services/conversations/context.py` |
 | Sub-agents | `agents/subagents/` |
 | Long-term memory | mem0 + `user_memories` + `memory_lifecycle.py` |
 | Filesystem / tools | MCP server + `services/tools/` |

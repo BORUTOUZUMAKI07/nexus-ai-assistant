@@ -5,7 +5,7 @@ A ``Plan`` is the plan-then-approve contract: the assistant drafts a plan
 (title + summary + ordered steps) against a conversation, the owner approves
 or rejects it, and only an approved plan is used to steer tool/agent execution.
 The model is intentionally small — the plan generation/approval use cases live
-in ``backend/app/services/plan_service.py``.
+in ``backend/app/services/billing/plans.py``.
 """
 import uuid
 from datetime import UTC, datetime
