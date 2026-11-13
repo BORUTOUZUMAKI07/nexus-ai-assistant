@@ -463,9 +463,65 @@ async def nexus_exception_handler(request: Request, exc: NexusException):
     )
 
 
+# Postgres errors that mean "the schema on this database is older than the code".
+#
+# Production never runs `create_all` (init_db returns early when
+# ENVIRONMENT=production), so the schema is whatever the last `alembic upgrade
+# head` produced. When it is behind the models, every query touching the missing
+# column fails -- and the generic handler below turned that into "An unexpected
+# internal server error occurred": three endpoints down, the operator told to
+# contact support, and no way to tell drift from a code bug without the logs.
+_SCHEMA_ERROR_PATTERNS = (
+    "does not exist",              # missing column / relation
+    "UndefinedColumnError",
+    "UndefinedTableError",
+)
+
+
+def describe_schema_drift(exc: BaseException) -> str | None:
+    """Return the offending Postgres detail when ``exc`` is schema drift.
+
+    Only the SQLAlchemy wrapper is unwrapped, and only one line of the driver
+    message is returned: it names a column or relation, never a value, so it is
+    safe to show and enough to act on. Anything else returns None, leaving
+    unrelated 500s with their generic body.
+    """
+    try:
+        from sqlalchemy.exc import ProgrammingError
+    except Exception:  # pragma: no cover - SQLAlchemy is a hard dependency
+        return None
+    if not isinstance(exc, ProgrammingError):
+        return None
+    message = str(getattr(exc, "orig", None) or exc)
+    if not any(pattern in message for pattern in _SCHEMA_ERROR_PATTERNS):
+        return None
+    return message.splitlines()[0].strip()[:300]
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Catches any unhandled unexpected runtime crashes to prevent raw stack traces leaking."""
+    drift = describe_schema_drift(exc)
+    if drift is not None:
+        logger.error(
+            "database_schema_out_of_date",
+            path=request.url.path,
+            detail=drift,
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "type": "https://nexus-assistant.ai/errors/database-schema-out-of-date",
+                "title": "DATABASE_SCHEMA_OUT_OF_DATE",
+                "status": 503,
+                "detail": (
+                    "The database schema is behind this build of the application: "
+                    f"{drift}. Run `alembic upgrade head` against this database."
+                ),
+            },
+        )
+
     logger.error(
         "unhandled_internal_server_error",
         path=request.url.path,
