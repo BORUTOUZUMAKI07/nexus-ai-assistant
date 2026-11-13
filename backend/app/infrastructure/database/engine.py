@@ -87,6 +87,15 @@ async def init_db() -> None:
     """
     if settings.ENVIRONMENT == "production":
         logger.info("database_schema_managed_by_migrations")
+        # Migrations own the schema, but nothing guarantees they ran against
+        # this particular database: the deployed one was frozen at an older
+        # revision while the models kept gaining columns, so `messages.cost_usd`
+        # was missing and every message read failed. Adding the missing columns
+        # is additive only (see schema_sync) and issues no DDL when the schema
+        # is current.
+        from app.infrastructure.database.schema_sync import reconcile_missing_columns
+
+        await reconcile_missing_columns(engine)
         return
     try:
         async with engine.begin() as conn:

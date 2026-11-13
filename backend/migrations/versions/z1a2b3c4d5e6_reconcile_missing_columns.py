@@ -47,13 +47,17 @@ def _import_all_models() -> None:
     revision a silent no-op -- the exact failure mode it exists to prevent.
     """
     import importlib
-    import pkgutil
+    from pathlib import Path
 
     import backend.app.domain as domain_pkg
 
-    for module in pkgutil.iter_modules(domain_pkg.__path__):
+    # Filesystem walk, not `pkgutil.iter_modules`: the domain packages are
+    # implicit namespace packages, so iter_modules does not list them.
+    for entry in sorted(Path(domain_pkg.__path__[0]).iterdir()):
+        if not entry.is_dir() or not (entry / "models.py").exists():
+            continue
         try:
-            importlib.import_module(f"backend.app.domain.{module.name}.models")
+            importlib.import_module(f"backend.app.domain.{entry.name}.models")
         except ModuleNotFoundError:
             # A domain package without a models module (e.g. a pure schema
             # package) simply contributes no tables.
