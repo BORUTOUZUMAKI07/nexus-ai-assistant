@@ -915,6 +915,39 @@ describe("auth cookie lifetimes follow the tokens they carry", () => {
     expect(maxAgeOf(modRes, REFRESH_COOKIE)).toBe(2592000)
   })
 
+  it("does not echo the backend's body framing on login", async () => {
+    // The deployed app hung on every sign-in: this route forwarded the
+    // backend's `Content-Length: 51` and `Content-Encoding: br` while writing
+    // an 11-byte uncompressed body, so the browser waited for 40 bytes that
+    // could never be sent. Nothing in the suite looked at response framing.
+    const upstream = new Response(JSON.stringify({ detail: "Incorrect email or password" }), {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": "51",
+        "Content-Encoding": "br",
+      },
+    })
+    backendFetch.mockImplementation(async () => upstream)
+    const mod = await loadRoute(routeFile("/api/auth/login")!)
+
+    const res = await mod.POST!(
+      nextRequest("/api/auth/login"),
+      routeContext("/api/auth/login"),
+    )
+
+    expect(res.status).toBe(401)
+    // A copied encoding would make the browser decode a body that was never
+    // compressed, and a copied length would make it wait for missing bytes.
+    expect(res.headers.get("content-encoding")).toBeNull()
+    const body = await res.text()
+    expect(body).toContain("Incorrect email or password")
+    const declared = res.headers.get("content-length")
+    if (declared) {
+      expect(Number(declared)).toBe(new TextEncoder().encode(body).length)
+    }
+  })
+
   it("refresh re-bakes both cookies from the rotated tokens' own lifetimes", async () => {
     const mod = await loadRoute(routeFile("/api/auth/refresh")!)
     backendFetch.mockImplementation(async () =>
