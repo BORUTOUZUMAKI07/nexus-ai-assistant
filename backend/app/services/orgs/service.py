@@ -229,9 +229,24 @@ class OrganizationService:
             return False
         if org.owner_id != actor_id:
             raise PermissionError("Only the owner can delete an organization.")
+        from backend.app.domain.usage.models import CostLog, UsageLog
+        from sqlalchemy import update as sq_update
         from sqlmodel import delete as sq_delete
+
         await self.session.exec(sq_delete(OrganizationMember).where(OrganizationMember.organization_id == org_id))
         await self.session.exec(sq_delete(OrganizationInvite).where(OrganizationInvite.organization_id == org_id))
+        # `usage_logs.org_id` and `cost_logs.org_id` are foreign keys into
+        # organizations with no ON DELETE action, so an organization that had
+        # ever recorded usage could not be deleted at all -- it answered 500 on
+        # every attempt. Detach the history rather than deleting it: those rows
+        # are the billing record of the user who spent the tokens, and the
+        # organization is only their attribution.
+        await self.session.exec(
+            sq_update(UsageLog).where(UsageLog.org_id == org_id).values(org_id=None)
+        )
+        await self.session.exec(
+            sq_update(CostLog).where(CostLog.org_id == org_id).values(org_id=None)
+        )
         await self.session.delete(org)
         await self.session.commit()
         return True

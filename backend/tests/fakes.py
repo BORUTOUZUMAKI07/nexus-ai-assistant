@@ -17,7 +17,7 @@ from typing import Any
 from backend.app.domain.run.models import AgentRun
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.sql import operators as _saop
-from sqlalchemy.sql.dml import Delete
+from sqlalchemy.sql.dml import Delete, Update
 from sqlalchemy.sql.elements import BinaryExpression, BindParameter, BooleanClauseList
 from sqlalchemy.sql.selectable import ScalarSelect, Select
 
@@ -164,6 +164,7 @@ class FakeSession:
         self.added: list[Any] = []
         self.deleted: list[Any] = []
         self.delete_statements: list[Any] = []
+        self.update_statements: list[Any] = []
         self.select_hooks: dict[type, Any] = {}
         self.commits = 0
 
@@ -183,6 +184,35 @@ class FakeSession:
         return self.gets.get((entity, ident))
 
     async def exec(self, statement, *args, **kwargs):
+        if isinstance(statement, Update):
+            # Mirrors the DELETE branch: only the statement's own table is
+            # touched, and only rows matching its criteria. Without this, an
+            # UPDATE fell through to the SELECT path and raised on
+            # `column_descriptions`, which hid the service behaviour under test.
+            self.update_statements.append(statement)
+            try:
+                target_name = statement.table.name
+            except Exception:
+                target_name = None
+            criteria = list(getattr(statement, "_where_criteria", ()))
+            # Values arrive as BindParameters, not literals, so a
+            # `.values(org_id=None)` would otherwise store the parameter object.
+            values = {
+                getattr(col, "key", None) or getattr(col, "name", None): (
+                    val.value if isinstance(val, BindParameter) else val
+                )
+                for col, val in dict(getattr(statement, "_values", {})).items()
+            }
+            if target_name is not None:
+                for entity, rows in list(self.rows.items()):
+                    if getattr(entity, "__tablename__", None) != target_name:
+                        continue
+                    for row in rows:
+                        if all(_eval_clause(c, row, self.rows) for c in criteria):
+                            for key, val in values.items():
+                                if key:
+                                    setattr(row, key, val)
+            return FakeResult([])
         if isinstance(statement, Delete):
             self.delete_statements.append(statement)
             try:

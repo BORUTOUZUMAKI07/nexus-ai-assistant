@@ -206,3 +206,27 @@ def test_delete_org_is_owner_only():
     assert fake.rows.get(Organization, []) == []
     assert fake.rows.get(OrganizationMember, []) == []
     assert fake.rows.get(OrganizationInvite, []) == []
+
+
+def test_delete_org_detaches_usage_instead_of_failing():
+    """An organization that recorded usage must still be deletable.
+
+    `usage_logs.org_id` and `cost_logs.org_id` point at organizations with no
+    ON DELETE action, so the delete raised a foreign-key error and the endpoint
+    answered 500 — a live organization could not be removed once it had served a
+    single request. The history is detached rather than deleted: it is the
+    billing record of the user who spent the tokens.
+    """
+    from backend.app.domain.usage.models import CostLog, UsageLog
+
+    owner = uuid4()
+    fake = FakeSession()
+    org = _seed_org(fake, owner)
+    fake.rows[UsageLog] = [UsageLog(user_id=owner, org_id=org.id, model="gpt-4o")]
+    fake.rows[CostLog] = [
+        CostLog(user_id=owner, org_id=org.id, provider="groq", model="gpt-4o", billing_period="2026-11")
+    ]
+
+    assert _await(OrganizationService(fake).delete(org.id, owner)) is True
+    assert all(row.org_id is None for row in fake.rows[UsageLog])
+    assert all(row.org_id is None for row in fake.rows[CostLog])
