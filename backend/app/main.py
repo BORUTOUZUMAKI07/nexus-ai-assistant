@@ -547,7 +547,13 @@ async def health_check():
     # `schema_reconcile` reports what the start-up repair did, so an operator can
     # tell "the deploy never ran it" from "it ran and failed" without the logs.
     from app.infrastructure.database.schema_sync import RECONCILE_STATE
-    from app.services.runs.executor import PERSIST_STATE
+
+    # Imported under `backend.app.*`, the namespace the API and this process's
+    # own routers use, NOT the short `app.*` alias. Those are two module objects
+    # for one file: an `app.services.runs.executor` import here created a second
+    # `PERSIST_STATE` that nothing ever writes, so the probe reported `not_run`
+    # while runs were executing and their writes failing.
+    from backend.app.services.runs.executor import PERSIST_STATE
 
     return {
         "status": "healthy",
