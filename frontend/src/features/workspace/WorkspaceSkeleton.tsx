@@ -1,10 +1,22 @@
 const SKELETON_ROWS = [1, 2, 3, 4, 5, 6];
 
 /**
- * Workspace loading state — a skeleton of the app shell (sidebar + chat
- * composer) so navigation feels instant while the client bundle hydrates.
+ * Workspace skeleton — the app shell (sidebar + chat composer) while the client
+ * bundle hydrates.
+ *
+ * This used to be `app/app/loading.tsx`, the route-level loading boundary. In
+ * production that arrangement never resolved: the request came back as a
+ * prerendered shell with the real UI in a `hidden` div waiting for Next's
+ * inline reveal script, the reveal never ran, and a hard load of /app sat on
+ * the skeleton forever (in-app navigation worked, because it takes the RSC
+ * path). Nothing in the console explained it.
+ *
+ * Rendering the skeleton from the page itself removes that dependency: the page
+ * hydrates normally and swaps the skeleton for the workspace on mount, which is
+ * also what makes the skeleton honest — it is shown while the app mounts, not
+ * while a stream is open.
  */
-export default function Loading() {
+export default function WorkspaceSkeleton() {
   return (
     <div
       className="flex h-screen animate-pulse"

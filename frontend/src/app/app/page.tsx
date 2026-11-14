@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { Sidebar } from "@/components/layout/Sidebar";
+import WorkspaceSkeleton from "@/features/workspace/WorkspaceSkeleton";
 import {
   ChatArea,
   MessageItem,
@@ -1026,6 +1027,12 @@ function AppPageInner() {
       console.warn("Feedback submission failed:", err);
     }
   };
+
+  // The skeleton is part of the page rather than the route's `loading.tsx`:
+  // a route-level boundary made Next serve a prerendered shell whose real UI
+  // waited on an inline reveal that never ran on a hard load of /app. Rendering
+  // it here means the shell hydrates like any other page.
+  if (!mounted) return <WorkspaceSkeleton />;
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-main)] text-[var(--text-primary)]">
