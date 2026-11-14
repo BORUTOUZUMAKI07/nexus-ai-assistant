@@ -551,8 +551,16 @@ async def health_check():
     # for one file: an `app.services.runs.executor` import here created a second
     # `PERSIST_STATE` that nothing ever writes, so the probe reported `not_run`
     # while runs were executing and their writes failing.
+    from backend.app.core.exceptions import EmbeddingsUnavailableError
     from backend.app.services.rag.retrieval import available_ram_mb as _rag_ram
     from backend.app.services.rag.retrieval import cgroup_limit_mb as _rag_limit
+    from backend.app.services.rag.retrieval import ensure_embedding_backend_available
+
+    def _rag_provider() -> str:
+        try:
+            return ensure_embedding_backend_available()
+        except EmbeddingsUnavailableError:
+            return "unavailable"
     from backend.app.services.runs.executor import PERSIST_STATE
 
     from app.infrastructure.database.schema_sync import RECONCILE_STATE
@@ -577,6 +585,9 @@ async def health_check():
         # The instance's real ceiling (cgroup), not the host's memory, which is
         # what /proc/meminfo reports inside an unprivileged container.
         "memory_limit_mb": round(rag_limit) if (rag_limit := _rag_limit()) is not None else None,
+        # Which embedding backend this instance would use, resolved without
+        # loading anything: "unavailable" means file indexing will answer 503.
+        "embeddings_provider": _rag_provider(),
     }
 
 

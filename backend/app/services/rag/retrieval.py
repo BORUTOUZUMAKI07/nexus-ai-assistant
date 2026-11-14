@@ -48,6 +48,10 @@ _CGROUP_V2_MAX = "/sys/fs/cgroup/memory.max"
 _CGROUP_V2_USAGE = "/sys/fs/cgroup/memory.current"
 _CGROUP_V1_MAX = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
 _CGROUP_V1_USAGE = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
+# Page cache is counted in the usage figure but the kernel reclaims it on
+# demand, so subtracting it is what makes "free" mean "free after reclaim".
+_CGROUP_V2_STAT = "/sys/fs/cgroup/memory.stat"
+_CGROUP_V1_STAT = "/sys/fs/cgroup/memory/memory.stat"
 
 
 def _read_text_file(path: str) -> str:
@@ -56,11 +60,23 @@ def _read_text_file(path: str) -> str:
         return fh.read().strip()
 
 
-def _cgroup_limits() -> tuple[float, float] | None:
-    """(limit_bytes, usage_bytes) for this container, or None when unbounded."""
-    for max_path, usage_path in (
-        (_CGROUP_V2_MAX, _CGROUP_V2_USAGE),
-        (_CGROUP_V1_MAX, _CGROUP_V1_USAGE),
+def _parse_reclaimable_cache(stat_text: str) -> float:
+    """Inactive file cache in bytes, from a cgroup memory.stat body."""
+    for line in stat_text.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in {"inactive_file", "total_inactive_file"}:
+            try:
+                return float(parts[1])
+            except ValueError:
+                return 0.0
+    return 0.0
+
+
+def _cgroup_limits() -> tuple[float, float, float] | None:
+    """(limit, usage, reclaimable_cache) in bytes, or None when unbounded."""
+    for max_path, usage_path, stat_path in (
+        (_CGROUP_V2_MAX, _CGROUP_V2_USAGE, _CGROUP_V2_STAT),
+        (_CGROUP_V1_MAX, _CGROUP_V1_USAGE, _CGROUP_V1_STAT),
     ):
         try:
             raw_limit = _read_text_file(max_path)
@@ -77,7 +93,11 @@ def _cgroup_limits() -> tuple[float, float] | None:
             continue
         if limit <= 0 or limit > 1e18:
             continue
-        return limit, usage
+        try:
+            reclaimable = _parse_reclaimable_cache(_read_text_file(stat_path))
+        except OSError:
+            reclaimable = 0.0
+        return limit, usage, reclaimable
     return None
 
 
@@ -104,8 +124,11 @@ def _cgroup_free_mb() -> float | None:
     limits = _cgroup_limits()
     if limits is None:
         return None
-    limit, usage = limits
-    return max(0.0, (limit - usage) / _MB)
+    limit, usage, reclaimable = limits
+    # Page cache counts toward `usage` but is evictable, so leaving it in the
+    # figure reports 0MB free on a container that is merely caching I/O.
+    usable = max(0.0, usage - reclaimable)
+    return max(0.0, (limit - usable) / _MB)
 
 
 def _available_ram_mb() -> float | None:

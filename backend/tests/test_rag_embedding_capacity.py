@@ -204,3 +204,33 @@ def test_cgroup_v1_sentinel_is_not_treated_as_a_limit(
 
     assert retrieval.available_ram_mb() == pytest.approx(2000.0, abs=1.0)
     assert retrieval.cgroup_limit_mb() is None
+
+
+def test_page_cache_is_not_counted_as_used_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A container that is caching I/O must not look full.
+
+    `memory.current` includes page cache, which the kernel evicts on demand.
+    Reading it as "used" reported 0MB free on the live deployment while it
+    served requests normally, which would have made the guard refuse a backend
+    that fits.
+    """
+    mb = 1024 * 1024
+    monkeypatch.setattr(
+        retrieval,
+        "_read_text_file",
+        _fake_reader(
+            {
+                "/proc/meminfo": "MemAvailable: 11412000 kB\n",
+                "/sys/fs/cgroup/memory.max": str(512 * mb),
+                "/sys/fs/cgroup/memory.current": str(500 * mb),
+                "/sys/fs/cgroup/memory.stat": (
+                    f"anon {300 * mb}\nfile {190 * mb}\ninactive_file {150 * mb}\n"
+                ),
+            }
+        ),
+    )
+
+    # 512 total - (500 used - 150 evictable) = 162MB genuinely free.
+    assert retrieval.available_ram_mb() == pytest.approx(162.0, abs=1.0)
