@@ -308,6 +308,12 @@ class ConversationRepository(BaseRepository[Conversation]):
         model: str | None = None,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        # The run's own cost for this reply. `_persist_reply` passes it (it is
+        # the number written to the usage row) and this signature did not accept
+        # it, so EVERY streamed reply raised TypeError here and was rolled back:
+        # the user turn stayed, the answer and its usage row vanished on reload.
+        # The column has existed on `Message` the whole time.
+        cost_usd: float = 0.0,
         citations: list[dict] | None = None,
         tool_calls: list[dict] | None = None,
         metadata_json: dict | None = None,
@@ -322,6 +328,7 @@ class ConversationRepository(BaseRepository[Conversation]):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
+            cost_usd=cost_usd,
             citations=citations or [],
             tool_calls=tool_calls or [],
             metadata_json=metadata_json or {},
