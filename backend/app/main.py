@@ -552,6 +552,7 @@ async def health_check():
     # `PERSIST_STATE` that nothing ever writes, so the probe reported `not_run`
     # while runs were executing and their writes failing.
     from backend.app.services.rag.retrieval import available_ram_mb as _rag_ram
+    from backend.app.services.rag.retrieval import cgroup_limit_mb as _rag_limit
     from backend.app.services.runs.executor import PERSIST_STATE
 
     from app.infrastructure.database.schema_sync import RECONCILE_STATE
@@ -573,6 +574,9 @@ async def health_check():
         # below FASTEMBED_MIN_FREE_RAM_MB, so this is the number that explains
         # why file indexing is or is not available on this instance.
         "memory_free_mb": round(rag_ram) if (rag_ram := _rag_ram()) is not None else None,
+        # The instance's real ceiling (cgroup), not the host's memory, which is
+        # what /proc/meminfo reports inside an unprivileged container.
+        "memory_limit_mb": round(rag_limit) if (rag_limit := _rag_limit()) is not None else None,
     }
 
 

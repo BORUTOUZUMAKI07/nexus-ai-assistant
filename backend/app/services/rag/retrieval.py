@@ -39,26 +39,99 @@ def _embed_texts_sync(model: Any, texts: list[str]) -> list[list[float]]:
     return [e.tolist() for e in embeddings]
 
 
-def _available_ram_mb() -> float | None:
-    """Free RAM in MB, or None when the host cannot report it.
+_MB = 1024.0 * 1024.0
 
-    psutil is optional here: /proc/meminfo is the reliable source inside the
-    Linux container this runs in, and psutil only matters on a laptop.
-    """
-    try:
-        import psutil  # type: ignore[import-not-found]
+# Cgroup memory files, in the order they are tried. v2 unified hierarchy first:
+# a modern container has no meaningful v1 controller, and a v1 file often
+# survives with the sentinel "no limit" value.
+_CGROUP_V2_MAX = "/sys/fs/cgroup/memory.max"
+_CGROUP_V2_USAGE = "/sys/fs/cgroup/memory.current"
+_CGROUP_V1_MAX = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+_CGROUP_V1_USAGE = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
 
-        return float(psutil.virtual_memory().available) / (1024 * 1024)
-    except Exception:
-        pass
-    try:
-        with open("/proc/meminfo", encoding="utf-8") as fh:
-            for line in fh:
-                if line.startswith("MemAvailable:"):
-                    return float(line.split()[1]) / 1024.0
-    except OSError:
-        return None
+
+def _read_text_file(path: str) -> str:
+    """Single place file reads go through, so tests can supply a fake hierarchy."""
+    with open(path, encoding="utf-8") as fh:
+        return fh.read().strip()
+
+
+def _cgroup_limits() -> tuple[float, float] | None:
+    """(limit_bytes, usage_bytes) for this container, or None when unbounded."""
+    for max_path, usage_path in (
+        (_CGROUP_V2_MAX, _CGROUP_V2_USAGE),
+        (_CGROUP_V1_MAX, _CGROUP_V1_USAGE),
+    ):
+        try:
+            raw_limit = _read_text_file(max_path)
+            raw_usage = _read_text_file(usage_path)
+        except OSError:
+            continue
+        # v2 writes "max" for an unlimited cgroup; v1 writes a huge sentinel.
+        if raw_limit in {"max", ""}:
+            continue
+        try:
+            limit = float(raw_limit)
+            usage = float(raw_usage)
+        except ValueError:
+            continue
+        if limit <= 0 or limit > 1e18:
+            continue
+        return limit, usage
     return None
+
+
+def cgroup_limit_mb() -> float | None:
+    """The instance's memory ceiling in MB, or None when the host is unbounded.
+
+    Reported by /health so an operator can see the actual instance size instead
+    of inferring it: the host-level free-RAM figure is misleading in a
+    container, and was the reason a 512MB box looked like it had 11GB.
+    """
+    limits = _cgroup_limits()
+    return limits[0] / _MB if limits else None
+
+
+def _cgroup_free_mb() -> float | None:
+    """Free RAM left in this container's cgroup, or None when unbounded.
+
+    `/proc/meminfo` reports the *host's* memory inside a container unless the
+    runtime uses lxcfs, and this deployment's does not: a 512MB instance
+    reported 11.4GB free. Trusting that number would have let the local
+    embedding model load exactly where it cannot fit -- the guard would have
+    passed at the moment it was needed most. The cgroup is the real ceiling.
+    """
+    limits = _cgroup_limits()
+    if limits is None:
+        return None
+    limit, usage = limits
+    return max(0.0, (limit - usage) / _MB)
+
+
+def _available_ram_mb() -> float | None:
+    """Memory this process can actually use, in MB; None when unknowable.
+
+    The answer is the smaller of the host's free memory and the cgroup's
+    remaining allowance, because a container can be capped far below its host.
+    psutil is deliberately not used: it reads the same /proc/meminfo and
+    therefore reports the host too, so it would add a dependency without
+    changing the (wrong) answer.
+    """
+    host: float | None = None
+    try:
+        for line in _read_text_file("/proc/meminfo").splitlines():
+            if line.startswith("MemAvailable:"):
+                host = float(line.split()[1]) / 1024.0
+                break
+    except (OSError, ValueError, IndexError):
+        host = None
+
+    cgroup = _cgroup_free_mb()
+    if host is None:
+        return cgroup
+    if cgroup is None:
+        return host
+    return min(host, cgroup)
 
 
 def available_ram_mb() -> float | None:

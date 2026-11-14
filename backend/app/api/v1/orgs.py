@@ -109,8 +109,10 @@ async def invite_member(
         "status": invite.status,
         "expires_at": invite.expires_at.isoformat() if invite.expires_at else None,
     }
+    # APP_PUBLIC_URL may carry a trailing slash; joining naively produced
+    # "...vercel.app//invite?token=..." in the live accept link.
     result["dev_accept_url"] = (
-        f"{settings.APP_PUBLIC_URL}/invite?token={invite.token}"
+        f"{settings.APP_PUBLIC_URL.rstrip('/')}/invite?token={invite.token}"
     )
     return result
 
