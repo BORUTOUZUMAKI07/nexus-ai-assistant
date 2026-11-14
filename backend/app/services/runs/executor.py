@@ -535,7 +535,14 @@ async def iter_graph_frames(
             # both puts the answer on the wire twice.
             node_meta = event.get("metadata") or {}
             if node_meta.get("langgraph_node") == "synthesizer":
-                return
+                # `continue`, not `return`: this is inside the event loop of an
+                # async generator, so returning here ended the whole frame
+                # stream at the synthesizer's first raw token. The run then
+                # finished with an empty `emitted_text`, `_persist_reply` was
+                # skipped, and the turn was never stored — the answer appeared
+                # on screen and vanished on reload, with usage at zero. Skipping
+                # the chunk is the documented intent; ending the stream was not.
+                continue
             chunk = event.get("data", {}).get("chunk")
             if chunk and hasattr(chunk, "content") and chunk.content:
                 _streamed_tokens = True
