@@ -543,9 +543,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 @app.get("/health", tags=["system"])
 async def health_check():
     """Liveness probe: confirms the ASGI process is responding."""
+    # `schema_reconcile` reports what the start-up repair did, so an operator can
+    # tell "the deploy never ran it" from "it ran and failed" without the logs.
+    from app.infrastructure.database.schema_sync import RECONCILE_STATE
+
     return {
         "status": "healthy",
         "service": "Nexus AI Assistant",
+        "schema_reconcile": RECONCILE_STATE,
     }
 
 

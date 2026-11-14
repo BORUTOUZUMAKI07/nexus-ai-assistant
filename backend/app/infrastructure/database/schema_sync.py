@@ -31,7 +31,16 @@ from sqlmodel import SQLModel
 
 from app.core.logging import logger
 
-__all__ = ["reconcile_missing_columns"]
+__all__ = ["RECONCILE_STATE", "reconcile_missing_columns"]
+
+#: Outcome of the most recent repair, surfaced on /health.
+#:
+#: There is no other way to see whether the deployed service actually ran the
+#: repair and, if it failed, why: Render's log view is not reachable from the
+#: build, and a silent no-op looks exactly like a success from the outside.
+#: Only a status word, the added column names and an exception name are kept --
+#: never a URL, a value or a credential.
+RECONCILE_STATE: dict[str, object] = {"status": "not_run", "added": [], "error": None}
 
 
 def _import_all_models() -> None:
@@ -98,7 +107,15 @@ async def reconcile_missing_columns(engine: AsyncEngine) -> list[str]:
         logger.error(
             "database_schema_reconcile_failed", error_type=type(exc).__name__
         )
+        RECONCILE_STATE["status"] = "failed"
+        RECONCILE_STATE["error"] = (
+            f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
+        )
         return []
+
+    RECONCILE_STATE["status"] = "ok"
+    RECONCILE_STATE["added"] = added
+    RECONCILE_STATE["error"] = None
 
     if added:
         logger.warning(
