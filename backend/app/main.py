@@ -3,6 +3,7 @@ Main FastAPI Application Entrypoint for Nexus AI Assistant.
 Configures Lifespan, CORS, Middleware, FastMCP SSE Mount, and API v1 Routes.
 """
 import asyncio
+import os
 import sys
 import time
 from collections.abc import AsyncGenerator
@@ -557,6 +558,10 @@ async def health_check():
         # write is fail-open by design, so its outcome has to be observable here.
         "run_persist": PERSIST_STATE,
         "environment": settings.ENVIRONMENT,
+        # Render sets this for the running build. Without it there is no way
+        # to tell "the fix is not deployed" from "the fix did not work" when
+        # the only channel available is this probe.
+        "commit": (os.environ.get("RENDER_GIT_COMMIT") or "")[:7],
     }
 
 

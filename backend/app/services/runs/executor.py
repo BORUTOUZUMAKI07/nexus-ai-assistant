@@ -206,6 +206,9 @@ async def execute_run(
     latency_ms: float = 0
     message_id: UUID | None = None
     start_time = time.time()
+    # Distinguishable from `not_run`: a run that started and then ended
+    # without writing is a different failure from one that never ran.
+    PERSIST_STATE.update(status="running", error=None, run_id=str(run_id))
 
     # Contextvars are bound inside this task, not in the request. create_task
     # copies the request's context, so these labels cannot leak back to the
@@ -869,6 +872,12 @@ async def _persist_reply(
     that died before any model produced text.
     """
     if not emitted_text.strip():
+        # Nothing was accumulated from the stream, so there is no answer to
+        # store. Recorded rather than silent: this is the state that made a
+        # live defect look like "persistence was never called".
+        PERSIST_STATE.update(
+            status="skipped_empty_text", error=None, run_id=str(run_id)
+        )
         return None
     response_model = model or settings.DEFAULT_MODEL
     try:
