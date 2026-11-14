@@ -546,11 +546,16 @@ async def health_check():
     # `schema_reconcile` reports what the start-up repair did, so an operator can
     # tell "the deploy never ran it" from "it ran and failed" without the logs.
     from app.infrastructure.database.schema_sync import RECONCILE_STATE
+    from app.services.runs.executor import PERSIST_STATE
 
     return {
         "status": "healthy",
         "service": "Nexus AI Assistant",
         "schema_reconcile": RECONCILE_STATE,
+        # A reply that streams but never persists leaves the transcript empty on
+        # reload and usage at zero — a symptom that reads as a UI defect. The
+        # write is fail-open by design, so its outcome has to be observable here.
+        "run_persist": PERSIST_STATE,
         "environment": settings.ENVIRONMENT,
     }
 

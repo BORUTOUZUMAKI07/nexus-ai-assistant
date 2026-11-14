@@ -59,6 +59,21 @@ from backend.app.services.usage.service import UsageService
 
 logger = structlog.get_logger(__name__)
 
+# Outcome of the most recent reply-persistence write, reported on `/health`.
+#
+# `_persist_run` is deliberately fail-open — a reply that has already been
+# streamed to the user must not turn into a 500 — but it swallowed the reason
+# into a log line. On a host with no log access that made its worst failure
+# undiagnosable: every conversation reloaded empty, usage stayed at zero, and
+# nothing anywhere said why. This records the outcome (and one truncated driver
+# line, which names a column or constraint, never a value) so the health probe
+# can name it. Deliberately holds no user content.
+PERSIST_STATE: dict[str, object] = {
+    "status": "not_run",
+    "error": None,
+    "run_id": None,
+}
+
 # Tool output is echoed to the client and stored in the log; an unbounded result
 # would bloat every replay of the run.
 TOOL_OUTPUT_LIMIT = 2000
@@ -941,12 +956,21 @@ async def _persist_reply(
                 model=response_model,
                 content=emitted_text,
             )
+            PERSIST_STATE.update(status="ok", error=None, run_id=str(run_id))
             return assistant_msg.id
     except Exception as exc:
         logger.warning(
             "agentic_assistant_message_persist_failed",
             run_id=str(run_id),
             error=str(exc),
+        )
+        # Same reason as the success line above: this is the one failure whose
+        # symptom (an empty transcript) looks like a UI bug, so its cause has to
+        # be readable without log access.
+        PERSIST_STATE.update(
+            status="failed",
+            error=f"{type(exc).__name__}: {exc}".splitlines()[0][:300],
+            run_id=str(run_id),
         )
         return None
 

@@ -27,13 +27,21 @@ const BACKEND_URL =
  * takes 30-60s, and the client already retries with exponential backoff, so one
  * user action could otherwise pin up to six concurrent sockets per call.
  *
- * 30s sits above the documented cold-start window and below any reverse
- * proxy's own idle timeout, so the request fails fast and legibly instead of
- * being severed later with no useful error. The streaming chat route is
- * deliberately excluded: an answer legitimately outlives any fixed ceiling, so
- * it gets a separate, much larger budget (see `app/api/chat/route.ts`).
+ * The value is measured, not assumed. This comment used to claim 30s "sits
+ * above the documented cold-start window", but the deployed backend's cold
+ * start was measured at 37.6s on 2026-11-14 (and 93s on a first-ever boot),
+ * so every request for ~15 minutes after an idle period timed out and the
+ * whole app answered 503 -- the failure surfaced as "everything is broken",
+ * with `/health` degraded and every panel empty.
+ *
+ * 55s covers the measured cold start with headroom while still fitting under
+ * the 60s serverless function ceiling this deployment runs with (a budget of
+ * 31s was proven by a real response, and the cold-start write-back needs to
+ * land inside it). The streaming chat route is deliberately excluded: an
+ * answer legitimately outlives any fixed ceiling, so it gets a separate, much
+ * larger budget (see `app/api/chat/route.ts`).
  */
-const UPSTREAM_TIMEOUT_MS = 30_000;
+const UPSTREAM_TIMEOUT_MS = 55_000;
 
 /** Verbs that can change server state and therefore need an origin check. */
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
