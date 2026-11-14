@@ -551,6 +551,7 @@ async def health_check():
         "status": "healthy",
         "service": "Nexus AI Assistant",
         "schema_reconcile": RECONCILE_STATE,
+        "environment": settings.ENVIRONMENT,
     }
 
 

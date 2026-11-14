@@ -77,33 +77,40 @@ def get_write_engine() -> AsyncEngine:
 
 
 async def init_db() -> None:
-    """
-    Initializes tables in database if they don't already exist.
+    """Bring the schema up to what the models need, without ever destroying data.
 
-    Dev-only convenience: creates missing tables so local bootstrapping just
-    works. In production this is skipped — schema is owned by Alembic
-    (backend/migrations/) and auto-creating here would silently mask migration
-    drift between environments.
+    Two different jobs, historically conflated:
+
+    * Creating missing *tables* is a dev convenience (``create_all``) and is
+      skipped in production, where Alembic owns the schema.
+    * Adding missing *columns* is a repair, and it belongs in every
+      environment. ``create_all`` never alters an existing table, so a column
+      added to a model after its table was first created is silently absent --
+      which is exactly how the deployment ended up serving
+      ``column messages.cost_usd does not exist`` on every conversation read
+      while the list endpoint (which never selects ``messages``) kept working.
+
+    The repair is additive and idempotent (see ``schema_sync``), so running it
+    unconditionally costs one catalog read per boot when nothing is missing.
     """
-    if settings.ENVIRONMENT == "production":
+    from app.infrastructure.database.schema_sync import reconcile_missing_columns
+
+    if settings.ENVIRONMENT != "production":
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(SQLModel.metadata.create_all)
+            logger.info("database_schema_synced")
+        except Exception as exc:
+            logger.error("database_schema_sync_failed", error_type=type(exc).__name__)
+            raise
+    else:
         logger.info("database_schema_managed_by_migrations")
-        # Migrations own the schema, but nothing guarantees they ran against
-        # this particular database: the deployed one was frozen at an older
-        # revision while the models kept gaining columns, so `messages.cost_usd`
-        # was missing and every message read failed. Adding the missing columns
-        # is additive only (see schema_sync) and issues no DDL when the schema
-        # is current.
-        from app.infrastructure.database.schema_sync import reconcile_missing_columns
 
-        await reconcile_missing_columns(engine)
-        return
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.create_all)
-        logger.info("database_schema_synced")
-    except Exception as exc:
-        logger.error("database_schema_sync_failed", error_type=type(exc).__name__)
-        raise
+    # Every environment: an older schema must not turn reads into 500s. This
+    # also covers a deployment that is not actually running with
+    # ENVIRONMENT=production -- a first version of this repair lived inside the
+    # production branch only, and on the deployed service it never ran at all.
+    await reconcile_missing_columns(engine)
 
 
 async def close_db() -> None:
