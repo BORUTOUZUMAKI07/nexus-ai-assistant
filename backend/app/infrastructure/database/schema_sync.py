@@ -96,14 +96,18 @@ def _reconcile_sync(connection: sa.Connection) -> list[str]:
 
 async def reconcile_missing_columns(engine: AsyncEngine) -> list[str]:
     """Add every model column the database is missing. Returns what was added."""
-    _import_all_models()
+    # Everything, including model discovery, sits inside the guard. Model
+    # discovery used to be outside it, so an import failure there escaped to the
+    # caller, which logs and continues -- the repair then reported nothing at
+    # all and the deployed service looked like it had never run one.
     try:
+        _import_all_models()
         async with engine.begin() as connection:
             added = await connection.run_sync(_reconcile_sync)
-    except Exception as exc:  # pragma: no cover - depends on the target database
+    except Exception as exc:
         # Start-up must not fail because the repair could not run: serving with
-        # a known-missing column is recoverable (the 503 names it), refusing to
-        # boot is not.
+        # a known-missing column is recoverable (the error names it), refusing
+        # to boot is not.
         logger.error(
             "database_schema_reconcile_failed", error_type=type(exc).__name__
         )

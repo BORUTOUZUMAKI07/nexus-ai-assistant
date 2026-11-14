@@ -93,7 +93,13 @@ async def init_db() -> None:
     The repair is additive and idempotent (see ``schema_sync``), so running it
     unconditionally costs one catalog read per boot when nothing is missing.
     """
-    from app.infrastructure.database.schema_sync import reconcile_missing_columns
+    try:
+        from app.infrastructure.database.schema_sync import reconcile_missing_columns
+    except Exception as exc:  # pragma: no cover - packaging failure
+        # Silently continuing here is how a repair that never ran looked
+        # identical to one that found nothing to do.
+        logger.error("schema_sync_import_failed", error_type=type(exc).__name__)
+        raise
 
     if settings.ENVIRONMENT != "production":
         try:
