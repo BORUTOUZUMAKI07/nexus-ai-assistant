@@ -48,23 +48,29 @@ def _import_all_models() -> None:
 
     Metadata is empty until the model modules are imported, and an empty
     metadata would make this a silent no-op -- the exact failure it prevents.
-    Importing the API routers pulls in the models transitively, which is how a
-    booted application already ends up with a full metadata object.
+
+    The modules are imported under ``backend.app.domain.*``, the same namespace
+    the application itself uses. Importing them under the short ``app.*`` alias
+    instead loads the same files a second time under a different module name,
+    and SQLModel then tries to define every table twice:
+    ``InvalidRequestError: Table 'messages' is already defined for this
+    MetaData instance``. That is this repository's dual import root biting in a
+    new place, and it is why the namespace here is not a free choice.
     """
     import importlib
     from pathlib import Path
 
-    import app.domain as domain_pkg
+    domain_pkg = importlib.import_module("backend.app.domain")
 
-    # Walk the directory instead of `pkgutil.iter_modules`: these are implicit
-    # namespace packages (no `__init__.py`), and `iter_modules` does not list
-    # namespace portions -- it returned just one module here, leaving the
-    # metadata nearly empty and the whole reconcile a silent no-op.
+    # Walk the directory instead of `pkgutil.iter_modules`: the domain packages
+    # are implicit namespace packages (no `__init__.py`), and iter_modules does
+    # not list namespace portions -- it returned one module, leaving metadata
+    # nearly empty and the reconcile a silent no-op.
     for entry in sorted(Path(domain_pkg.__path__[0]).iterdir()):
         if not entry.is_dir() or not (entry / "models.py").exists():
             continue
         try:
-            importlib.import_module(f"app.domain.{entry.name}.models")
+            importlib.import_module(f"backend.app.domain.{entry.name}.models")
         except ModuleNotFoundError:
             continue
 
