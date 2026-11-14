@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlalchemy.schema import CreateColumn
 from sqlmodel import SQLModel
 
 from app.core.logging import logger
@@ -75,9 +74,32 @@ def _import_all_models() -> None:
             continue
 
 
+def _literal_default(column: sa.Column, dialect) -> str | None:
+    """SQL literal for a column's Python-side default, or None.
+
+    Adding a NOT NULL column to a table that already has rows needs a DEFAULT:
+    Postgres fills the existing rows with it. `Message.cost_usd` is
+    `Field(default=0.0)`, a Python-side default with no server default, so the
+    plain `ADD COLUMN ... NOT NULL` produced here first failed live with
+    `column "cost_usd" of relation "messages" contains null values`.
+    """
+    default = column.default
+    if default is None or not getattr(default, "is_scalar", False):
+        return None
+    try:
+        return str(
+            sa.literal(default.arg).compile(
+                dialect=dialect, compile_kwargs={"literal_binds": True}
+            )
+        )
+    except Exception:  # pragma: no cover - exotic default types
+        return None
+
+
 def _reconcile_sync(connection: sa.Connection) -> list[str]:
     inspector = sa.inspect(connection)
     existing_tables = set(inspector.get_table_names())
+    dialect = connection.dialect
     added: list[str] = []
 
     for table in SQLModel.metadata.sorted_tables:
@@ -87,14 +109,27 @@ def _reconcile_sync(connection: sa.Connection) -> list[str]:
         for column in table.columns:
             if column.name in present:
                 continue
-            if (
-                not column.nullable
-                and column.default is None
-                and column.server_default is None
-            ):
-                continue
-            ddl = CreateColumn(column).compile(dialect=connection.dialect)
-            connection.execute(sa.text(f'ALTER TABLE "{table.name}" ADD COLUMN {ddl}'))
+
+            type_sql = column.type.compile(dialect=dialect)
+            default_sql = ""
+            if not column.nullable:
+                if column.server_default is not None:
+                    default_sql = f" DEFAULT {column.server_default.arg}"
+                else:
+                    literal = _literal_default(column, dialect)
+                    if literal is None:
+                        # A required column with no value to give existing rows
+                        # needs a written backfill, not a guess.
+                        continue
+                    default_sql = f" DEFAULT {literal}"
+
+            connection.execute(
+                sa.text(
+                    f'ALTER TABLE "{table.name}" ADD COLUMN '
+                    f'"{column.name}" {type_sql}{default_sql}'
+                    f'{"" if column.nullable else " NOT NULL"}'
+                )
+            )
             added.append(f"{table.name}.{column.name}")
 
     return added
