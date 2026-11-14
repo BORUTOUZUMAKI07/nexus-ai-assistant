@@ -58,6 +58,14 @@ async def upload_file(
     # memory: rejects oversized uploads early instead of loading them.
     max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
+    # Asked before the body is read. Whether embeddings can run here is a
+    # property of the deployment, not of the file: checking it now means an
+    # upload to a host that cannot embed answers 503 in milliseconds instead
+    # of buffering megabytes and then taking the process down with it.
+    from backend.app.services.rag.retrieval import ensure_embedding_backend_available
+
+    ensure_embedding_backend_available()
+
     def _too_large(size_bytes: int) -> HTTPException:
         """Say how big the file is and what to do, not just "too large".
 
@@ -77,7 +85,9 @@ async def upload_file(
 
     if file.size is not None and file.size > max_bytes:
         raise _too_large(file.size)
-    chunks: list[bytes] = []
+    # One growable buffer, not a list of chunks joined at the end: the join
+    # held the whole file twice at peak, which matters on a small instance.
+    file_buffer = bytearray()
     total = 0
     while True:
         part = await file.read(1024 * 1024)
@@ -86,8 +96,9 @@ async def upload_file(
         total += len(part)
         if total > max_bytes:
             raise _too_large(total)
-        chunks.append(part)
-    file_bytes = b"".join(chunks)
+        file_buffer.extend(part)
+    file_bytes = bytes(file_buffer)
+    del file_buffer
     try:
         if conversation_id is not None:
             from backend.app.domain.conversation.repository import ConversationRepository

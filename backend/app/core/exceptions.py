@@ -131,3 +131,19 @@ class ApprovalConsumedError(NexusException):
     status_code = status.HTTP_409_CONFLICT
     error_code = "APPROVAL_ALREADY_CONSUMED"
     message = "This approval request has already been resolved and cannot be reused."
+
+
+# 6. Dependency-capacity exceptions (503)
+# =====================================================================
+
+class EmbeddingsUnavailableError(NexusException):
+    """The configured embedding backend cannot run on this host.
+
+    Raised instead of loading an in-process model that would be killed for
+    memory. A 503 with an actionable detail is recoverable -- the caller can
+    configure an API key or move to a larger instance -- whereas the OOM it
+    replaces took the whole API down with every in-flight request.
+    """
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    error_code = "EMBEDDINGS_UNAVAILABLE"
+    message = "Embeddings are not available on this deployment."

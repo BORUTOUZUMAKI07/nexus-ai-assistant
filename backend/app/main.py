@@ -551,6 +551,7 @@ async def health_check():
     # for one file: an `app.services.runs.executor` import here created a second
     # `PERSIST_STATE` that nothing ever writes, so the probe reported `not_run`
     # while runs were executing and their writes failing.
+    from backend.app.services.rag.retrieval import available_ram_mb as _rag_ram
     from backend.app.services.runs.executor import PERSIST_STATE
 
     from app.infrastructure.database.schema_sync import RECONCILE_STATE
@@ -568,6 +569,10 @@ async def health_check():
         # to tell "the fix is not deployed" from "the fix did not work" when
         # the only channel available is this probe.
         "commit": (os.environ.get("RENDER_GIT_COMMIT") or "")[:7],
+        # Free RAM at request time. The embedding guard refuses the local model
+        # below FASTEMBED_MIN_FREE_RAM_MB, so this is the number that explains
+        # why file indexing is or is not available on this instance.
+        "memory_free_mb": round(rag_ram) if (rag_ram := _rag_ram()) is not None else None,
     }
 
 

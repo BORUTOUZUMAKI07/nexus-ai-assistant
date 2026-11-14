@@ -8,7 +8,7 @@ import os
 import secrets
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from dotenv import load_dotenv
 from pydantic import Field, field_validator, model_validator
@@ -325,6 +325,33 @@ class Settings(BaseSettings):
     # axes (module not installed AND wrong model name) and masked by the API key
     # being set. Guarded by test_rag_embedding_fallback.py.
     FASTEMBED_MODEL: str = Field(default="BAAI/bge-base-en-v1.5")
+
+    # ── Where embeddings come from ─────────────────────────────────────────────
+    # `auto` prefers the Gemini API when a key is configured and otherwise uses
+    # the local model IF the host has room for it. `gemini` refuses to run
+    # without a key rather than quietly loading 400 MB of ONNX. `fastembed`
+    # pins the local model for an offline/self-hosted deployment.
+    #
+    # This exists because of a production incident: on a 512 MB instance the
+    # first upload or RAG query loaded the local model, the kernel killed the
+    # process, and every request in flight got a 502 for ~50s. The load was
+    # implicit -- nothing in the code said "this may need half a gigabyte" --
+    # so the only way to see it was an instance dying. Making the choice explicit
+    # lets an embedder that cannot fit the host answer 503 and stay up.
+    EMBEDDINGS_PROVIDER: Literal["auto", "gemini", "fastembed"] = "auto"
+    # Free RAM required before the local model is loaded. Measured headroom for
+    # an ONNX bge-base forward pass plus the API's own working set; below this
+    # the load is refused instead of attempted.
+    FASTEMBED_MIN_FREE_RAM_MB: int = Field(default=1024, ge=128)
+
+    # ── Ingestion bounds ──────────────────────────────────────────────────────
+    # A single upload must not be able to decide the process's memory footprint.
+    # Text beyond INGEST_MAX_CHARS is truncated (and the file reports it), and
+    # chunks beyond MAX_CHUNKS_PER_FILE are dropped with a warning: an unbounded
+    # 4 MB document can chunk into tens of thousands of vectors, and the vectors
+    # -- not the text -- are the large object.
+    INGEST_MAX_CHARS: int = Field(default=2_000_000, ge=10_000)
+    MAX_CHUNKS_PER_FILE: int = Field(default=800, ge=1)
     # FlashRank cross-encoder used to re-order retrieved chunks. Must be one of
     # the names FlashRank ships (ms-marco-TinyBERT-L-2-v2, ms-marco-MiniLM-L-12-v2,
     # ms-marco-MultiBERT-L-12) — NOT a HuggingFace cross-encoder path.

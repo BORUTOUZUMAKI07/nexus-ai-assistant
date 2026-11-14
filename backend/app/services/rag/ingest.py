@@ -183,6 +183,18 @@ class IngestionService:
                 await repo.update_status(file_id, status="failed", error_message="Empty file or no readable text extracted")
                 return {"status": "failed", "reason": "empty_content", "chunks": 0}
 
+            # A single document must not be able to decide this process's memory
+            # footprint. Both bounds are reported rather than silent: a truncated
+            # document still indexes, and the file's status carries the warning.
+            if len(text_content) > settings.INGEST_MAX_CHARS:
+                logger.warning(
+                    "ingest_text_truncated",
+                    file_id=str(file_id),
+                    chars=len(text_content),
+                    limit=settings.INGEST_MAX_CHARS,
+                )
+                text_content = text_content[: settings.INGEST_MAX_CHARS]
+
             # Idempotent retry: drop any partial chunks/vectors from an earlier run.
             await self._purge_prior_state(file_id, repo)
 
@@ -194,6 +206,14 @@ class IngestionService:
             }
 
             chunks = chunking_service.chunk_document(text_content, source_metadata=metadata)
+            if len(chunks) > settings.MAX_CHUNKS_PER_FILE:
+                logger.warning(
+                    "ingest_chunks_truncated",
+                    file_id=str(file_id),
+                    chunks=len(chunks),
+                    limit=settings.MAX_CHUNKS_PER_FILE,
+                )
+                chunks = chunks[: settings.MAX_CHUNKS_PER_FILE]
             if not chunks:
                 await repo.update_status(file_id, status="failed", error_message="Chunking produced zero chunks")
                 return {"status": "failed", "reason": "no_chunks", "chunks": 0}
@@ -201,13 +221,20 @@ class IngestionService:
             points = []
             chunks_data = []
 
-            # Batch embed all chunk contents in one API request
+            # Embed in bounded batches. One call for every chunk means the
+            # request's peak memory is decided by document size; a fixed batch
+            # size keeps it flat and also respects the provider's per-request
+            # limit (Gemini caps at 100 inputs).
             chunk_texts = [c.content for c in chunks]
-            dense_vectors = (
-                await self._retriever.generate_embeddings_batch(chunk_texts)
-                if hasattr(self._retriever, "generate_embeddings_batch")
-                else [await self._retriever.generate_embedding(t) for t in chunk_texts]
-            )
+            dense_vectors: list[list[float]] = []
+            batch_size = max(1, settings.RAG_EMBEDDING_BATCH_SIZE)
+            for start in range(0, len(chunk_texts), batch_size):
+                batch = chunk_texts[start : start + batch_size]
+                if hasattr(self._retriever, "generate_embeddings_batch"):
+                    dense_vectors.extend(await self._retriever.generate_embeddings_batch(batch))
+                else:
+                    for text in batch:
+                        dense_vectors.append(await self._retriever.generate_embedding(text))
             if len(dense_vectors) != len(chunks):
                 raise RuntimeError(
                     f"Embedding batch size mismatch: {len(dense_vectors)} vectors for {len(chunks)} chunks"

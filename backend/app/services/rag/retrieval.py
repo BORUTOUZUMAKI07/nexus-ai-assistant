@@ -8,6 +8,7 @@ from uuid import UUID
 
 import structlog
 from backend.app.core.config import settings
+from backend.app.core.exceptions import EmbeddingsUnavailableError
 from backend.app.infrastructure.vector.base import IVectorStore
 from backend.app.infrastructure.vector.qdrant_client import (
     vector_db as _default_vector_db,
@@ -36,6 +37,79 @@ def _embed_texts_sync(model: Any, texts: list[str]) -> list[list[float]]:
     """Runs fastembed inference in a worker thread (blocking CPU/ONNX)."""
     embeddings = list(model.embed(texts))
     return [e.tolist() for e in embeddings]
+
+
+def _available_ram_mb() -> float | None:
+    """Free RAM in MB, or None when the host cannot report it.
+
+    psutil is optional here: /proc/meminfo is the reliable source inside the
+    Linux container this runs in, and psutil only matters on a laptop.
+    """
+    try:
+        import psutil  # type: ignore[import-not-found]
+
+        return float(psutil.virtual_memory().available) / (1024 * 1024)
+    except Exception:
+        pass
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return float(line.split()[1]) / 1024.0
+    except OSError:
+        return None
+    return None
+
+
+def available_ram_mb() -> float | None:
+    """Public view of free RAM, for the health probe."""
+    return _available_ram_mb()
+
+
+def _embeddings_unavailable(reason: str) -> EmbeddingsUnavailableError:
+    return EmbeddingsUnavailableError(
+        f"Embeddings are unavailable: {reason}. Set GEMINI_API_KEY to embed "
+        "through the API, or run the service where at least "
+        f"{settings.FASTEMBED_MIN_FREE_RAM_MB}MB of RAM is free for the local model. "
+        "Files cannot be indexed until this is resolved."
+    )
+
+
+def ensure_embedding_backend_available() -> str:
+    """Resolve the embedding backend and prove it can run here.
+
+    Returns ``"gemini"`` or ``"fastembed"``; raises
+    ``EmbeddingsUnavailableError`` when the selected backend cannot run on this
+    host. Called before any chunking, storage or upload work, so an unusable
+    backend costs one cheap check instead of a full upload followed by an
+    out-of-memory kill -- which is exactly what took the API down twice on a
+    512 MB instance.
+    """
+    provider = settings.EMBEDDINGS_PROVIDER
+    key = get_byok_key("gemini") or settings.GEMINI_API_KEY
+
+    if provider == "gemini" or (provider == "auto" and key):
+        if not key:
+            raise _embeddings_unavailable(
+                "EMBEDDINGS_PROVIDER=gemini but no GEMINI_API_KEY is configured"
+            )
+        if not (
+            "gemini" in settings.EMBEDDING_MODEL.lower()
+            or "text-embedding" in settings.EMBEDDING_MODEL.lower()
+        ):
+            raise _embeddings_unavailable(
+                f"EMBEDDING_MODEL '{settings.EMBEDDING_MODEL}' is not an embedding "
+                "endpoint this provider can call"
+            )
+        return "gemini"
+
+    free = _available_ram_mb()
+    if free is not None and free < settings.FASTEMBED_MIN_FREE_RAM_MB:
+        raise _embeddings_unavailable(
+            "the local model needs roughly "
+            f"{settings.FASTEMBED_MIN_FREE_RAM_MB}MB free RAM and only {free:.0f}MB is available"
+        )
+    return "fastembed"
 
 
 async def _embed_with_gemini(
@@ -235,23 +309,20 @@ class RetrievalService(IRetriever):
             return []
 
         try:
-            # 1. Primary: Google Gemini API (0 MB local RAM, fast)
-            _gemini_key = get_byok_key("gemini") or settings.GEMINI_API_KEY
-            if _gemini_key and (
-                "gemini" in self.embedding_model.lower()
-                or "text-embedding" in self.embedding_model.lower()
-            ):
+            backend = ensure_embedding_backend_available()
+
+            if backend == "gemini":
                 return await _embed_with_gemini(
                     texts=texts,
                     model=self.embedding_model,
                     dimension=settings.EMBEDDING_DIMENSION,
-                    api_key=_gemini_key,
+                    api_key=get_byok_key("gemini") or settings.GEMINI_API_KEY or "",
                 )
 
-            # 2. Fallback: local FastEmbed CPU model. Uses FASTEMBED_MODEL, NOT
+            # Local FastEmbed CPU model. Uses FASTEMBED_MODEL, NOT
             # EMBEDDING_MODEL: the latter is a Gemini endpoint id that fastembed
-            # can never load, so handing it to _get_fastembed_model made the
-            # offline path dead on arrival. See config.FASTEMBED_MODEL.
+            # can never load. Only reached after `ensure_embedding_backend_available`
+            # confirmed this host has room for the model.
             model = await asyncio.to_thread(_get_fastembed_model, settings.FASTEMBED_MODEL)
             vectors = await asyncio.to_thread(_embed_texts_sync, model, texts)
             for vec in vectors:
@@ -261,6 +332,16 @@ class RetrievalService(IRetriever):
                         f"({settings.EMBEDDING_DIMENSION}) — collection/ingest mismatch"
                     )
             return vectors
+        except EmbeddingsUnavailableError:
+            # Capacity, not a bug: the API reports it as a 503 with the
+            # actionable detail, and the process stays up.
+            logger.warning(
+                "embeddings_unavailable",
+                model=self.embedding_model,
+                provider=settings.EMBEDDINGS_PROVIDER,
+                count=len(texts),
+            )
+            raise
         except Exception as exc:
             logger.error(
                 "embedding_generation_failed",
