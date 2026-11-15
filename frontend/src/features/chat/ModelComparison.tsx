@@ -12,6 +12,8 @@ interface ModelComparisonProps {
   modelB: string;
 }
 
+const NO_QUESTION = "Ask a question in the chat first — there is nothing to compare yet.";
+
 export function ModelComparison({ onClose, question, modelA, modelB }: ModelComparisonProps): React.ReactElement {
   const [responseA, setResponseA] = React.useState<string>("");
   const [responseB, setResponseB] = React.useState<string>("");
@@ -24,6 +26,18 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
 
   React.useEffect(() => {
     aborterRef.current = new AbortController();
+
+    // Nothing to compare: spending two model calls on an empty prompt returns
+    // two versions of "what do you need?". The panes say so instead.
+    if (!question.trim()) {
+      setErrorA(NO_QUESTION);
+      setErrorB(NO_QUESTION);
+      setLoadingA(false);
+      setLoadingB(false);
+      return () => {
+        aborterRef.current?.abort();
+      };
+    }
 
     async function runComparison() {
       /**

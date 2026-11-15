@@ -1136,7 +1136,17 @@ function AppPageInner() {
             <button
               type="button"
               aria-label="Compare models side-by-side"
-              onClick={() => setComparisonOpen(true)}
+              onClick={() => {
+                // Seed the panel with the turn being discussed. Only the
+                // *open* flag used to be set, so `comparisonQuestion` stayed ""
+                // and both models were asked nothing -- they replied "what do
+                // you need?" to a panel whose question strip was blank.
+                const lastUser = [...chat.messages]
+                  .reverse()
+                  .find((m) => m.role === "user");
+                setComparisonQuestion(lastUser?.content ?? "");
+                setComparisonOpen(true);
+              }}
               className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors hidden sm:flex"
               title="Compare two models side-by-side"
             >
