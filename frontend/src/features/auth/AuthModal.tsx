@@ -75,12 +75,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
     try {
       if (mode === "register") {
-        await registerUser({
-          email,
-          username: username || email.split("@")[0],
-          password,
-          full_name: fullName,
-        });
+        try {
+          await registerUser({
+            email,
+            username: username || email.split("@")[0],
+            password,
+            full_name: fullName,
+          });
+        } catch (err) {
+          // A cold start can make the first attempt time out *after* the account
+          // was created, so the retry answers 409. That is not a failed sign-up:
+          // fall through to sign-in with the same credentials.
+          const status = (err as { status?: number }).status;
+          if (status !== 409) throw err;
+        }
       }
       // The /api/auth/login route handler sets the httpOnly session cookies;
       // on success we just close the modal — no tokens touch page scripts.

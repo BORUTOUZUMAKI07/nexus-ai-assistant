@@ -14,6 +14,68 @@ interface ModelComparisonProps {
 
 const NO_QUESTION = "Ask a question in the chat first — there is nothing to compare yet.";
 
+/**
+ * Storage key for the single hidden conversation comparisons run in.
+ *
+ * Comparison used to post with `conversationId: null`, and `/api/chat` creates a
+ * conversation for an unknown id — so every comparison left two fresh "New Chat"
+ * rows in the user's sidebar. One archived conversation, reused for every
+ * comparison, keeps the transcript out of the sidebar without adding a
+ * non-persisting code path to the whole run pipeline.
+ */
+const COMPARE_CONVERSATION_KEY = "nexus.compareConversationId";
+
+function readCompareConversationId(): string | null {
+  try {
+    return window.localStorage.getItem(COMPARE_CONVERSATION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function rememberCompareConversationId(id: string | null): void {
+  try {
+    if (id) window.localStorage.setItem(COMPARE_CONVERSATION_KEY, id);
+    else window.localStorage.removeItem(COMPARE_CONVERSATION_KEY);
+  } catch {
+    // Private-mode storage failures are not worth failing a comparison over.
+  }
+}
+
+/**
+ * Resolve (or create) the hidden comparison conversation.
+ *
+ * Created through the public conversations API and archived immediately so it
+ * never appears in the sidebar (which lists `archived=false`). Returns null when
+ * creation fails, which falls back to the previous auto-create behaviour rather
+ * than breaking comparison.
+ */
+async function resolveCompareConversation(signal: AbortSignal): Promise<string | null> {
+  const cached = readCompareConversationId();
+  if (cached) return cached;
+  try {
+    const created = await fetch("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Model comparison" }),
+      signal,
+    });
+    if (!created.ok) return null;
+    const conversation = (await created.json()) as { id?: string };
+    if (!conversation.id) return null;
+    await fetch(`/api/conversations/${conversation.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_archived: true }),
+      signal,
+    });
+    rememberCompareConversationId(conversation.id);
+    return conversation.id;
+  } catch {
+    return null;
+  }
+}
+
 export function ModelComparison({ onClose, question, modelA, modelB }: ModelComparisonProps): React.ReactElement {
   const [responseA, setResponseA] = React.useState<string>("");
   const [responseB, setResponseB] = React.useState<string>("");
@@ -40,6 +102,12 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
     }
 
     async function runComparison() {
+      // Both panes share one hidden, archived conversation, so a comparison adds
+      // nothing to the sidebar.
+      const compareConversationId = await resolveCompareConversation(
+        aborterRef.current!.signal,
+      ).catch(() => null);
+
       /**
        * Stream one model's answer into its pane.
        *
@@ -64,12 +132,18 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
             // else is rejected by its own validation before it forwards.
             body: JSON.stringify({
               messages: [{ role: "user", content: question }],
-              conversationId: null,
+              conversationId: compareConversationId,
               mode: "normal",
               model,
             }),
             signal: aborterRef.current!.signal,
           });
+          if (res.status === 404 && compareConversationId) {
+            // The stored comparison conversation was deleted (or belongs to a
+            // previous session's account). Forget it so the next comparison
+            // creates a fresh one instead of 404ing forever.
+            rememberCompareConversationId(null);
+          }
           if (!res.ok) {
             const detail = await res.text();
             setErr(

@@ -19,6 +19,10 @@ import {
   X,
   Search,
   Share2,
+  Archive,
+  ArchiveRestore,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { MODEL_CATALOG } from "@/lib/models";
 
@@ -49,6 +53,17 @@ interface SidebarProps {
   onRenameConversation?: (id: string, title: string) => Promise<void> | void;
   /** Toggle a conversation's pinned state; parent owns the server call. */
   onPinConversation?: (id: string, pinned: boolean) => Promise<void> | void;
+  /**
+   * Move a conversation out of the sidebar without deleting it. Optional so a
+   * caller that does not support archiving simply omits the button.
+   */
+  onArchiveConversation?: (id: string, e: React.MouseEvent) => void;
+  /** Archived conversations, shown only while the archived list is expanded. */
+  archivedConversations?: ConversationItem[];
+  showArchived?: boolean;
+  onToggleArchived?: () => void;
+  onRestoreConversation?: (id: string) => void;
+  archivedLoading?: boolean;
   activeTab: "chat" | "files" | "projects" | "settings" | "usage" | "admin";
   setActiveTab: (tab: "chat" | "files" | "projects" | "settings" | "usage" | "admin") => void;
   currentModel: string;
@@ -76,6 +91,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onShareConversation,
   onRenameConversation,
   onPinConversation,
+  onArchiveConversation,
+  archivedConversations = [],
+  showArchived = false,
+  onToggleArchived,
+  onRestoreConversation,
+  archivedLoading = false,
   activeTab,
   setActiveTab,
   currentModel,
@@ -265,6 +286,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Share2 className="w-3.5 h-3.5" />
           </button>
         )}
+        {onArchiveConversation && (
+          <button
+            onClick={(e) => onArchiveConversation(c.id, e)}
+            title="Archive conversation (hidden, not deleted)"
+            aria-label={`Archive ${c.title}`}
+            className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity"
+          >
+            <Archive className="w-3.5 h-3.5" />
+          </button>
+        )}
         <button
           onClick={(e) => onDeleteConversation(c.id, e)}
           title="Delete conversation"
@@ -422,6 +453,64 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </p>
           )}
         </div>
+
+        {/* Archived conversations stay reachable without cluttering the list. */}
+        {onToggleArchived && (
+          <div className="pt-2 border-t border-[var(--border-subtle)]">
+            <button
+              type="button"
+              onClick={onToggleArchived}
+              aria-expanded={showArchived}
+              className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[11px] font-medium text-[var(--text-faint)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] transition-colors"
+            >
+              {showArchived ? (
+                <ChevronDown className="w-3 h-3" />
+              ) : (
+                <ChevronRight className="w-3 h-3" />
+              )}
+              <Archive className="w-3 h-3" />
+              Archived
+              {archivedConversations.length > 0 && (
+                <span className="ml-1 font-mono text-[10px]">
+                  ({archivedConversations.length})
+                </span>
+              )}
+            </button>
+
+            {showArchived && (
+              <div className="mt-1 space-y-1">
+                {archivedLoading ? (
+                  <p className="text-[11px] text-[var(--text-faint)] px-2 py-2">
+                    Loading…
+                  </p>
+                ) : archivedConversations.length === 0 ? (
+                  <p className="text-[11px] text-[var(--text-faint)] px-2 py-2">
+                    Nothing archived.
+                  </p>
+                ) : (
+                  archivedConversations.map((c) => (
+                    <div
+                      key={c.id}
+                      className="group flex items-center justify-between px-3 py-1.5 rounded-lg text-[11px] text-[var(--text-faint)] hover:bg-[var(--bg-surface)]"
+                    >
+                      <span className="truncate">{c.title}</span>
+                      {onRestoreConversation && (
+                        <button
+                          onClick={() => onRestoreConversation(c.id)}
+                          title="Restore to the sidebar"
+                          aria-label={`Restore ${c.title}`}
+                          className="text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <ArchiveRestore className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Bottom Navigation */}

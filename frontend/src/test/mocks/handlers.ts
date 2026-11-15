@@ -904,6 +904,92 @@ export const handlers = [
     )
   }),
   http.post("/api/orgs/:id/leave", () => HttpResponse.json({ status: "left" })),
+  // Detail / edit / delete / members / invite listing. These routes existed (or
+  // now exist) in the BFF and had no mock, which the api-parity test reports as
+  // a path no component test can reach.
+  http.get("/api/orgs/:id", () =>
+    HttpResponse.json({
+      ...mockOrganizations[0],
+      owner_id: "user-1",
+      member_count: 1,
+    })
+  ),
+  http.patch("/api/orgs/:id", async ({ request }) => {
+    const body = (await request.json()) as { name?: string; description?: string }
+    return HttpResponse.json({
+      ...mockOrganizations[0],
+      name: body.name ?? mockOrganizations[0].name,
+      description: body.description ?? null,
+    })
+  }),
+  http.delete("/api/orgs/:id", () => HttpResponse.json({ status: "deleted" })),
+  http.get("/api/orgs/:id/members", () =>
+    HttpResponse.json([
+      { user_id: "user-1", email: "owner@example.com", role: "owner", joined_at: null },
+    ])
+  ),
+  http.get("/api/orgs/:id/invites", () =>
+    HttpResponse.json([
+      {
+        id: "inv-1",
+        email: "invitee@example.com",
+        role: "member",
+        status: "pending",
+        expires_at: null,
+        created_at: null,
+      },
+    ])
+  ),
+
+  // ── Account export / agent capabilities ────────────────────────────────
+  // `/api/account` reads the GDPR export (GET) and deletes the account (DELETE).
+  http.get("/api/account", () =>
+    HttpResponse.json({ schema_version: "1.0", user: { id: "user-1" }, conversations: [] })
+  ),
+  http.delete("/api/account", () => HttpResponse.json({ status: "deleted" })),
+  http.get("/api/prompts/templates", () =>
+    HttpResponse.json([
+      {
+        id: "tpl-1",
+        user_id: null,
+        title: "Summarise a document",
+        category: "general",
+        system_prompt: "You are a concise summariser.",
+        user_prompt_template: "Summarise the following:\n\n{{text}}",
+        input_variables: ["text"],
+        is_public: true,
+        version: 1,
+        created_at: "2026-01-01T00:00:00",
+        updated_at: "2026-01-01T00:00:00",
+      },
+    ])
+  ),
+  http.post("/api/prompts/templates", async ({ request }) => {
+    const body = (await request.json()) as { title?: string; system_prompt?: string }
+    return HttpResponse.json(
+      {
+        id: "tpl-new",
+        user_id: "user-1",
+        title: body.title ?? "Untitled",
+        category: "general",
+        system_prompt: body.system_prompt ?? "",
+        user_prompt_template: null,
+        input_variables: [],
+        is_public: false,
+        version: 1,
+        created_at: "2026-01-01T00:00:00",
+        updated_at: "2026-01-01T00:00:00",
+      },
+      { status: 201 }
+    )
+  }),
+  http.get("/api/prompts/skills", () => HttpResponse.json([])),
+  http.get("/api/tools", () =>
+    HttpResponse.json([
+      { name: "web_search", description: "Search the web", parameters: {} },
+      { name: "code_execute", description: "Run code in a sandbox", parameters: {} },
+    ])
+  ),
 
   http.get("/api/conversations/:id/share", () => HttpResponse.json([])),
   http.post("/api/conversations/:id/share", () =>

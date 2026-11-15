@@ -230,3 +230,71 @@ def test_delete_org_detaches_usage_instead_of_failing():
     assert _await(OrganizationService(fake).delete(org.id, owner)) is True
     assert all(row.org_id is None for row in fake.rows[UsageLog])
     assert all(row.org_id is None for row in fake.rows[CostLog])
+
+
+def test_update_org_renames_for_managers_only():
+    """An organization's name was permanent: no edit path existed at all.
+
+    Members must not be able to rename a workspace they do not manage, and the
+    slug is deliberately not editable (invite links are built from it).
+    """
+    owner, member = uuid4(), uuid4()
+    fake = FakeSession()
+    org = _seed_org(fake, owner, "Old Name")
+    fake.add(OrganizationMember(organization_id=org.id, user_id=member, role="member"))
+    svc = OrganizationService(fake)
+
+    with pytest.raises(PermissionError):
+        _await(svc.update(org.id, member, name="Renamed By Member"))
+
+    with pytest.raises(ValueError):
+        _await(svc.update(org.id, owner, name="   "))
+
+    updated = _await(svc.update(org.id, owner, name="New Name", description="Team space"))
+    assert updated is not None
+    assert updated.name == "New Name"
+    assert updated.description == "Team space"
+    assert updated.slug == "old-name"
+
+
+def test_list_invites_hides_tokens_and_marks_expired():
+    """The invite list must never repeat a token: it is handed out once, when the
+    invite is created, and repeating it would make every invite replayable."""
+    owner, member = uuid4(), uuid4()
+    fake = FakeSession()
+    org = _seed_org(fake, owner)
+    fake.add(OrganizationMember(organization_id=org.id, user_id=member, role="member"))
+    pending = OrganizationInvite(
+        organization_id=org.id,
+        invited_by=owner,
+        email="pending@example.com",
+        role="member",
+        token="tok-pending",
+        status="pending",
+        expires_at=datetime.now(UTC).replace(tzinfo=None) + timedelta(days=1),
+    )
+    stale = OrganizationInvite(
+        organization_id=org.id,
+        invited_by=owner,
+        email="stale@example.com",
+        role="member",
+        token="tok-stale",
+        status="pending",
+        expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1),
+    )
+    fake.seed(OrganizationInvite, [pending, stale])
+    fake.add_hook(
+        OrganizationInvite,
+        lambda rows: [i for i in rows if i.organization_id == org.id],
+    )
+    svc = OrganizationService(fake)
+
+    with pytest.raises(PermissionError):
+        _await(svc.list_invites(org.id, member))
+
+    invites = _await(svc.list_invites(org.id, owner))
+    assert invites is not None
+    by_email = {row["email"]: row for row in invites}
+    assert by_email["pending@example.com"]["status"] == "pending"
+    assert by_email["stale@example.com"]["status"] == "expired"
+    assert all("token" not in row for row in invites)

@@ -17,6 +17,11 @@ import {
   Image as ImageIcon,
   ListChecks,
 } from "lucide-react";
+import {
+  fetchPromptTemplates,
+  promptTemplateBody,
+  type PromptTemplate,
+} from "@/lib/api";
 
 export interface SendMessageOptions {
   enableWeb: boolean;
@@ -137,7 +142,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // sending so the default stays "chat".
   const [imageMode, setImageMode] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
+  /** Templates from the server's prompt library (empty until loaded/failed). */
+  const [serverTemplates, setServerTemplates] = useState<PromptTemplate[]>([]);
   const [attachments, setAttachments] = useState<File[]>([]);
+
+  // Loaded once, on mount: the library is small and static per session, and
+  // fetching it when the popover opens would make the first click wait on a
+  // round-trip. A failure is silent by design — the built-in templates still
+  // work, so an unavailable library must not turn the composer into an error.
+  useEffect(() => {
+    let live = true;
+    void fetchPromptTemplates()
+      .then((templates) => {
+        if (live) setServerTemplates(templates);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
 
   // Image state
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
@@ -826,6 +849,47 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                       </div>
                     </button>
                   ))}
+
+                  {/* Server templates — the real prompt library.
+                      The local list above is a shortcut set; these come from
+                      /api/prompts/templates, which had no UI at all until this
+                      section existed. Rendered as a separate group so a user
+                      can tell a saved template from a built-in one. */}
+                  {serverTemplates.length > 0 && (
+                    <>
+                      <div className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] px-2 pt-2 pb-1 border-t border-[var(--border-subtle)]">
+                        Saved templates
+                      </div>
+                      <div className="max-h-48 overflow-y-auto space-y-1">
+                        {serverTemplates.map((tpl) => (
+                          <button
+                            key={tpl.id}
+                            type="button"
+                            onClick={() => {
+                              setContent(promptTemplateBody(tpl));
+                              setShowPrompts(false);
+                              textareaRef.current?.focus();
+                            }}
+                            className="w-full text-left p-2 rounded-lg hover:bg-[var(--bg-surface)] transition-colors group"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-medium text-[var(--text-primary)] group-hover:text-[var(--accent-ink)] truncate">
+                                {tpl.title}
+                              </span>
+                              <span className="text-[9px] uppercase px-1 rounded bg-[var(--accent-soft)] text-[var(--accent-ink)] font-mono shrink-0">
+                                {tpl.category}
+                              </span>
+                            </div>
+                            {tpl.input_variables.length > 0 && (
+                              <div className="text-[10px] text-[var(--text-muted)] truncate">
+                                Fill in: {tpl.input_variables.join(", ")}
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

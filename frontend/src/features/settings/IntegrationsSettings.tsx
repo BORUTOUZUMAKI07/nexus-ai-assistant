@@ -16,24 +16,35 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   Building2,
+  Check,
   ChevronDown,
   ChevronRight,
   Copy,
   Loader2,
+  Mail,
+  Pencil,
   Plus,
   Trash2,
+  Users,
   Webhook,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   acceptOrganizationInvite,
   createOrganization,
   createWebhook,
+  deleteOrganization,
   deleteWebhook,
+  fetchOrganizationInvites,
+  fetchOrganizationMembers,
   fetchWebhookDeliveries,
   inviteOrganizationMember,
   leaveOrganization,
   setWebhookActive,
+  updateOrganization,
+  type OrgInvite,
+  type OrgMember,
   type WebhookDelivery,
 } from "@/lib/api";
 import {
@@ -76,6 +87,18 @@ export const IntegrationsSettings: React.FC = () => {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [acceptToken, setAcceptToken] = useState("");
+  // Inline rename: the organization name was permanent because no edit path
+  // existed (backend or BFF), so a typo could never be corrected.
+  const [editingOrgId, setEditingOrgId] = useState<string | null>(null);
+  const [editingOrgName, setEditingOrgName] = useState("");
+  // Members / invites are fetched on demand per organization, same pattern as
+  // the expanded webhook delivery table below.
+  const [expandedOrg, setExpandedOrg] = useState<string | null>(null);
+  const [orgDetail, setOrgDetail] = useState<{
+    kind: "members" | "invites";
+    rows: OrgMember[] | OrgInvite[];
+  } | null>(null);
+  const [orgDetailBusy, setOrgDetailBusy] = useState(false);
 
   const refreshOrgs = () =>
     queryClient.invalidateQueries({ queryKey: orgKeys.all });
@@ -119,6 +142,58 @@ export const IntegrationsSettings: React.FC = () => {
       await refreshOrgs();
     } catch (err) {
       toast.error(messageOf(err, "Invite could not be accepted"));
+    }
+  };
+
+  const handleRenameOrg = async (orgId: string) => {
+    const name = editingOrgName.trim();
+    setEditingOrgId(null);
+    if (!name) return;
+    try {
+      await updateOrganization(orgId, { name });
+      toast.success("Organization renamed");
+      await refreshOrgs();
+    } catch (err) {
+      toast.error(messageOf(err, "Could not rename organization"));
+    }
+  };
+
+  const handleDeleteOrg = async (org: { id: string; name: string }) => {
+    if (
+      !window.confirm(
+        `Delete "${org.name}"? This removes its memberships and pending invites. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await deleteOrganization(org.id);
+      toast.success(`Deleted ${org.name}`);
+      await refreshOrgs();
+    } catch (err) {
+      toast.error(messageOf(err, "Could not delete organization"));
+    }
+  };
+
+  const toggleOrgDetail = async (orgId: string, kind: "members" | "invites") => {
+    if (expandedOrg === `${orgId}:${kind}`) {
+      setExpandedOrg(null);
+      return;
+    }
+    setExpandedOrg(`${orgId}:${kind}`);
+    setOrgDetail(null);
+    setOrgDetailBusy(true);
+    try {
+      const rows =
+        kind === "members"
+          ? await fetchOrganizationMembers(orgId)
+          : await fetchOrganizationInvites(orgId);
+      setOrgDetail({ kind, rows });
+    } catch (err) {
+      toast.error(messageOf(err, `Could not load ${kind}`));
+      setExpandedOrg(null);
+    } finally {
+      setOrgDetailBusy(false);
     }
   };
 
@@ -276,16 +351,80 @@ export const IntegrationsSettings: React.FC = () => {
                 key={org.id}
                 className="p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs space-y-2"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <span className="font-medium text-[var(--text-primary)]">
-                      {org.name}
-                    </span>
-                    <span className="ml-2 text-[9px] uppercase px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent-ink)] font-mono">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="min-w-0 flex items-center gap-1.5">
+                    {editingOrgId === org.id ? (
+                      <input
+                        autoFocus
+                        aria-label={`Rename ${org.name}`}
+                        value={editingOrgName}
+                        onChange={(e) => setEditingOrgName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void handleRenameOrg(org.id);
+                          } else if (e.key === "Escape") {
+                            setEditingOrgId(null);
+                          }
+                        }}
+                        maxLength={120}
+                        className="bg-[var(--bg-surface)] border border-[var(--border-active)] rounded px-1.5 py-0.5 text-xs text-[var(--text-primary)] outline-none"
+                      />
+                    ) : (
+                      <span className="font-medium text-[var(--text-primary)] truncate">
+                        {org.name}
+                      </span>
+                    )}
+                    <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent-ink)] font-mono shrink-0">
                       {org.role}
                     </span>
+                    {editingOrgId === org.id && (
+                      <>
+                        <button
+                          onClick={() => void handleRenameOrg(org.id)}
+                          className="text-[var(--accent)] p-0.5"
+                          title="Save name"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setEditingOrgId(null)}
+                          className="text-[var(--text-faint)] hover:text-[var(--text-primary)] p-0.5"
+                          title="Cancel"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
+                    {editingOrgId !== org.id && (
+                      <button
+                        onClick={() => {
+                          setEditingOrgId(org.id);
+                          setEditingOrgName(org.name);
+                        }}
+                        className={ghostButtonClass}
+                        title="Rename organization"
+                        aria-label={`Rename ${org.name}`}
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => void toggleOrgDetail(org.id, "members")}
+                      className={ghostButtonClass}
+                      title="Members"
+                    >
+                      <Users className="w-3 h-3" /> Members
+                    </button>
+                    <button
+                      onClick={() => void toggleOrgDetail(org.id, "invites")}
+                      className={ghostButtonClass}
+                      title="Invites"
+                    >
+                      <Mail className="w-3 h-3" /> Invites
+                    </button>
                     <button
                       onClick={() =>
                         setInviteOrgId(inviteOrgId === org.id ? null : org.id)
@@ -300,8 +439,61 @@ export const IntegrationsSettings: React.FC = () => {
                     >
                       Leave
                     </button>
+                    {org.role === "owner" && (
+                      <button
+                        onClick={() => void handleDeleteOrg(org)}
+                        className="text-[var(--text-faint)] hover:text-[var(--status-danger)] p-1"
+                        title="Delete organization"
+                        aria-label={`Delete ${org.name}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
+
+                {(expandedOrg === `${org.id}:members` ||
+                  expandedOrg === `${org.id}:invites`) && (
+                  <div className="pt-2 border-t border-[var(--border-subtle)] text-[11px]">
+                    {orgDetailBusy || !orgDetail ? (
+                      <p className="text-[var(--text-faint)]">Loading…</p>
+                    ) : orgDetail.kind === "members" ? (
+                      <ul className="space-y-1">
+                        {(orgDetail.rows as OrgMember[]).map((m) => (
+                          <li
+                            key={m.user_id}
+                            className="flex items-center justify-between gap-2"
+                          >
+                            <span className="truncate text-[var(--text-secondary)]">
+                              {m.email ?? m.user_id}
+                            </span>
+                            <span className="font-mono text-[9px] uppercase text-[var(--accent-ink)]">
+                              {m.role}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (orgDetail.rows as OrgInvite[]).length === 0 ? (
+                      <p className="text-[var(--text-faint)]">No invites sent yet.</p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {(orgDetail.rows as OrgInvite[]).map((inv) => (
+                          <li
+                            key={inv.id ?? inv.email}
+                            className="flex items-center justify-between gap-2"
+                          >
+                            <span className="truncate text-[var(--text-secondary)]">
+                              {inv.email}
+                            </span>
+                            <span className="font-mono text-[9px] uppercase text-[var(--text-faint)]">
+                              {inv.status ?? "pending"}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
 
                 {inviteOrgId === org.id && (
                   <div className="flex gap-2">

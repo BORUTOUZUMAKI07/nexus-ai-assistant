@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Sidebar } from "@/components/layout/Sidebar";
 import WorkspaceSkeleton from "@/features/workspace/WorkspaceSkeleton";
 import {
@@ -44,6 +44,7 @@ import {
   Conversation,
   CurrentUser,
   fetchCurrentUser,
+  fetchArchivedConversations,
 } from "@/lib/api";
 import { clearSession, SESSION_EXPIRED_EVENT } from "@/lib/auth";
 import { useTheme } from "@/lib/theme";
@@ -262,6 +263,18 @@ function AppPageInner() {
   // deliberately *not* here: `useNexusChat` remains the transcript's only writer.
   const conversationsQuery = useConversations(mounted && !isAuthOpen);
   const conversations = conversationsQuery.data ?? [];
+
+  // Archived conversations are a second, opt-in read: the sidebar list only ever
+  // asks for `archived=false`, so without this an archived chat was unreachable
+  // (the API accepted `is_archived`, but nothing in the product could set or
+  // browse it).
+  const [showArchivedList, setShowArchivedList] = useState(false);
+  const archivedConversationsQuery = useQuery({
+    queryKey: [...conversationKeys.all, "archived"],
+    queryFn: fetchArchivedConversations,
+    enabled: mounted && !isAuthOpen && showArchivedList,
+  });
+  const archivedConversations = archivedConversationsQuery.data ?? [];
 
   const artifactsQuery = useArtifacts(activeConversationId, mounted && !isAuthOpen);
   // Wrapped so the `?? []` fallback is referentially stable while data is
@@ -555,6 +568,45 @@ function AppPageInner() {
       throw err;
     }
   }, [conversations, queryClient]);
+
+  /** Hide a conversation without deleting it, or bring it back. */
+  const handleArchiveConversation = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const previous = conversations.find((c) => c.id === id);
+    queryClient.setQueryData<Conversation[]>(conversationKeys.all, (prev) =>
+      (prev ?? []).filter((c) => c.id !== id),
+    );
+    try {
+      await updateConversation(id, { is_archived: true });
+      toast.success("Conversation archived");
+      if (activeConversationId === id) handleNewChat();
+      await queryClient.invalidateQueries({
+        queryKey: [...conversationKeys.all, "archived"],
+      });
+    } catch (err) {
+      // Snap the row back: the archive did not happen server-side, so leaving it
+      // out of the sidebar would misreport the conversation's state.
+      if (previous) {
+        queryClient.setQueryData<Conversation[]>(conversationKeys.all, (prev) => [
+          previous,
+          ...(prev ?? []).filter((c) => c.id !== id),
+        ]);
+      }
+      toast.error(err instanceof Error ? err.message : "Could not archive conversation");
+    }
+  };
+
+  const handleRestoreConversation = async (id: string) => {
+    try {
+      await updateConversation(id, { is_archived: false });
+      toast.success("Conversation restored");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: conversationKeys.all }),
+      ]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not restore conversation");
+    }
+  };
 
   const autoTitleDoneRef = useRef<Set<string>>(new Set());
 
@@ -1073,6 +1125,12 @@ function AppPageInner() {
         onShareConversation={handleShareConversation}
         onRenameConversation={handleRenameConversation}
         onPinConversation={handlePinConversation}
+        onArchiveConversation={handleArchiveConversation}
+        archivedConversations={archivedConversations}
+        showArchived={showArchivedList}
+        onToggleArchived={() => setShowArchivedList((v) => !v)}
+        onRestoreConversation={handleRestoreConversation}
+        archivedLoading={archivedConversationsQuery.isPending && showArchivedList}
         activeTab={effectiveTab}
         setActiveTab={(tab) => {
           setActiveTab(tab);

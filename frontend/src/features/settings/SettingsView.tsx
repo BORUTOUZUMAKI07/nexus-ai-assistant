@@ -32,6 +32,7 @@ import {
 } from "@/lib/queries";
 import { AppearanceSettings } from "@/features/settings/AppearanceSettings";
 import { IntegrationsSettings } from "@/features/settings/IntegrationsSettings";
+import { AgentCapabilities } from "@/features/settings/AgentCapabilities";
 import { AUTOMATIC_MODEL_TIERS, MODELS, canonicalModelId, modelDisplayName } from "@/lib/models";
 
 export const SettingsView: React.FC = () => {
@@ -468,6 +469,9 @@ export const SettingsView: React.FC = () => {
 
       {/* Organizations + webhooks — the API surface with a UI at last */}
       <IntegrationsSettings />
+
+      {/* Tools + skills the agent actually runs with */}
+      <AgentCapabilities />
 
       {/* Persistent memories */}
       <div className="glass-panel p-6 space-y-4">

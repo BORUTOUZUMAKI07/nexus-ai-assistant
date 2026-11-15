@@ -607,6 +607,23 @@ export async function fetchConversations(
   return { items: data, total: data.length, page, size };
 }
 
+/**
+ * Archived conversations.
+ *
+ * `fetchConversations` hardcodes `archived=false`, so before this there was no
+ * way to see an archived chat again — and no UI to archive one either, even
+ * though the PATCH endpoint accepted `is_archived`.
+ */
+export async function fetchArchivedConversations(): Promise<Conversation[]> {
+  const res = await fetchWithRetry(
+    `${API_BASE}/conversations?limit=50&offset=0&archived=true`,
+    { headers: authHeaders() },
+    {},
+  );
+  if (!res.ok) throw new Error(`Fetch archived conversations failed: ${res.status}`);
+  return res.json();
+}
+
 export async function fetchConversation(
   id: string,
   retry: FetchRetryOptions = {}
@@ -1067,18 +1084,67 @@ export async function fetchCurrentUser(): Promise<SessionProbe> {
   }
 }
 
+/**
+ * Human-readable text for a cold-start 503.
+ *
+ * `parseError` surfaces the backend's machine detail, which is exactly right for
+ * an API client and useless to a person: the first sign-up after an idle period
+ * used to fail with the literal word "backend_timeout".
+ */
+function friendlyAuthError(err: Error): Error {
+  if (err.message === "backend_timeout" || err.message === "backend_unavailable") {
+    return new Error(
+      "Nexus is still waking up after being idle. We retried a few times — please try again in a moment."
+    );
+  }
+  return err;
+}
+
+/** Auth POSTs that survive a backend cold start.
+ *
+ * The proxy gives up on one upstream attempt after 55s, but a Render free-plan
+ * instance waking from idle can take longer than that, so a single POST turned a
+ * normal cold start into a hard failure for the first user. Retrying the *same*
+ * call (each attempt is its own request, so no platform timeout is exceeded)
+ * lets the second or third attempt land on a warm backend.
+ *
+ * Register is safe to repeat: if the first attempt actually created the account
+ * before the proxy gave up, the retry answers 409 and the caller falls through to
+ * login with the same credentials.
+ */
+async function authPostWithWakeRetry(
+  url: string,
+  payload: unknown,
+  attempts = 4,
+): Promise<Response> {
+  let last: Response | null = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const res = await nexusFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!TRANSIENT_STATUS.has(res.status)) return res;
+    last = res;
+    if (attempt < attempts) await sleep(Math.min(5000 * attempt, 20000));
+  }
+  return last as Response;
+}
+
 export async function registerUser(payload: {
   email: string;
   username: string;
   password: string;
   full_name?: string;
 }): Promise<{ id: string; email: string; username: string }> {
-  const res = await nexusFetch(`${API_BASE}/auth/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw await parseError(res, "Registration failed");
+  const res = await authPostWithWakeRetry(`${API_BASE}/auth/register`, payload);
+  if (!res.ok) {
+    const err = await parseError(res, "Registration failed");
+    // The status travels with the error: a 409 after a cold-start retry means the
+    // timeout swallowed a registration that did land, and the caller should sign
+    // in instead of reporting "registration failed".
+    throw Object.assign(friendlyAuthError(err), { status: res.status });
+  }
   return res.json();
 }
 
@@ -1086,15 +1152,11 @@ export async function loginUser(payload: {
   email: string;
   password: string;
 }): Promise<{ ok: boolean; retryAfter?: number }> {
-  const res = await nexusFetch(`${API_BASE}/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const res = await authPostWithWakeRetry(`${API_BASE}/auth/login`, payload);
   if (!res.ok) {
     const retryAfter = res.headers.get("Retry-After");
     throw Object.assign(
-      await parseError(res, "Invalid email or password"),
+      friendlyAuthError(await parseError(res, "Invalid email or password")),
       { retryAfter: retryAfter ? parseInt(retryAfter, 10) : undefined },
     );
   }
@@ -1666,8 +1728,14 @@ export interface OrgInvite {
   email?: string;
   role?: string;
   status?: string;
-  /** Built by the backend from APP_PUBLIC_URL; null outside development. */
+  expires_at?: string | null;
+  /**
+   * Built by the backend from APP_PUBLIC_URL and returned on create. It is the
+   * only delivery path when no mail provider is configured; when one is, the
+   * same link is emailed and `email_channel` says which channel was used.
+   */
   dev_accept_url?: string | null;
+  email_channel?: string | null;
 }
 
 export async function fetchOrganizations(): Promise<Organization[]> {
@@ -1683,6 +1751,60 @@ export async function createOrganization(name: string): Promise<Organization> {
     body: JSON.stringify({ name }),
   });
   if (!res.ok) throw await parseError(res, "Could not create organization");
+  return res.json();
+}
+
+export async function fetchOrganization(orgId: string): Promise<Organization & { member_count?: number }> {
+  const res = await nexusFetch(`${API_BASE}/orgs/${orgId}`, { headers: authHeaders() });
+  if (!res.ok) throw await parseError(res, "Could not load organization");
+  return res.json();
+}
+
+/** Rename / re-describe an organization the caller owns or administers. */
+export async function updateOrganization(
+  orgId: string,
+  patch: { name?: string; description?: string | null },
+): Promise<Organization> {
+  const res = await nexusFetch(`${API_BASE}/orgs/${orgId}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw await parseError(res, "Could not update organization");
+  return res.json();
+}
+
+/** Owner-only: deletes the organization, its memberships and its invites. */
+export async function deleteOrganization(orgId: string): Promise<void> {
+  const res = await nexusFetch(`${API_BASE}/orgs/${orgId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw await parseError(res, "Could not delete organization");
+}
+
+export interface OrgMember {
+  user_id: string;
+  email: string | null;
+  role: string;
+  joined_at: string | null;
+}
+
+export async function fetchOrganizationMembers(orgId: string): Promise<OrgMember[]> {
+  const res = await nexusFetch(`${API_BASE}/orgs/${orgId}/members`, { headers: authHeaders() });
+  if (!res.ok) throw await parseError(res, "Could not load members");
+  return res.json();
+}
+
+/**
+ * Invites already sent for one organization.
+ *
+ * Tokens are deliberately absent: the accept link is handed out once, when the
+ * invite is created, so this list cannot be used to replay one.
+ */
+export async function fetchOrganizationInvites(orgId: string): Promise<OrgInvite[]> {
+  const res = await nexusFetch(`${API_BASE}/orgs/${orgId}/invites`, { headers: authHeaders() });
+  if (!res.ok) throw await parseError(res, "Could not load invites");
   return res.json();
 }
 
@@ -1726,6 +1848,64 @@ export async function acceptOrganizationInvite(token: string): Promise<AcceptedI
   // The route returns the org it joined; the invite page names it in the
   // confirmation instead of saying a bare "joined" the user cannot verify.
   return (await res.json().catch(() => ({}))) as AcceptedInvite;
+}
+
+// ─── Prompt library & agent tools ───────────────────────────────────────────
+
+export interface PromptTemplate {
+  id: string;
+  title: string;
+  category: string;
+  system_prompt: string;
+  user_prompt_template: string | null;
+  input_variables: string[];
+  is_public: boolean;
+  version: number;
+}
+
+/**
+ * Templates the prompt library can insert into the composer.
+ *
+ * `backend/app/api/v1/prompts.py` served these with no BFF route, so the
+ * composer's "Prompt Library" was a hardcoded local constant that never matched
+ * what the server actually had.
+ */
+export async function fetchPromptTemplates(): Promise<PromptTemplate[]> {
+  const res = await nexusFetch(`${API_BASE}/prompts/templates`, { headers: authHeaders() });
+  if (!res.ok) throw await parseError(res, "Could not load prompt templates");
+  return res.json();
+}
+
+export function promptTemplateBody(tpl: PromptTemplate): string {
+  // Prefer the user-facing template: a system prompt is instructions to the
+  // model, not something a user should be pasting into their own message.
+  return (tpl.user_prompt_template || tpl.system_prompt || "").trim();
+}
+
+export interface AgentTool {
+  name: string;
+  description?: string;
+}
+
+export async function fetchAgentTools(): Promise<AgentTool[]> {
+  const res = await nexusFetch(`${API_BASE}/tools`, { headers: authHeaders() });
+  if (!res.ok) throw await parseError(res, "Could not load agent tools");
+  return res.json();
+}
+
+export interface AgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  is_system: boolean;
+  is_enabled: boolean;
+}
+
+export async function fetchAgentSkills(): Promise<AgentSkill[]> {
+  const res = await nexusFetch(`${API_BASE}/prompts/skills`, { headers: authHeaders() });
+  if (!res.ok) throw await parseError(res, "Could not load skills");
+  return res.json();
 }
 
 // ─── Outbound webhooks ─────────────────────────────────────────────────────

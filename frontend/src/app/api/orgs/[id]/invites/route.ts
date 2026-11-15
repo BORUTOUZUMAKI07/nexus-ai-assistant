@@ -4,9 +4,17 @@ import { proxyJson } from "@/lib/proxy";
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
- * Invite a colleague by email. The response carries an accept URL the owner
- * can hand over (built from the backend's public origin).
+ * Organization invites.
+ *
+ * GET lists the invites an owner/admin has already sent (tokens are never
+ * repeated — the accept link is handed out once, at creation). POST creates a
+ * new one.
  */
+export async function GET(_req: NextRequest, { params }: Ctx) {
+  const { id } = await params;
+  return proxyJson(`/orgs/${id}/invites`);
+}
+
 export async function POST(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
   let body: unknown;

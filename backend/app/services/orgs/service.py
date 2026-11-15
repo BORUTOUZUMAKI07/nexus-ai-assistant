@@ -109,6 +109,75 @@ class OrganizationService:
             "created_at": org.created_at.isoformat() if org.created_at else None,
         }
 
+    async def update(
+        self,
+        org_id: UUID,
+        actor_id: UUID,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> Organization | None:
+        """Rename / re-describe an organization the caller manages.
+
+        There was no edit path at all: the API only offered create, invite, leave
+        and delete, so a typo in an organization's name was permanent. Slug is
+        deliberately not editable — it is the unique handle other rows and links
+        are built from, and silently changing it would break existing invites.
+        """
+        org = await self._org(org_id)
+        if not org:
+            return None
+        actor_role = await self._role(org_id, actor_id)
+        if actor_role not in MANAGE_ROLES:
+            raise PermissionError("Only owners and admins can edit an organization.")
+        if name is not None:
+            cleaned = name.strip()
+            if not cleaned:
+                raise ValueError("Organization name must not be empty.")
+            org.name = cleaned
+        if description is not None:
+            org.description = description.strip() or None
+        org.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        self.session.add(org)
+        await self.session.commit()
+        await self.session.refresh(org)
+        logger.info("organization_updated", org_id=str(org_id), actor_id=str(actor_id))
+        return org
+
+    async def list_invites(self, org_id: UUID, actor_id: UUID) -> list[dict] | None:
+        """Pending invites for an organization the caller manages.
+
+        Tokens are never returned here: the accept link is handed out once, when
+        the invite is created. A list endpoint that repeated the token would make
+        every invite replayable by anyone who can read the list.
+        """
+        org = await self._org(org_id)
+        if not org:
+            return None
+        actor_role = await self._role(org_id, actor_id)
+        if actor_role not in MANAGE_ROLES:
+            raise PermissionError("Only owners and admins can view invites.")
+        rows = (await self.session.exec(
+            select(OrganizationInvite)
+            .where(OrganizationInvite.organization_id == org_id)
+            .order_by(OrganizationInvite.created_at.desc())
+        )).all()
+        expires_cutoff = datetime.now(UTC).replace(tzinfo=None)
+        return [
+            {
+                "id": str(invite.id),
+                "email": invite.email,
+                "role": invite.role,
+                "status": (
+                    "expired"
+                    if invite.status == "pending" and invite.expires_at < expires_cutoff
+                    else invite.status
+                ),
+                "expires_at": invite.expires_at.isoformat() if invite.expires_at else None,
+                "created_at": invite.created_at.isoformat() if invite.created_at else None,
+            }
+            for invite in rows
+        ]
+
     async def list_members(self, org_id: UUID) -> list[dict]:
         rows = (await self.session.exec(
             select(OrganizationMember, OrganizationMember.role)
