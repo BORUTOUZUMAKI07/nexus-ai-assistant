@@ -16,28 +16,37 @@ interface ModelComparisonProps {
 const NO_QUESTION = "Ask a question in the chat first — there is nothing to compare yet.";
 
 /**
- * Storage key for the single hidden conversation comparisons run in.
+ * Storage keys for the hidden conversations comparisons run in — one per pane.
  *
  * Comparison used to post with `conversationId: null`, and `/api/chat` creates a
  * conversation for an unknown id — so every comparison left two fresh "New Chat"
- * rows in the user's sidebar. One archived conversation, reused for every
- * comparison, keeps the transcript out of the sidebar without adding a
+ * rows in the user's sidebar. These two archived conversations are created once
+ * and reused, which keeps the transcript out of the sidebar without adding a
  * non-persisting code path to the whole run pipeline.
+ *
+ * One per pane, not one shared: the backend serialises concurrent runs per
+ * thread and answers the loser 409 (`backend_rejected_409`), so two panes on one
+ * conversation can never both stream.
  */
-const COMPARE_CONVERSATION_KEY = "nexus.compareConversationId";
+const COMPARE_CONVERSATION_KEYS = {
+  a: "nexus.compareConversationId.a",
+  b: "nexus.compareConversationId.b",
+} as const;
 
-function readCompareConversationId(): string | null {
+type CompareSlot = keyof typeof COMPARE_CONVERSATION_KEYS;
+
+function readCompareConversationId(slot: CompareSlot): string | null {
   try {
-    return window.localStorage.getItem(COMPARE_CONVERSATION_KEY);
+    return window.localStorage.getItem(COMPARE_CONVERSATION_KEYS[slot]);
   } catch {
     return null;
   }
 }
 
-function rememberCompareConversationId(id: string | null): void {
+function rememberCompareConversationId(slot: CompareSlot, id: string | null): void {
   try {
-    if (id) window.localStorage.setItem(COMPARE_CONVERSATION_KEY, id);
-    else window.localStorage.removeItem(COMPARE_CONVERSATION_KEY);
+    if (id) window.localStorage.setItem(COMPARE_CONVERSATION_KEYS[slot], id);
+    else window.localStorage.removeItem(COMPARE_CONVERSATION_KEYS[slot]);
   } catch {
     // Private-mode storage failures are not worth failing a comparison over.
   }
@@ -51,8 +60,11 @@ function rememberCompareConversationId(id: string | null): void {
  * creation fails, which falls back to the previous auto-create behaviour rather
  * than breaking comparison.
  */
-async function resolveCompareConversation(signal: AbortSignal): Promise<string | null> {
-  const cached = readCompareConversationId();
+async function resolveCompareConversation(
+  slot: CompareSlot,
+  signal: AbortSignal,
+): Promise<string | null> {
+  const cached = readCompareConversationId(slot);
   if (cached) return cached;
   try {
     const created = await fetch("/api/conversations", {
@@ -70,7 +82,7 @@ async function resolveCompareConversation(signal: AbortSignal): Promise<string |
       body: JSON.stringify({ is_archived: true }),
       signal,
     });
-    rememberCompareConversationId(conversation.id);
+    rememberCompareConversationId(slot, conversation.id);
     return conversation.id;
   } catch {
     return null;
@@ -103,11 +115,13 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
     }
 
     async function runComparison() {
-      // Both panes share one hidden, archived conversation, so a comparison adds
-      // nothing to the sidebar.
-      const compareConversationId = await resolveCompareConversation(
-        aborterRef.current!.signal,
-      ).catch(() => null);
+      // Each pane streams into its own hidden, archived conversation, so a
+      // comparison adds nothing to the sidebar — and the two panes do not
+      // contend for the backend's per-thread stream lock.
+      const [conversationIdA, conversationIdB] = await Promise.all([
+        resolveCompareConversation("a", aborterRef.current!.signal).catch(() => null),
+        resolveCompareConversation("b", aborterRef.current!.signal).catch(() => null),
+      ]);
 
       /**
        * Stream one model's answer into its pane.
@@ -121,6 +135,8 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
        */
       const run = async (
         model: string,
+        conversationId: string | null,
+        slot: CompareSlot,
         setResp: (s: string | ((prev: string) => string)) => void,
         setErr: (e: string | null) => void,
         setLoad: (l: boolean) => void,
@@ -133,17 +149,17 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
             // else is rejected by its own validation before it forwards.
             body: JSON.stringify({
               messages: [{ role: "user", content: question }],
-              conversationId: compareConversationId,
+              conversationId,
               mode: "normal",
               model,
             }),
             signal: aborterRef.current!.signal,
           });
-          if (res.status === 404 && compareConversationId) {
+          if (res.status === 404 && conversationId) {
             // The stored comparison conversation was deleted (or belongs to a
             // previous session's account). Forget it so the next comparison
             // creates a fresh one instead of 404ing forever.
-            rememberCompareConversationId(null);
+            rememberCompareConversationId(slot, null);
           }
           if (!res.ok) {
             const detail = await res.text();
@@ -198,8 +214,8 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
       };
 
       await Promise.all([
-        run(modelA, setResponseA, setErrorA, setLoadingA),
-        run(modelB, setResponseB, setErrorB, setLoadingB),
+        run(modelA, conversationIdA, "a", setResponseA, setErrorA, setLoadingA),
+        run(modelB, conversationIdB, "b", setResponseB, setErrorB, setLoadingB),
       ]);
     }
 

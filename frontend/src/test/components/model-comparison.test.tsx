@@ -33,13 +33,18 @@ function streamOf(text: string): ReadableStream<Uint8Array> {
 describe("ModelComparison", () => {
   const chatBodies: ChatBody[] = [];
   const originalFetch = globalThis.fetch;
+  let created = 0;
 
   beforeEach(() => {
     chatBodies.length = 0;
+    created = 0;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.startsWith("/api/conversations") && init?.method === "POST") {
-        return new Response(JSON.stringify({ id: "conv-compare" }), { status: 201 });
+        created += 1;
+        return new Response(JSON.stringify({ id: `conv-compare-${created}` }), {
+          status: 201,
+        });
       }
       if (url.startsWith("/api/conversations/") && init?.method === "PATCH") {
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -75,10 +80,11 @@ describe("ModelComparison", () => {
     const models = chatBodies.map((body) => body.model);
     expect(models).toEqual([MODELS[1].id, MODELS[0].id]);
     expect(new Set(models).size).toBe(2);
-    // Both panes are the same question in the same hidden conversation, so the
-    // transcript only ever gains one conversation row.
-    expect(chatBodies[0].conversationId).toBe("conv-compare");
-    expect(chatBodies[1].conversationId).toBe("conv-compare");
+    // Each pane streams into its own hidden conversation: the backend serialises
+    // runs per thread, and two panes on one thread answered the loser 409.
+    expect(chatBodies[0].conversationId).toBe("conv-compare-1");
+    expect(chatBodies[1].conversationId).toBe("conv-compare-2");
+    expect(chatBodies[0].conversationId).not.toBe(chatBodies[1].conversationId);
 
     await waitFor(() => expect(screen.getAllByText("answer")).toHaveLength(2));
   });
@@ -88,7 +94,10 @@ describe("ModelComparison", () => {
       <ModelComparison onClose={() => {}} question="Explain RAG" modelA={MODELS[1].id} modelB={MODELS[0].id} />
     );
     await waitFor(() => expect(chatBodies.length).toBe(2));
-    expect(window.localStorage.getItem("nexus.compareConversationId")).toBe("conv-compare");
+    // One archived conversation per pane, created once.
+    expect(created).toBe(2);
+    expect(window.localStorage.getItem("nexus.compareConversationId.a")).toBe("conv-compare-1");
+    expect(window.localStorage.getItem("nexus.compareConversationId.b")).toBe("conv-compare-2");
     unmount();
 
     // A second comparison reuses it instead of creating another conversation.
