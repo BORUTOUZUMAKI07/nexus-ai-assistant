@@ -4,6 +4,7 @@ import * as React from "react";
 import { Sliders, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { modelDisplayName } from "@/lib/models";
 
 interface ModelComparisonProps {
   onClose: () => void;
@@ -249,16 +250,20 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
           {/* Side-by-side panels */}
           <div className="flex-1 flex overflow-hidden">
             <ModelComparisonPanel
-              label={modelA}
-              badge="fast_chat"
+              // Labelled from the catalog, not from the id: the pane used to
+              // hardcode badge="fast_chat" / "complex_reasoning" beside a
+              // caller-supplied label, so the two could disagree about which
+              // model had answered.
+              label={modelDisplayName(modelA) ?? modelA}
+              badge={modelA}
               response={responseA}
               loading={loadingA}
               error={errorA}
             />
             <div className="w-px bg-[var(--border-subtle)] self-stretch" />
             <ModelComparisonPanel
-              label={modelB}
-              badge="complex_reasoning"
+              label={modelDisplayName(modelB) ?? modelB}
+              badge={modelB}
               response={responseB}
               loading={loadingB}
               error={errorB}

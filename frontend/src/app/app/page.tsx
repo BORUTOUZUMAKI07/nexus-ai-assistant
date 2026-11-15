@@ -60,7 +60,7 @@ import {
   type CachedArtifact,
 } from "@/lib/queries";
 import { useNexusChat, NexusMessage } from "@/hooks/useNexusChat";
-import { DEFAULT_MODEL_ID, canonicalModelId } from "@/lib/models";
+import { DEFAULT_MODEL_ID, MODELS, canonicalModelId } from "@/lib/models";
 import { resolveConversationMode } from "@/lib/chatMode";
 
 /**
@@ -1336,8 +1336,13 @@ function AppPageInner() {
               <ModelComparison
                 onClose={() => setComparisonOpen(false)}
                 question={comparisonQuestion}
-                modelA="gpt-4o-mini"
-                modelB="gpt-4o"
+                // Real router groups, not placeholder provider names. These were
+                // the literals "gpt-4o-mini" and "gpt-4o", which the backend's
+                // whitelist does not know, so BOTH panes fell back to the same
+                // default model — a comparison of one model with itself, shown
+                // under two different labels.
+                modelA={MODELS[1].id}
+                modelB={MODELS[0].id}
               />
             )}
           </div>
