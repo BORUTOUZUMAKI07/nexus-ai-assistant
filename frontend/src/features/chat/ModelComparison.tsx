@@ -26,6 +26,16 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
     aborterRef.current = new AbortController();
 
     async function runComparison() {
+      /**
+       * Stream one model's answer into its pane.
+       *
+       * The bodies on this wire are the Vercel AI SDK data-stream frames that
+       * `/api/chat` relays -- `0:` text, `3:` error, `8:` annotations -- not the
+       * `{type: "text_delta"}` objects the backend emits. This used to parse for
+       * the backend's shape and post the backend's field names (`message`,
+       * `conversation_id`), so both panes were answered with a 400 that nothing
+       * read: they rendered "Generating response…" forever. Measured live.
+       */
       const run = async (
         model: string,
         setResp: (s: string | ((prev: string) => string)) => void,
@@ -36,40 +46,64 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
           const res = await fetch("/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            // The relay's contract: a `messages` array and a `model`. Anything
+            // else is rejected by its own validation before it forwards.
             body: JSON.stringify({
-              message: question,
+              messages: [{ role: "user", content: question }],
+              conversationId: null,
+              mode: "normal",
               model,
-              conversation_id: null,
             }),
             signal: aborterRef.current!.signal,
           });
+          if (!res.ok) {
+            const detail = await res.text();
+            setErr(
+              `Chat API error ${res.status}: ${detail.slice(0, 300) || res.statusText}`
+            );
+            return;
+          }
           const reader = res.body?.getReader();
+          if (!reader) {
+            setErr("Comparison stream unavailable");
+            return;
+          }
           const decoder = new TextDecoder();
           let buffer = "";
-          while (reader) {
+          for (;;) {
             const { value, done } = await reader.read();
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split("\n");
             buffer = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              try {
-                const parsed = JSON.parse(line);
-                if (parsed.type === "text_delta") {
-                  setResp((prev: string) => prev + (parsed.content ?? ""));
+            for (const raw of lines) {
+              const line = raw.trim();
+              if (!line) continue;
+              const payload = line.slice(line.indexOf(":") + 1).trim();
+              if (line.startsWith("0:")) {
+                try {
+                  const chunk = JSON.parse(payload);
+                  if (typeof chunk === "string") {
+                    setResp((prev: string) => prev + chunk);
+                  }
+                } catch {
+                  // A text frame that is not a JSON string carries nothing to show.
                 }
-                if (parsed.type === "done") {
-                  setLoad(false);
+              } else if (line.startsWith("3:")) {
+                try {
+                  setErr(String(JSON.parse(payload)));
+                } catch {
+                  setErr(payload || "Comparison failed");
                 }
-              } catch {
-                // ignore malformed frames
               }
             }
           }
         } catch (err) {
           if ((err as Error).name === "AbortError") return;
           setErr(err instanceof Error ? err.message : "Comparison failed");
+        } finally {
+          // The stream closing is the end of this pane, whether the last frame
+          // was an answer, an error, or nothing at all.
           setLoad(false);
         }
       };
@@ -179,10 +213,11 @@ function ModelComparisonPanel({ label, badge, response, loading, error }: ModelC
               </div>
             )}
             {!error && (
-              <div
-                className="text-sm text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap break-words"
-                dangerouslySetInnerHTML={{ __html: response.replace(/\n/g, "<br>") }}
-              />
+              // Rendered as text, not HTML: this is model output, and a model
+              // that emits `<img onerror=…>` would otherwise execute it here.
+              <div className="text-sm text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap break-words">
+                {response}
+              </div>
             )}
             {loading && !error && (
               <div className="flex h-16 items-center justify-center text-[var(--text-muted)] text-xs italic">

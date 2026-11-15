@@ -17,7 +17,11 @@ export async function GET() {
     method: "GET",
     headers: { "Content-Type": "application/json" },
   });
-  const ready = backend.status !== 503;
+  // Any non-2xx from the backend means this instance cannot serve requests, so
+  // an upstream 500/502 must not be reported as "ready" -- that hid a real
+  // outage behind a green health check. `backend.status >= 400` keeps the
+  // same no-restart-storm behaviour while telling the truth.
+  const ready = backend.status >= 200 && backend.status < 400;
   return Response.json(
     { status: ready ? "ready" : "degraded", timestamp: Date.now() },
     { status: ready ? 200 : 503, headers: { "Cache-Control": "no-store" } }

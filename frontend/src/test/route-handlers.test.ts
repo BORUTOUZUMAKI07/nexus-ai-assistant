@@ -205,7 +205,10 @@ interface BackendCall {
  * and an exception table means quietly changing one of them now fails this
  * test instead of drifting unnoticed.
  */
-const EXCEPTIONS: Record<string, { backendPath?: string; directFetch?: boolean }> = {
+const EXCEPTIONS: Record<
+  string,
+  { backendPath?: string; backendPathByMethod?: Record<string, string>; directFetch?: boolean }
+> = {
   // These need the raw response body (streaming, multipart, binary), so they
   // call fetch() directly instead of going through the proxy helpers.
   "/api/chat": { directFetch: true },
@@ -220,6 +223,9 @@ const EXCEPTIONS: Record<string, { backendPath?: string; directFetch?: boolean }
   // while the BFF path reads like the resource it belongs to. The backend
   // path is the truth here, not the derived one.
   "/api/conversations/[id]/share": { backendPath: "/shares/test-id" },
+  // Account deletion lives at /account, but the read side is the export
+  // endpoint, so this one route has a different backend path per method.
+  "/api/account": { backendPathByMethod: { GET: "/account/export" } },
 }
 
 /** True when the route is expected to bypass the proxy helpers. */
@@ -447,7 +453,10 @@ describe("every route forwards to the backend under the correct path", () => {
 
     for (const { route, file } of ROUTES) {
       const mod = await loadRoute(file)
-      const expected = EXCEPTIONS[route]?.backendPath ?? expectedBackendPath(route)
+      const expectedFor = (method: string) =>
+        EXCEPTIONS[route]?.backendPathByMethod?.[method] ??
+        EXCEPTIONS[route]?.backendPath ??
+        expectedBackendPath(route)
 
       // Raw-fetch routes derive the backend path from the request body
       // (conversation id, thread id), so only helper-based relays have a
@@ -463,6 +472,7 @@ describe("every route forwards to the backend under the correct path", () => {
             routeContext(route),
           ),
         )
+        const expected = expectedFor(method)
         for (const c of calls) {
           // Relays may append a query string they built from the request.
           if (c.path.split("?")[0] !== expected) {

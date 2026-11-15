@@ -472,6 +472,49 @@ describe("per-message actions", () => {
     expect(result.current.messages.some((m) => m.content === "draft question")).toBe(false)
   })
 
+  it("a retry re-asks the persisted prompt by id instead of storing it twice", async () => {
+    // The Retry button calls `reload()`. Like an edit it re-asks a turn the
+    // server already holds, so it must name that row. Without the reuse id the
+    // stream route appended a second copy of the question: after one failed
+    // web-search turn the transcript (and the database) held the same prompt
+    // twice with two different answers -- measured on the deployed app.
+    serveTwoTurns()
+    let reuseId: unknown
+    let payloadUserTurns: string[] = []
+    server.use(
+      http.post("/api/chat", async ({ request }) => {
+        const body = (await request.json()) as {
+          messages?: Array<{ role: string; content: string }>
+          reuseUserMessageId?: unknown
+        }
+        reuseId = body.reuseUserMessageId
+        payloadUserTurns = (body.messages ?? [])
+          .filter((m) => m.role === "user")
+          .map((m) => m.content)
+        return new HttpResponse(chatStreamBody(["Paris."]), {
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        })
+      })
+    )
+
+    const { result } = renderHook(() => useNexusChat({ conversationId: CONV }))
+    await hydrated(result)
+
+    await act(async () => {
+      await result.current.reload()
+    })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(reuseId).toBe(USER_MSG)
+    const shown = result.current.messages.filter(
+      (m) => m.role === "user" && m.content === "what is the capital of France"
+    )
+    expect(shown).toHaveLength(1)
+    expect(
+      payloadUserTurns.filter((t) => t === "what is the capital of France")
+    ).toHaveLength(1)
+  })
+
   // ── regenerate ──────────────────────────────────────────────────────────
 
   it("regenerates from the *stored* prompt the server returns, not the client copy", async () => {

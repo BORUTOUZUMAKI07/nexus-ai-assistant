@@ -865,7 +865,13 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     if (!lastUser) return;
     const idx = msgs.findIndex((m) => m.id === lastUser.id);
     updateMessages(() => msgs.slice(0, idx + 1));
-    await sendMessage(lastUser.content);
+    // The prompt is already persisted, so the resend adopts that row instead of
+    // storing a second copy of it. Without the reuse id a retry (the usual path
+    // after a stream that died mid-answer) left the question in the transcript
+    // and in the database twice -- measured live.
+    await sendMessage(lastUser.content, {
+      ...(isServerId(lastUser.id) ? { reuseUserMessageId: lastUser.id } : {}),
+    });
   }, [sendMessage, updateMessages, clearQueued]);
 
   // ── Message actions (delete / edit / regenerate / branch) ────────────────

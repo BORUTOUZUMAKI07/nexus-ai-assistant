@@ -40,7 +40,10 @@ async def create_share_link(
         raise HTTPException(status_code=404, detail=str(exc))
     return {
         "token": share.token,
-        "url": f"{settings.APP_PUBLIC_URL}/share/{share.token}",
+        # APP_PUBLIC_URL may carry a trailing slash (the deployed value does),
+        # and joining naively produced "https://host//share/<token>" -- a URL
+        # users actually hand out. Same guard as the invite and OAuth links.
+        "url": f"{settings.APP_PUBLIC_URL.rstrip('/')}/share/{share.token}",
         "expires_at": share.expires_at.isoformat() if share.expires_at else None,
     }
 
@@ -55,7 +58,7 @@ async def list_share_links(
     return [
         {
             "token": s.token,
-            "url": f"{settings.APP_PUBLIC_URL}/share/{s.token}",
+            "url": f"{settings.APP_PUBLIC_URL.rstrip('/')}/share/{s.token}",
             "expires_at": s.expires_at.isoformat() if s.expires_at else None,
         }
         for s in shares

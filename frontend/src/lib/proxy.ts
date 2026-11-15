@@ -43,6 +43,24 @@ const BACKEND_URL =
  */
 const UPSTREAM_TIMEOUT_MS = 55_000;
 
+/**
+ * Statuses worth one more attempt, and how long a failed attempt may have taken
+ * to qualify.
+ *
+ * The deployed backend (Render, free plan) returns a bare 502/503 for a minute
+ * or two at a time while the instance is being replaced or woken; the request
+ * never reached the app, so re-sending it is safe and usually succeeds within
+ * milliseconds. Only a *fast* failure is retried: a slow one is the 55s timeout,
+ * and a second 55s attempt cannot fit inside the platform's 60s function
+ * ceiling -- it would turn a legible `backend_timeout` into a platform 504.
+ */
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+const RETRY_IF_ATTEMPT_UNDER_MS = 5_000;
+const RETRY_DELAY_MS = 400;
+
+/** Only methods a duplicate request cannot damage may be retried. */
+const IDEMPOTENT_METHODS = new Set(["GET", "HEAD"]);
+
 /** Verbs that can change server state and therefore need an origin check. */
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -125,12 +143,29 @@ export async function backendFetch(
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
+  const url = `${BACKEND_URL}/api/v1${path}`;
+  const mayRetry = IDEMPOTENT_METHODS.has(method) && !init?.signal;
+
   try {
-    return await fetch(`${BACKEND_URL}/api/v1${path}`, {
-      ...init,
-      headers,
-      signal: init?.signal ?? AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    });
+    for (let attempt = 1; ; attempt += 1) {
+      const startedAt = Date.now();
+      const res = await fetch(url, {
+        ...init,
+        headers,
+        signal: init?.signal ?? AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      });
+      if (
+        !mayRetry ||
+        attempt > 1 ||
+        !RETRYABLE_STATUS.has(res.status) ||
+        Date.now() - startedAt > RETRY_IF_ATTEMPT_UNDER_MS
+      ) {
+        return res;
+      }
+      // Drain the discarded body so the socket is released before retrying.
+      await res.text().catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    }
   } catch (err) {
     // A timeout is a real, reportable condition, and it must be distinguishable
     // from "the backend is not running" so the 503 does not send an operator
