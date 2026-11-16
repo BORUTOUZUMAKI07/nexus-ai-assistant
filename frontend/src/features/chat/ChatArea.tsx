@@ -428,7 +428,11 @@ const PlanReviewCard: React.FC<{
   );
 };
 
-const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, code }) => {
+const CodeBlock: React.FC<{
+  language: string;
+  code: string;
+  onOpenArtifact?: (artifact: ArtifactItem) => void;
+}> = ({ language, code, onOpenArtifact }) => {
   const [copied, copyCode] = useCopyToggle();
 
   const handleCopyCode = () => copyCode(code);
@@ -446,23 +450,42 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
             {language || "code"}
           </span>
         </span>
-        <button
-          onClick={handleCopyCode}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer text-[11px] font-sans"
-          title="Copy code"
-        >
-          {copied ? (
-            <>
-              <Check className="w-3.5 h-3.5 text-[var(--status-success)]" />
-              <span className="text-[var(--status-success)]">Copied!</span>
-            </>
-          ) : (
-            <>
-              <Copy className="w-3.5 h-3.5" />
-              <span>Copy</span>
-            </>
+        <div className="flex items-center gap-1.5">
+          {onOpenArtifact && (
+            <button
+              onClick={() =>
+                onOpenArtifact({
+                  id: `snippet-${Date.now()}`,
+                  title: `${(language || "code").toUpperCase()} Snippet`,
+                  language: language || "text",
+                  content: code,
+                })
+              }
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-white/10 transition-colors cursor-pointer text-[11px] font-sans"
+              title="Open code in interactive Canvas"
+            >
+              <FileCode className="w-3.5 h-3.5" />
+              <span>Canvas</span>
+            </button>
           )}
-        </button>
+          <button
+            onClick={handleCopyCode}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer text-[11px] font-sans"
+            title="Copy code"
+          >
+            {copied ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-[var(--status-success)]" />
+                <span className="text-[var(--status-success)]">Copied!</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5" />
+                <span>Copy</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
       <div className="px-5 py-4 overflow-x-auto">
         <SyntaxHighlighterBlock language={language || "text"}>
@@ -614,7 +637,10 @@ const TableBlock: React.FC<{ rows: string[][] }> = ({ rows }) => {
  * Shared with `app/share/[token]` so a public share link renders the same way
  * the app does instead of as raw markdown.
  */
-export const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
+export const MarkdownRenderer: React.FC<{
+  content: string;
+  onOpenArtifact?: (artifact: ArtifactItem) => void;
+}> = ({ content, onOpenArtifact }) => {
   // Regex to split on code fences
   const parts = content.split(/(```[\w-]*\n[\s\S]*?```)/g);
 
@@ -659,7 +685,7 @@ export const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => 
           if (lang.toLowerCase() === "mermaid") {
             return <MermaidBlock key={key} code={codeText} />;
           }
-          return <CodeBlock key={key} language={lang} code={codeText} />;
+          return <CodeBlock key={key} language={lang} code={codeText} onOpenArtifact={onOpenArtifact} />;
         }
 
         // Detect and group Markdown tables
@@ -1332,7 +1358,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   )
                 ) : (
                   <>
-                    <MarkdownRenderer content={msg.content} />
+                    <MarkdownRenderer content={msg.content} onOpenArtifact={onOpenArtifact} />
                     {/* Inline citation chips directly under the answer text so
                         the source is adjacent to the claim, not hidden in a
                         drawer. The full citation list remains below for
