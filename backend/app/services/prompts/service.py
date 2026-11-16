@@ -98,23 +98,38 @@ class PromptService:
         # First look, empty library: materialise the starter set so the feature is
         # usable on a fresh account. Fail-open — a seed failure must not turn the
         # prompt library endpoint into an error.
+        #
+        # The emptiness check and the insert are one critical section. Two tabs
+        # that open a fresh account at the same time both see an empty library,
+        # and without the lock both seed it: the user gets eight starters, then
+        # twelve on the next pair of loads. The lock serialises them and the batch
+        # insert commits once, so the second request sees the first request's rows
+        # and seeds nothing.
         try:
-            for starter in _STARTER_TEMPLATES:
-                await self._repo.create_template(
-                    user_id=user_id,
-                    title=str(starter["title"]),
-                    category=str(starter["category"]),
-                    system_prompt=str(starter["system_prompt"]),
-                    user_prompt_template=str(starter["user_prompt_template"]),
-                    input_variables=list(starter["input_variables"]),  # type: ignore[arg-type]
-                    is_public=False,
+            await self._repo.lock_library_seeding(user_id)
+            if await self._repo.get_templates(user_id=user_id, include_public=False):
+                return await self._repo.get_templates(
+                    user_id=user_id, include_public=include_public
                 )
+            await self._repo.create_templates_atomic(user_id, list(_STARTER_TEMPLATES))
             templates = await self._repo.get_templates(
                 user_id=user_id, include_public=include_public
             )
             logger.info("prompt_starters_seeded", user_id=str(user_id), count=len(templates))
         except Exception as exc:
             logger.warning("prompt_starter_seed_failed", error=type(exc).__name__)
+            # A failed seed must answer with whatever the library holds *now*, not
+            # with the empty list this request read before it tried to seed: that
+            # stale value is what a racing request returned in the concurrent run,
+            # so a seeded library looked empty to the user who triggered it.
+            try:
+                templates = await self._repo.get_templates(
+                    user_id=user_id, include_public=include_public
+                )
+            except Exception as read_exc:
+                logger.warning(
+                    "prompt_library_reread_failed", error=type(read_exc).__name__
+                )
         return templates
 
     async def create_template(self, user_id: UUID, template_in: PromptTemplateCreate):

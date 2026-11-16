@@ -162,3 +162,39 @@ async def test_prompt_template_bounds_system_prompt(client, user_auth_headers):
         headers=user_auth_headers,
     )
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_parallel_first_loads_do_not_duplicate_starters(session_factory, test_user):
+    """Concurrent first loads seed the starters exactly once.
+
+    Seeding is check-then-act: read the user's templates, and if there are none,
+    insert the starter set. Two tabs opening a brand-new account at the same
+    moment both read an empty library, and without a critical section both
+    insert — the account ends up with duplicates of every starter, and the same
+    pair of loads doubles them again. This asserts the account, not the response:
+    four templates, no repeats, whichever request got there first.
+    """
+    import asyncio
+
+    from backend.app.domain.prompt.repository import PromptRepository
+    from backend.app.services.prompts.service import PromptService
+
+    async def load():
+        async with session_factory() as session:
+            return await PromptService(session).list_templates(
+                test_user.id, include_public=False
+            )
+
+    results = await asyncio.gather(load(), load(), load(), load())
+
+    async with session_factory() as session:
+        rows = await PromptRepository(session).get_templates(
+            test_user.id, include_public=False
+        )
+
+    titles = [r.title for r in rows]
+    assert len(titles) == 4, f"expected the four starters once, got {titles}"
+    assert len(set(titles)) == len(titles), f"duplicate starters: {titles}"
+    for listed in results:
+        assert len(listed) == 4, [t.title for t in listed]
