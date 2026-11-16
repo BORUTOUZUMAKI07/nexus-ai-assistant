@@ -232,6 +232,12 @@ class AccountService:
 
         # 6. User-scoped rows.
         await self.session.exec(delete(UserMemory).where(UserMemory.user_id == user_id))
+        try:
+            from backend.app.services.memory.long_term import long_term_memory
+
+            await long_term_memory.delete_all_for_user(user_id)
+        except Exception as exc:
+            logger.warning("mem0_account_erasure_failed", user_id=str(user_id), error=str(exc))
         await self.session.exec(delete(APIKey).where(APIKey.user_id == user_id))
         await self.session.exec(delete(UserSettings).where(UserSettings.user_id == user_id))
 

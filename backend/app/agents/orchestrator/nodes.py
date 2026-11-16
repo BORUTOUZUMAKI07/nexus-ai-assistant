@@ -128,6 +128,47 @@ async def _mirror_memories_to_table(
         logger.warning("memory_mirror_failed_non_blocking", user_id=str(user_id), error=str(exc))
         return 0
 
+async def _reinforce_memories_background(
+    user_id: str,
+    recalled_items: list[dict[str, Any]],
+) -> None:
+    """Record a successful recall in the background to reinforce memory confidence."""
+    from backend.app.domain.user.repository import UserRepository
+    from backend.app.infrastructure.database.session import async_session_factory
+
+    try:
+        _ = UUID(str(user_id))
+    except (ValueError, TypeError, AttributeError):
+        return
+
+    db_ids: list[UUID] = []
+    mem0_ids: list[str] = []
+    for item in recalled_items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("db_id"):
+            try:
+                db_ids.append(UUID(str(item["db_id"])))
+            except (ValueError, TypeError):
+                pass
+        elif item.get("id"):
+            try:
+                db_ids.append(UUID(str(item["id"])))
+            except (ValueError, TypeError):
+                mem0_ids.append(str(item["id"]))
+
+    try:
+        async with async_session_factory() as session:
+            repo = UserRepository(session)
+            if mem0_ids:
+                resolved_ids = await repo.find_memory_ids_by_mem0_ids(mem0_ids)
+                db_ids.extend(resolved_ids)
+            if db_ids:
+                count = await repo.reinforce_memories(db_ids)
+                logger.info("recalled_memories_reinforced", user_id=user_id, count=count)
+    except Exception as exc:
+        logger.warning("reinforce_memories_failed_non_blocking", error=str(exc))
+
 
 def _has_image_content(content: Any) -> bool:
     """Checks if message content has any image_url or image components."""
@@ -518,6 +559,7 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
         "system_prompt": base_system_prompt,
         "active_skills": state.get("active_skills") or [],
         "user_memories": state.get("user_memories") or [],
+        "recalled_memories": state.get("recalled_memories") or [],
         "plan": state.get("plan"),
         "current_step": state.get("current_step", 0),
         "task_type": state.get("task_type", "general"),
@@ -587,21 +629,24 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
 
     # â”€â”€ Load long-term memories relevant to this query (mem0 semantic search) â”€â”€
     memory_block = ""
+    recalled_items: list[dict[str, Any]] = []
     if user_id:
-        memory_block = await long_term_memory.build_memory_context_block(
+        memory_block, recalled_items = await long_term_memory.build_memory_context_block_with_ids(
             query=last_user_msg,
             user_id=user_id,
             limit=8,
+            agent_id="nexus-planner",
+            run_id=str(state.get("conversation_id") or ""),
         )
         if memory_block:
-            logger.info("mem0_memories_loaded_for_planner", user_id=user_id)
+            logger.info("mem0_memories_loaded_for_planner", user_id=user_id, count=len(recalled_items))
 
     # Fast mode is a single direct answer: `route_after_planner` sends it straight
     # to the synthesizer, so planning (and with it the orchestrator, subagents,
     # tools and retrieval) is dropped. The memory block loaded above is kept, so
     # fast mode still personalises; only the multi-step machinery is skipped.
     if state.get("mode") == "fast":
-        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else []}
+        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items}
 
     # Determine if planning is needed
     # Cheap pre-check: skip the planner LLM round-trip entirely for short,
@@ -613,7 +658,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         and not any(tok in last_user_msg.lower() for tok in _STEP_TRIGGER_KEYWORDS)
     )
     if _short_instruction:
-        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else []}
+        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items}
 
     plan_prompt = (
         f"Analyze this user request:\n'{last_user_msg}'\n\n"
@@ -628,11 +673,11 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     )
 
     if "DIRECT" in plan_response.upper():
-        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else []}
+        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items}
 
     steps = [line.strip() for line in plan_response.split("\n") if line.strip()]
     logger.info("planner_generated_steps", step_count=len(steps))
-    return {"plan": steps, "current_step": 0, "user_memories": [memory_block] if memory_block else []}
+    return {"plan": steps, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items}
 
 
 # â”€â”€ ARQ: Attentive Reasoning Query flags â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1750,6 +1795,14 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             logger.warning("confidence_action_failed_open", error=str(exc))
 
     # â”€â”€ Save new memories from this exchange via mem0 (background, non-blocking) â”€â”€
+    # ── Reinforce recalled memories in background (confidence reinforcement) ──
+    recalled_memories = state.get("recalled_memories", [])
+    if user_id and recalled_memories:
+        try:
+            asyncio.create_task(_reinforce_memories_background(user_id, recalled_memories))
+        except Exception as exc:
+            logger.warning("reinforce_memories_task_failed", error=str(exc))
+
     memory_decision = should_persist_memory(last_user_content, response_text)
     if user_id and memory_decision.should_write:
         exchange = [
@@ -1761,6 +1814,8 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
                 messages=exchange,
                 user_id=user_id,
                 metadata={"conversation_id": state.get("conversation_id", "")},
+                agent_id="nexus-assistant",
+                run_id=str(state.get("conversation_id") or ""),
             )
             # Reconcile into the durable local table. Previously mem0 and
             # user_memories were two stores of the same facts that never

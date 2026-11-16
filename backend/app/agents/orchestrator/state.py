@@ -24,6 +24,7 @@ class AgentState(TypedDict):
     system_prompt: str
     active_skills: list[str]
     user_memories: list[str]
+    recalled_memories: list[dict[str, Any]]
 
     # Planning & Task Contracts
     plan: list[str] | None

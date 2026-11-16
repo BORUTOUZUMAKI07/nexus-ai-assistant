@@ -4,6 +4,7 @@ Repository for User Domain operations.
 from datetime import UTC, datetime
 from uuid import UUID
 
+import structlog
 from backend.app.core.security import encrypt_api_key, get_password_hash
 from backend.app.domain.base_repository import BaseRepository
 from backend.app.domain.user.models import APIKey, User, UserMemory, UserSettings
@@ -17,6 +18,8 @@ from backend.app.services.memory.lifecycle import (
 )
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+logger = structlog.get_logger(__name__)
 
 
 class UserRepository(BaseRepository[User]):
@@ -159,6 +162,26 @@ class UserRepository(BaseRepository[User]):
         result = await self.session.exec(statement)
         return result.first()
 
+    async def get_memory_by_id(self, user_id: UUID, memory_id: UUID) -> UserMemory | None:
+        """Fetch a single memory owned by user_id."""
+        statement = select(UserMemory).where(
+            UserMemory.id == memory_id,
+            UserMemory.user_id == user_id,
+        )
+        result = await self.session.exec(statement)
+        return result.first()
+
+    async def find_memory_ids_by_mem0_ids(self, mem0_ids: list[str]) -> list[UUID]:
+        """Look up local memory UUIDs for a list of mem0 IDs."""
+        if not mem0_ids:
+            return []
+        statement = select(UserMemory.id).where(
+            UserMemory.mem0_id.in_(mem0_ids),
+            UserMemory.is_active == True,  # noqa: E712
+        )
+        result = await self.session.exec(statement)
+        return list(result.all())
+
     async def mirror_memories(
         self,
         user_id: UUID,
@@ -230,14 +253,25 @@ class UserRepository(BaseRepository[User]):
         result = await self.session.exec(statement)
         now = datetime.now(UTC).replace(tzinfo=None)
         deactivated = 0
+        deactivated_mem0_ids: list[str] = []
         for memory in result.all():
             if normalize_for_dedupe(memory.content) in superseded_keys:
                 memory.is_active = False
                 memory.updated_at = now
                 self.session.add(memory)
                 deactivated += 1
+                if memory.mem0_id:
+                    deactivated_mem0_ids.append(memory.mem0_id)
         if deactivated:
             await self.session.commit()
+            if deactivated_mem0_ids:
+                try:
+                    from backend.app.services.memory.long_term import long_term_memory
+
+                    for m_id in deactivated_mem0_ids:
+                        await long_term_memory.delete(m_id)
+                except Exception as exc:
+                    logger.warning("mem0_superseded_cleanup_failed", error=str(exc))
         return deactivated
 
     async def reinforce_memories(self, memory_ids: list[UUID]) -> int:
