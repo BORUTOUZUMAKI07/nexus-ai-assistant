@@ -80,9 +80,10 @@ class PromptCompiler:
             if skill_text:
                 sections.append(f"# Active Skills & Capabilities\n{skill_text}")
 
-        # 4. User Long-Term Memories (Personalization)
+        # 4. User Long-Term Memories (Personalization, bounded to top-10 to protect context budget)
         if user_memories:
-            mem_items = "\n".join([f"- [{m.category}] {m.content}" for m in user_memories if m.is_active])
+            active_mems = [m for m in user_memories if m.is_active][:10]
+            mem_items = "\n".join([f"- [{m.category}] {m.content}" for m in active_mems])
             if mem_items:
                 sections.append(f"# User Context & Persistent Preferences\n{mem_items}")
 

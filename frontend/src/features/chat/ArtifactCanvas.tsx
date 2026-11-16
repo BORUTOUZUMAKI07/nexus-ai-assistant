@@ -18,9 +18,12 @@ import {
   Save,
   AlertCircle,
   Loader2,
+  GitCompare,
+  Zap,
 } from "lucide-react";
 import { fetchArtifact, type ArtifactVersionItem } from "@/lib/api";
 import { ArtifactPreview } from "@/features/chat/ArtifactPreview";
+import { DiffViewer } from "@/features/chat/DiffViewer";
 
 export interface ArtifactItem {
   id: string;
@@ -60,7 +63,7 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   onDeleteArtifact,
   onSaveVersion,
 }) => {
-  const [viewTab, setViewTab] = useState<"code" | "preview">("code");
+  const [viewTab, setViewTab] = useState<"code" | "preview" | "diff">("code");
   const [copied, setCopied] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -380,6 +383,17 @@ const [viewingVersion, setViewingVersion] = useState<ArtifactVersionItem | null>
             >
               <Eye className="w-3 h-3" />
               Preview
+            </button>
+            <button
+              onClick={() => setViewTab("diff")}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                viewTab === "diff"
+                  ? "bg-[var(--bg-surface-elevated)] text-[var(--text-primary)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              <GitCompare className="w-3 h-3" />
+              Diff
             </button>
           </div>
 
@@ -706,7 +720,7 @@ const [viewingVersion, setViewingVersion] = useState<ArtifactVersionItem | null>
               })}
             </pre>
           </div>
-        ) : (
+        ) : viewTab === "preview" ? (
           <div className="w-full h-full min-h-[30rem] flex-1">
             <ArtifactPreview
               content={displayContent}
@@ -714,7 +728,60 @@ const [viewingVersion, setViewingVersion] = useState<ArtifactVersionItem | null>
               title={activeArtifact.title}
             />
           </div>
+        ) : (
+          <div className="w-full h-full min-h-[30rem] flex-1">
+            <DiffViewer
+              oldText={
+                viewingVersion
+                  ? viewingVersion.content
+                  : versions && versions.length > 1
+                  ? versions[1].content
+                  : activeArtifact.content
+              }
+              newText={isEditing ? draft : displayContent}
+            />
+          </div>
         )}
+      </div>
+
+      {/* Quick AI Refactoring Actions Toolbar */}
+      <div className="flex items-center gap-2 px-3 py-1.5 border-t border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] text-[11px] overflow-x-auto">
+        <span className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-faint)] flex items-center gap-1 shrink-0">
+          <Zap className="w-3 h-3 text-[var(--accent)]" /> Actions:
+        </span>
+        <button
+          onClick={() => {
+            navigator.clipboard.writeText(`Please review and fix all bugs, edge cases, and runtime errors in this ${activeArtifact.language} code:\n\`\`\`${activeArtifact.language}\n${displayContent}\n\`\`\``);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          }}
+          className="px-2 py-0.5 rounded border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors shrink-0"
+          title="Copy prompt to fix bugs in chat"
+        >
+          ⚡ Fix Bugs
+        </button>
+        <button
+          onClick={() => {
+            navigator.clipboard.writeText(`Please add complete type definitions, TypeScript interfaces, and JSDoc/docstrings to this code:\n\`\`\`${activeArtifact.language}\n${displayContent}\n\`\`\``);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          }}
+          className="px-2 py-0.5 rounded border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors shrink-0"
+          title="Copy prompt to add types in chat"
+        >
+          📝 Add Types
+        </button>
+        <button
+          onClick={() => {
+            navigator.clipboard.writeText(`Please optimize this ${activeArtifact.language} code for maximum performance, lower memory usage, and clean architecture:\n\`\`\`${activeArtifact.language}\n${displayContent}\n\`\`\``);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          }}
+          className="px-2 py-0.5 rounded border border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors shrink-0"
+          title="Copy prompt to optimize in chat"
+        >
+          🔄 Optimize
+        </button>
       </div>
     </div>
   );
