@@ -890,6 +890,15 @@ class Settings(BaseSettings):
 
     # ── Email verification / password reset ───────────────────────────────────
     EMAIL_VERIFICATION_REQUIRED: bool = Field(default=False, description="When True, new users cannot authenticate until email is verified (off preserves the current free-tier flow)")
+    FIRST_USER_IS_ADMIN: bool = Field(
+        default=True,
+        description=(
+            "Promote the first account ever registered on an empty users table to "
+            "role=admin. Without it nothing in the app can create an admin, so the "
+            "admin console is unreachable on every fresh deployment. It only fires "
+            "when no user exists, so it can never escalate an existing account."
+        ),
+    )
     EMAIL_VERIFY_TOKEN_MINUTES: int = Field(default=1440, description="24h default for verification links")
     PASSWORD_RESET_TOKEN_MINUTES: int = Field(default=30)
     APP_PUBLIC_URL: str = Field(default="http://localhost:3000", description="Public origin used to build magic links")

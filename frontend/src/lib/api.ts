@@ -1735,7 +1735,10 @@ export interface OrgInvite {
    * same link is emailed and `email_channel` says which channel was used.
    */
   dev_accept_url?: string | null;
+  /** False when no mail provider is configured or the provider rejected it. */
+  email_sent?: boolean;
   email_channel?: string | null;
+  email_message?: string | null;
 }
 
 export async function fetchOrganizations(): Promise<Organization[]> {

@@ -12,6 +12,70 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
 
+#: Starter templates materialised for a user whose library is still empty.
+#:
+#: The library shipped with endpoints and a UI but no way to get a first row:
+#: `prompt_templates.user_id` is NOT NULL, so a shared/system template could not
+#: be inserted, and nothing ever created a per-user one. Every deployment
+#: therefore served an empty list and the composer's "Saved templates" group
+#: could never appear. These are seeded per user on first read instead of adding
+#: a system-owned row, which would need a migration on a NOT NULL column.
+_STARTER_TEMPLATES: tuple[dict[str, object], ...] = (
+    {
+        "title": "Senior code review",
+        "category": "engineering",
+        "system_prompt": (
+            "You are a senior engineer reviewing code. Report correctness bugs, "
+            "security issues and performance problems in that order, each with the "
+            "line it applies to and a concrete fix."
+        ),
+        "user_prompt_template": (
+            "Review this code for correctness, security and performance:\n\n```\n{{code}}\n```"
+        ),
+        "input_variables": ["code"],
+    },
+    {
+        "title": "Deep research brief",
+        "category": "research",
+        "system_prompt": (
+            "You are a research analyst. Produce a structured brief: what is known, "
+            "what is contested, what is unknown, and the sources behind each claim."
+        ),
+        "user_prompt_template": (
+            "Write a research brief on {{topic}}. Separate established findings from "
+            "open questions and cite sources."
+        ),
+        "input_variables": ["topic"],
+    },
+    {
+        "title": "Root-cause a failure",
+        "category": "debugging",
+        "system_prompt": (
+            "You diagnose failures. State the most likely cause first, then the "
+            "evidence for it, then the cheapest experiment that would confirm or "
+            "refute it."
+        ),
+        "user_prompt_template": (
+            "Here is the error and the surrounding context. What is the root cause?\n\n"
+            "{{error}}"
+        ),
+        "input_variables": ["error"],
+    },
+    {
+        "title": "Explain like a staff engineer",
+        "category": "general",
+        "system_prompt": (
+            "You explain technical topics to an experienced engineer: no basics, no "
+            "analogies, trade-offs and failure modes front and centre."
+        ),
+        "user_prompt_template": (
+            "Explain {{topic}} to a staff engineer: the mental model, the trade-offs, "
+            "and where it breaks."
+        ),
+        "input_variables": ["topic"],
+    },
+)
+
 
 class PromptService:
     """
@@ -22,9 +86,36 @@ class PromptService:
         self._repo = PromptRepository(session)
 
     async def list_templates(self, user_id: UUID, include_public: bool = True):
-        return await self._repo.get_templates(
+        templates = await self._repo.get_templates(
             user_id=user_id, include_public=include_public
         )
+        # Emptiness is about the user's OWN library, not the listing. Another
+        # account's public template makes the combined result non-empty while
+        # this user still has nothing of their own, which is exactly the account
+        # that needs seeding.
+        if await self._repo.get_templates(user_id=user_id, include_public=False):
+            return templates
+        # First look, empty library: materialise the starter set so the feature is
+        # usable on a fresh account. Fail-open — a seed failure must not turn the
+        # prompt library endpoint into an error.
+        try:
+            for starter in _STARTER_TEMPLATES:
+                await self._repo.create_template(
+                    user_id=user_id,
+                    title=str(starter["title"]),
+                    category=str(starter["category"]),
+                    system_prompt=str(starter["system_prompt"]),
+                    user_prompt_template=str(starter["user_prompt_template"]),
+                    input_variables=list(starter["input_variables"]),  # type: ignore[arg-type]
+                    is_public=False,
+                )
+            templates = await self._repo.get_templates(
+                user_id=user_id, include_public=include_public
+            )
+            logger.info("prompt_starters_seeded", user_id=str(user_id), count=len(templates))
+        except Exception as exc:
+            logger.warning("prompt_starter_seed_failed", error=type(exc).__name__)
+        return templates
 
     async def create_template(self, user_id: UUID, template_in: PromptTemplateCreate):
         return await self._repo.create_template(

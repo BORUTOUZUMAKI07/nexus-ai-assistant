@@ -103,7 +103,24 @@ class AuthService:
             raise UserAlreadyExistsError(
                 f"A user with username '{user_in.username}' already exists."
             )
+        # First-user bootstrap. Nothing in the application could ever produce an
+        # admin (registration hardcoded `role="user"`, and the admin API only
+        # *reads* roles), so on a fresh deployment the admin console was
+        # unreachable for everyone -- the 403 gate was all that could be tested.
+        # The founding account is the standard owner bootstrap; it grants
+        # exactly one promotion, to the first row this instance ever creates, so
+        # it cannot escalate an existing user on a populated database.
+        is_first_user = (
+            bool(getattr(settings, "FIRST_USER_IS_ADMIN", True))
+            and not await self._repo.any_users_exist()
+        )
         user = await self._repo.create(user_in)
+        if is_first_user:
+            user.role = "admin"
+            self._session.add(user)
+            await self._session.commit()
+            await self._session.refresh(user)
+            logger.info("first_user_promoted_to_admin", user_id=str(user.id))
         logger.info("user_registered", user_id=str(user.id))
         return user
 

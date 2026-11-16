@@ -86,6 +86,8 @@ export const IntegrationsSettings: React.FC = () => {
   const [inviteOrgId, setInviteOrgId] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  /** Why the invite email did not go out, when it did not. */
+  const [inviteEmailNotice, setInviteEmailNotice] = useState<string | null>(null);
   const [acceptToken, setAcceptToken] = useState("");
   // Inline rename: the organization name was permanent because no edit path
   // existed (backend or BFF), so a typo could never be corrected.
@@ -125,8 +127,23 @@ export const IntegrationsSettings: React.FC = () => {
     try {
       const invite = await inviteOrganizationMember(orgId, email);
       setInviteUrl(invite.dev_accept_url ?? null);
+      // The invite exists either way; whether the email went out is separate and
+      // used to be reported nowhere, so an owner waited for a colleague who never
+      // received anything.
+      setInviteEmailNotice(
+        invite.email_sent === false
+          ? invite.email_message ||
+              "The invite email could not be sent — send the link below yourself."
+          : null
+      );
       setInviteEmail("");
-      toast.success(`Invite created for ${email}`);
+      if (invite.email_sent === false) {
+        toast.warning(`Invite created for ${email} — email not sent`, {
+          description: "Copy the accept link below and send it yourself.",
+        });
+      } else {
+        toast.success(`Invite emailed to ${email}`);
+      }
     } catch (err) {
       toast.error(messageOf(err, "Could not create invite"));
     }
@@ -525,8 +542,14 @@ export const IntegrationsSettings: React.FC = () => {
         {inviteUrl && (
           <div className="p-3 rounded-lg border border-[var(--accent)]/40 bg-[var(--accent-soft)] text-[11px] space-y-1.5">
             <p className="text-[var(--accent-ink)] font-medium">
-              Send this link to your invitee:
+              {inviteEmailNotice ? "Email not delivered — send this link:" : "Send this link to your invitee:"}
             </p>
+            {inviteEmailNotice && (
+              <p className="flex items-start gap-1.5 text-[var(--status-warning)]">
+                <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                {inviteEmailNotice}
+              </p>
+            )}
             <div className="flex items-center gap-2">
               <code className="flex-1 min-w-0 truncate font-mono text-[var(--text-secondary)]">
                 {inviteUrl}
@@ -535,7 +558,10 @@ export const IntegrationsSettings: React.FC = () => {
                 <Copy className="w-3 h-3" /> Copy
               </button>
               <button
-                onClick={() => setInviteUrl(null)}
+                onClick={() => {
+                  setInviteUrl(null);
+                  setInviteEmailNotice(null);
+                }}
                 className="text-[var(--text-faint)] hover:text-[var(--text-primary)]"
               >
                 Dismiss

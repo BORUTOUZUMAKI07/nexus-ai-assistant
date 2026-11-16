@@ -269,28 +269,51 @@ async def execute_run(
                 raise
             except Exception as exc:
                 logger.exception("stream_error", run_id=str(run_id), error=str(exc))
-                # The partial answer is persisted *before* the error frame. The
-                # pre-refactor code returned here and never wrote anything, so a
-                # run that died half-way through left the user with text on screen
-                # and nothing in the conversation — which is the defect this whole
-                # module exists to remove, and a refresh would hide it rather than
+                # The error frame goes out FIRST, before any persistence work. It
+                # used to be emitted after `_persist_reply`, so a failure inside
+                # that write (or inside the checkpoint reads feeding it) killed
+                # the generator before the client was ever told the run failed:
+                # the stream just ended, with no error frame, no `done`, and no
+                # assistant row -- observed live on a vision turn, where the
+                # transcript stayed silent and nothing said why.
+                try:
+                    await writer.emit({"type": "error", "message": str(exc)})
+                except Exception as emit_exc:  # pragma: no cover - writer is in-memory
+                    logger.warning(
+                        "run_error_frame_emit_failed",
+                        run_id=str(run_id),
+                        error_type=type(emit_exc).__name__,
+                    )
+                # The partial answer is still persisted: the pre-refactor code
+                # returned here and never wrote anything, so a run that died
+                # half-way through left the user with text on screen and nothing
+                # in the conversation — and a refresh would hide it rather than
                 # reveal it. It is what the user actually saw; storing it is not
-                # optional just because the turn ended badly.
-                message_id = await _persist_reply(
-                    conversation_id=conversation_id,
-                    user_id=user_id,
-                    org_id=org_id,
-                    user_messages=user_messages,
-                    emitted_text=emitted_text,
-                    latency_ms=(time.time() - start_time) * 1000,
-                    parent_message_id=parent_message_id,
-                    run_id=run_id,
-                    session_factory=session_factory,
-                    tool_calls=collected_tool_calls,
-                    citations=await _run_citations(graph, config),
-                    model=await _run_answer_model(graph, config),
-                )
-                await writer.emit({"type": "error", "message": str(exc)})
+                # optional just because the turn ended badly. A failure in this
+                # write must not skip `_terminate`, or the run row stays
+                # "running" forever and every subscriber waits on a dead run.
+                message_id = None
+                try:
+                    message_id = await _persist_reply(
+                        conversation_id=conversation_id,
+                        user_id=user_id,
+                        org_id=org_id,
+                        user_messages=user_messages,
+                        emitted_text=emitted_text,
+                        latency_ms=(time.time() - start_time) * 1000,
+                        parent_message_id=parent_message_id,
+                        run_id=run_id,
+                        session_factory=session_factory,
+                        tool_calls=collected_tool_calls,
+                        citations=await _run_citations(graph, config),
+                        model=await _run_answer_model(graph, config),
+                    )
+                except Exception as persist_exc:
+                    logger.error(
+                        "partial_reply_persist_failed",
+                        run_id=str(run_id),
+                        error_type=type(persist_exc).__name__,
+                    )
                 await _terminate(
                     run_id,
                     session_factory,
@@ -323,6 +346,38 @@ async def execute_run(
                 ),
                 None,
             )
+
+            # A run that finishes with nothing to say is a failure, not a quiet
+            # success. Before this, an empty `emitted_text` persisted nothing and
+            # emitted `done` with empty content, so the turn ended with no answer
+            # and no error on screen. A run parked for HITL legitimately has no
+            # text yet, so the interrupt frame excuses it.
+            parked_for_approval = any(
+                f.get("type") == "hitl_request" for f in post_run
+            )
+            if not emitted_text.strip() and not parked_for_approval:
+                logger.warning("run_completed_without_answer", run_id=str(run_id))
+                for frame in post_run:
+                    await writer.emit(frame)
+                await writer.emit(
+                    {
+                        "type": "error",
+                        "message": (
+                            "The model returned an empty answer for this turn. "
+                            "Nothing was saved; please try again."
+                        ),
+                    }
+                )
+                await _terminate(
+                    run_id,
+                    session_factory,
+                    writer,
+                    broker,
+                    status="failed",
+                    error="empty answer",
+                    on_finish=on_finish,
+                )
+                return
 
             message_id = await _persist_reply(
                 conversation_id=conversation_id,

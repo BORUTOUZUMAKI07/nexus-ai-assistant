@@ -27,6 +27,60 @@ async def test_register_creates_user(client):
 
 
 @pytest.mark.asyncio
+async def test_first_registered_user_becomes_admin(client, monkeypatch):
+    """The founding account owns the instance, or the admin console is dead.
+
+    Nothing in the application could create an admin: registration hardcoded
+    ``role="user"`` and the admin API only reads roles, so a fresh deployment had
+    an admin console nobody could open. The bootstrap fires only when the users
+    table is empty, which is asserted here by making the emptiness check report
+    empty (the suite's shared database is never actually empty).
+    """
+    from backend.app.core.config import settings
+    from backend.app.domain.user.repository import UserRepository
+
+    async def _no_users_exist(self) -> bool:  # noqa: ANN001 - bound method stub
+        return False
+
+    monkeypatch.setattr(settings, "FIRST_USER_IS_ADMIN", True)
+    monkeypatch.setattr(UserRepository, "any_users_exist", _no_users_exist, raising=True)
+
+    resp = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": f"founder-{uuid.uuid4().hex[:8]}@example.com",
+            "username": f"founder-{uuid.uuid4().hex[:6]}",
+            "password": "StrongPass123!",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["role"] == "admin"
+
+
+@pytest.mark.asyncio
+async def test_registration_does_not_escalate_on_a_populated_database(client, monkeypatch):
+    """The bootstrap must never promote anyone once a user exists."""
+    from backend.app.core.config import settings
+    from backend.app.domain.user.repository import UserRepository
+
+    async def _users_exist(self) -> bool:  # noqa: ANN001 - bound method stub
+        return True
+
+    monkeypatch.setattr(settings, "FIRST_USER_IS_ADMIN", True)
+    monkeypatch.setattr(UserRepository, "any_users_exist", _users_exist, raising=True)
+    resp = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": f"plain-{uuid.uuid4().hex[:8]}@example.com",
+            "username": f"plain-{uuid.uuid4().hex[:6]}",
+            "password": "StrongPass123!",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["role"] == "user"
+
+
+@pytest.mark.asyncio
 async def test_register_duplicate_email_conflicts(client):
     payload = {
         "email": f"dup-{uuid.uuid4().hex[:8]}@example.com",

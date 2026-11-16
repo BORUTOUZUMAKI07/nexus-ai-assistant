@@ -52,6 +52,11 @@ class UserRepository(BaseRepository[User]):
         result = await self.session.exec(statement)
         return result.first()
 
+    async def any_users_exist(self) -> bool:
+        """Whether the users table has at least one row (cheap: LIMIT 1)."""
+        result = await self.session.exec(select(User.id).limit(1))
+        return result.first() is not None
+
     async def create(self, user_in) -> User:
         db_user = User(
             email=user_in.email.lower().strip(),

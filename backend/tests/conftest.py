@@ -77,6 +77,13 @@ os.environ["NEXUS_DEV_SECRETS_FILE"] = str(
     Path(tempfile.gettempdir()) / "nexus_pytest_dev_secrets.json"
 )
 
+# Guard 4 -- first-user admin bootstrap. The suite shares one database for the
+# whole session, so whichever test registers first would be promoted and
+# `test_register_creates_user` (which asserts role="user") would pass or fail
+# purely on file ordering. The bootstrap itself is covered explicitly in
+# tests/integration/test_auth.py, which turns the flag back on.
+os.environ["FIRST_USER_IS_ADMIN"] = "false"
+
 import backend.app.infrastructure.cache.redis_client as cache_module  # noqa: E402
 import redis.asyncio as redis  # noqa: E402
 from _testcontainers import (  # noqa: E402

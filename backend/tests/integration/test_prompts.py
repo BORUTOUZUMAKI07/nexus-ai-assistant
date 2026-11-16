@@ -107,6 +107,33 @@ async def test_public_templates_are_shared_private_are_not(
 
 
 @pytest.mark.asyncio
+async def test_a_fresh_library_is_seeded_with_starter_templates(client):
+    """An account with no templates gets a usable library, exactly once.
+
+    Production served zero templates: `prompt_templates.user_id` is NOT NULL, so
+    a shared row could not exist, and nothing ever created a per-user one. The
+    composer's "Saved templates" group therefore never appeared on any account.
+    """
+    headers = await _registered(client, "seeded")
+
+    first = await client.get("/api/v1/prompts/templates", headers=headers)
+    assert first.status_code == 200
+    titles = [t["title"] for t in first.json()]
+    assert {
+        "Senior code review",
+        "Deep research brief",
+        "Root-cause a failure",
+        "Explain like a staff engineer",
+    } <= set(titles), titles
+
+    # A second read must not seed again -- the library is a per-user resource, and
+    # re-seeding on every empty-looking read would grow it without bound.
+    second = await client.get("/api/v1/prompts/templates", headers=headers)
+    assert second.status_code == 200
+    assert [t["id"] for t in second.json()] == [t["id"] for t in first.json()]
+
+
+@pytest.mark.asyncio
 async def test_list_skills_returns_list(client, user_auth_headers):
     resp = await client.get("/api/v1/prompts/skills", headers=user_auth_headers)
     assert resp.status_code == 200

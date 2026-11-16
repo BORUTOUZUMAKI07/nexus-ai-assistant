@@ -1156,15 +1156,34 @@ async def test_a_graph_failure_becomes_an_error_frame_and_a_failed_run(
     assert [m["content"] for m in executor_env["messages"]] == ["partial"]
 
 
-async def test_an_empty_answer_persists_no_message(session_factory, executor_env, broker):
-    """No text means no assistant row — the pre-existing guard, preserved."""
+async def test_an_empty_answer_fails_loudly_instead_of_completing_silently(
+    session_factory, executor_env, broker
+):
+    """An answerless run is a failure the client can see, not a quiet success.
+
+    This asserted ``status == "completed"`` before, and that contract was the
+    defect: a run whose model produced nothing emitted ``done`` with empty
+    content and persisted no row, so the turn ended with no answer, no error and
+    nothing to retry. It is exactly what a live vision turn did — the user turn
+    landed, the assistant side stayed silent.
+
+    Three assertions, one per way the old behaviour hid the failure: no done
+    frame (it would read as a finished answer), an error frame on the log, and a
+    terminal ``failed`` status.
+    """
     run = await _new_run(session_factory)
     await _run_executor(session_factory, broker, run=run, graph=FakeGraph([]))
 
     async with session_factory() as session:
         finished = await RunService(session).get_for_user(run.id, run.user_id)
-    assert finished.status == "completed"
+        events = await RunService(session).events_after(run.id, 0)
+
+    assert finished.status == "failed"
+    assert finished.error == "empty answer"
     assert executor_env["messages"] == []
+    types = [e.payload.get("type") for e in events]
+    assert "error" in types, types
+    assert "done" not in types, types
 
 
 async def test_execute_run_binds_the_users_byok_key_for_the_graph(

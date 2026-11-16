@@ -196,9 +196,18 @@ async def invite_member(
                 f"Accept: {accept_url}\n"
             ),
         )
+        # The delivery outcome travels with the invite: `failed` means a provider
+        # is configured but rejected the message, `dev` means none is configured.
+        # Both are states the owner has to see, because in both cases the invite
+        # was NOT delivered and the accept link below is the only way in.
+        result["email_sent"] = bool(delivery.get("sent"))
         result["email_channel"] = delivery.get("channel")
+        result["email_message"] = delivery.get("message")
     except Exception as exc:  # never fail the invite on a mail outage
         logger.warning("org_invite_email_failed", error=type(exc).__name__)
+        result["email_sent"] = False
+        result["email_channel"] = "failed"
+        result["email_message"] = "Email delivery failed."
 
     return result
 
