@@ -24,6 +24,17 @@ litellm.set_verbose = False
 # succeeds. Only gates debug prints — never exceptions.
 litellm.suppress_debug_info = True
 
+# ── Redis cache for LiteLLM completions/embeddings ──────────────────────────
+# Repeat completions and embeddings hit Redis instead of the provider, saving
+# free-tier quota and cutting latency to a few milliseconds. Fail-open: if
+# Redis is unavailable, litellm falls back to the provider without error.
+try:
+    from litellm.caching import Cache
+
+    litellm.cache = Cache(type="redis", host="localhost", port=6379)
+except Exception:  # pragma: no cover - cache is optional
+    pass
+
 # Register per-token cost info for the deployed provider model slugs. Groq is on
 # its free tier (all $0/token) so usage accounting reports accurate USD while
 # silencing litellm's `model not in built-in cost map, cost fields default to 0`

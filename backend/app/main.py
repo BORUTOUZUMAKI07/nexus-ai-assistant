@@ -38,7 +38,8 @@ from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.otel import get_tracer, shutdown_otel
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse, ORJSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # 1. Initialize Structured Logging
@@ -389,6 +390,7 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
+    default_response_class=ORJSONResponse,
 )
 
 # 1. CORS Middleware
@@ -399,6 +401,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 1a. GZip compression for JSON/SSE-adjacent payloads (saves bandwidth on
+#     long chat streams and artifact responses).
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 # 1b. OTLP HTTP server spans + request metrics. Spans are a no-op unless the

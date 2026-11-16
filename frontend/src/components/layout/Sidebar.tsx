@@ -74,6 +74,10 @@ interface SidebarProps {
   showAdmin?: boolean;
   /** Opens the ⌘K command palette; the search trigger renders only when provided. */
   onOpenCommandPalette?: () => void;
+  /** Whether more conversations exist on the server (keyset pagination). */
+  hasMoreConversations?: boolean;
+  /** Load the next page of conversations from the server. */
+  onLoadMoreConversations?: () => void;
 }
 
 interface NavItem {
@@ -105,12 +109,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSignOut,
   showAdmin = false,
   onOpenCommandPalette,
+  hasMoreConversations = false,
+  onLoadMoreConversations,
 }: SidebarProps) => {
   const models = MODEL_CATALOG;
 
   const [chatFilter, setChatFilter] = React.useState("");
   const [chatSort, setChatSort] = React.useState<"newest" | "oldest" | "az">("newest");
-  const [visibleCount, setVisibleCount] = React.useState(15);
 
   const filterAndSort = (items: ConversationItem[]) => {
     let list = items;
@@ -130,9 +135,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const pinnedList = filterAndSort(conversations.filter((c) => c.is_pinned));
-  const rawRecent = filterAndSort(conversations.filter((c) => !c.is_pinned));
-  const recentList = rawRecent.slice(0, visibleCount);
-  const hasMore = rawRecent.length > visibleCount;
+  const recentList = filterAndSort(conversations.filter((c) => !c.is_pinned));
 
   // Inline rename state. `editingId` tracks which row is in edit mode and
   // `editingTitle` holds the in-progress text, so a rename never round-trips
@@ -440,12 +443,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             Recent conversations
           </div>
           <div className="space-y-1">{recentList.map(renderConversation)}</div>
-          {hasMore && (
+          {hasMoreConversations && onLoadMoreConversations && (
             <button
-              onClick={() => setVisibleCount((prev) => prev + 15)}
+              onClick={onLoadMoreConversations}
               className="w-full mt-2 py-1.5 text-[11px] font-medium text-[var(--accent-ink)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] rounded-md border border-dashed border-[var(--border-subtle)] transition-colors"
             >
-              Show more ({rawRecent.length - visibleCount} remaining)
+              Show more conversations
             </button>
           )}
           {recentList.length === 0 && (

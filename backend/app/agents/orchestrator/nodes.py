@@ -1478,11 +1478,17 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     revisions_used = 0
     critique: dict[str, Any] | None = None
 
-    # Which synthesis group to call. The picker's selection (already whitelisted
-    # by `resolve_answer_model`, so an unknown value degrades to the default
-    # rather than dropping the request out of the fallback chain). Empty and
-    # unknown both land on the same default the code hardcoded before.
-    synthesis_group = resolve_answer_model(state.get("model"))
+    # Which synthesis group to call. Honor the auto-router's decision
+    # (stored as model_group by route_node) when the user did not explicitly
+    # pick a group; otherwise use the picker's selection. `resolve_answer_model`
+    # whitelists the picker value so an unknown value degrades to the default
+    # rather than dropping the request out of the fallback chain.
+    user_group = state.get("model")
+    auto_group = state.get("model_group")
+    if auto_group and auto_group in ("fast_chat", "complex_reasoning"):
+        synthesis_group = auto_group
+    else:
+        synthesis_group = resolve_answer_model(user_group)
     answer_model = ""
 
     if is_vision:

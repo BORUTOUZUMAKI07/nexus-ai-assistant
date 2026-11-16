@@ -112,6 +112,7 @@ class QdrantService(IVectorStore):
                         )
                     )
                 ),
+                on_disk_payload=True,
             )
             # Payload indexes for fast pre-filtering
             await self.client.create_payload_index(

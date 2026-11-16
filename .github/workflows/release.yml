@@ -14,13 +14,27 @@ jobs:
   release:
     name: Build & Publish Release
     runs-on: ubuntu-latest
-    permissions:
+permissions:
       contents: write
       packages: write
+      # Provenance attestation requires ID token + contents write
+      id-token: write
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Require CI green before releasing
+        shell: bash
+        run: |
+          # Abort if the default branch's latest CI run is not successful
+          CI_STATUS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&per_page=1" \
+            --jq '.workflow_runs[0].conclusion' 2>/dev/null || echo "unknown")
+          if [ "$CI_STATUS" != "success" ]; then
+            echo "CI is not green ($CI_STATUS). Aborting release."
+            exit 1
+          fi
 
       - name: Lowercase repository name (Docker tags must be lowercase)
         shell: bash
@@ -43,35 +57,41 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      - name: Build and push backend
+      - name: Build and push backend (multi-platform)
         shell: bash
         run: |
           docker buildx build \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
+            --platform linux/amd64,linux/arm64 \
             --tag ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/backend:${{ steps.version.outputs.VERSION }} \
             --tag ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/backend:latest \
             --push \
+            --provenance=true \
+            --sbom=true \
             ./backend
 
-      - name: Build and push frontend
+      - name: Build and push frontend (multi-platform)
         shell: bash
         run: |
           docker buildx build \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
+            --platform linux/amd64,linux/arm64 \
             --tag ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/frontend:${{ steps.version.outputs.VERSION }} \
             --tag ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/frontend:latest \
             --push \
+            --provenance=true \
+            --sbom=true \
             ./frontend
 
       - name: Generate changelog
         id: changelog
         shell: bash
         run: |
-          git log --oneline "$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)..HEAD" --format="- %s" > /tmp/changelog.txt
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD)
+          git log --oneline "${PREV_TAG}..HEAD" --format="- %s" > /tmp/changelog.txt
           echo "---" >> /tmp/changelog.txt
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
