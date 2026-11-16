@@ -257,6 +257,46 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         logger.info("langgraph_postgres_checkpointer_ready")
 
+        # 4d. Background maintenance task for memory lifecycle decay
+        async def _run_periodic_memory_decay():
+            while True:
+                try:
+                    await asyncio.sleep(3600)  # Hourly maintenance
+                    from backend.app.domain.user.repository import UserRepository
+                    from backend.app.infrastructure.database.session import async_session_factory
+
+                    async with async_session_factory() as session:
+                        count = await UserRepository(session).decay_stale_memories(batch_limit=500)
+                        if count:
+                            logger.info("periodic_memory_decay_run", decayed_count=count)
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:
+                    logger.warning("periodic_memory_decay_failed", error=str(exc))
+
+        decay_task = asyncio.create_task(_run_periodic_memory_decay())
+
+        # 4e. Background maintenance task for webhook delivery retries.
+        #     retry_failed_deliveries() has no other caller, so a periodic
+        #     sweep keeps failed deliveries from being terminal.
+        async def _run_periodic_webhook_retry():
+            while True:
+                try:
+                    await asyncio.sleep(300)  # Every 5 minutes
+                    from backend.app.infrastructure.database.session import async_session_factory
+                    from backend.app.services.webhooks.service import retry_failed_deliveries
+
+                    async with async_session_factory() as session:
+                        retried = await retry_failed_deliveries(session)
+                        if retried:
+                            logger.info("periodic_webhook_retry_run", retried_count=retried)
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:
+                    logger.warning("periodic_webhook_retry_failed", error=str(exc))
+
+        retry_task = asyncio.create_task(_run_periodic_webhook_retry())
+
         # 4c. Start the FastMCP sub-application's own lifespan so its
         #     streamable-HTTP session-manager task group is running before the
         #     first request. Mounting the sub-app does not start it; without this
@@ -271,7 +311,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "mcp_transport_lifespan_missing",
                     detail="FastMCP sub-app has no lifespan; /mcp requests will fail",
                 )
-            yield
+            try:
+                yield
+            finally:
+                decay_task.cancel()
+                retry_task.cancel()
         else:
             try:
                 if app is not None:
@@ -299,6 +343,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     try:
                         yield
                     finally:
+                        decay_task.cancel()
                         if app is not None and hasattr(app, "state"):
                             try:
                                 app.state.mcp_transport_started = False
@@ -310,7 +355,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                                 )
             except Exception:
                 # Never let MCP lifespan break core startup.
-                yield
+                try:
+                    yield
+                finally:
+                    decay_task.cancel()
 
     # Graceful Shutdown (outside lifespan_graph context — pool already closed)
     logger.info("nexus_ai_shutting_down")
@@ -561,9 +609,8 @@ async def health_check():
             return ensure_embedding_backend_available()
         except EmbeddingsUnavailableError:
             return "unavailable"
+    from backend.app.infrastructure.database.schema_sync import RECONCILE_STATE
     from backend.app.services.runs.executor import PERSIST_STATE
-
-    from app.infrastructure.database.schema_sync import RECONCILE_STATE
 
     return {
         "status": "healthy",

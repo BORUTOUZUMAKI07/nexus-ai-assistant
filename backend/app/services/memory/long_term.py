@@ -344,6 +344,7 @@ class LongTermMemoryService:
                     .where(
                         UserMemory.user_id == uid,
                         UserMemory.is_active == True,  # noqa: E712
+                        UserMemory.scope == "user",
                     )
                     .order_by(UserMemory.confidence.desc(), UserMemory.updated_at.desc())
                     .limit(limit)

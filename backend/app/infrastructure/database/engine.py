@@ -94,7 +94,7 @@ async def init_db() -> None:
     unconditionally costs one catalog read per boot when nothing is missing.
     """
     try:
-        from app.infrastructure.database.schema_sync import reconcile_missing_columns
+        from backend.app.infrastructure.database.schema_sync import reconcile_missing_columns
     except Exception as exc:  # pragma: no cover - packaging failure
         # Silently continuing here is how a repair that never ran looked
         # identical to one that found nothing to do.

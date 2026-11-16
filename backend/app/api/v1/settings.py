@@ -2,6 +2,7 @@
 User Settings and BYOK API Keys API Router.
 Pure HTTP transport layer — delegates to UserSettingsService (SRP + DIP).
 """
+from typing import Any
 from uuid import UUID
 
 from backend.app.api.deps import get_current_user, get_user_settings_service
@@ -65,6 +66,18 @@ async def delete_memory(
 ):
     try:
         await settings_svc.delete_memory(current_user.id, memory_id)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message)
+
+
+@router.get("/memories/{memory_id}/history", response_model=list[dict[str, Any]])
+async def get_memory_history(
+    memory_id: UUID,
+    current_user: User = Depends(get_current_user),
+    settings_svc: UserSettingsService = Depends(get_user_settings_service),
+):
+    try:
+        return await settings_svc.get_memory_history(current_user.id, memory_id)
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)
 

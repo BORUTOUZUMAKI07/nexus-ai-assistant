@@ -635,8 +635,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             query=last_user_msg,
             user_id=user_id,
             limit=8,
-            agent_id="nexus-planner",
-            run_id=str(state.get("conversation_id") or ""),
+            agent_id="nexus-assistant",
         )
         if memory_block:
             logger.info("mem0_memories_loaded_for_planner", user_id=user_id, count=len(recalled_items))
@@ -1815,7 +1814,6 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
                 user_id=user_id,
                 metadata={"conversation_id": state.get("conversation_id", "")},
                 agent_id="nexus-assistant",
-                run_id=str(state.get("conversation_id") or ""),
             )
             # Reconcile into the durable local table. Previously mem0 and
             # user_memories were two stores of the same facts that never

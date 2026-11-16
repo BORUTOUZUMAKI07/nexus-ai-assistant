@@ -2,6 +2,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
+import DOMPurify from "dompurify";
 import { useCopyFeedback, useCopyToggle } from "@/lib/clipboard";
 import { modelDisplayName } from "@/lib/models";
 import {
@@ -54,6 +55,45 @@ const SyntaxHighlighterBlock = dynamic(
       showLineNumbers?: boolean;
       [key: string]: unknown;
     }>;
+
+    // Register every language the app renders code blocks in. Without this,
+    // PrismLight silently falls back to plain text (zero highlighting).
+    const modAny = mod as Record<string, unknown>;
+    const registerLanguage = modAny.registerLanguage as (
+      lang: string,
+      def: unknown
+    ) => void;
+    const langs = [
+      "javascript",
+      "typescript",
+      "python",
+      "bash",
+      "json",
+      "html",
+      "css",
+      "sql",
+      "yaml",
+      "go",
+      "rust",
+      "cpp",
+      "java",
+      "csharp",
+      "php",
+      "ruby",
+      "diff",
+      "shell",
+      "powershell",
+      "markdown",
+      "xml",
+    ];
+    for (const lang of langs) {
+      const def = (
+        await import(
+          `react-syntax-highlighter/dist/esm/languages/prism/${lang}`
+        )
+      ).default;
+      registerLanguage(lang, def);
+    }
 
     function SyntaxHighlighterBlock(props: {
       children: React.ReactNode;
@@ -520,13 +560,18 @@ const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
       mermaid.initialize({
         startOnLoad: false,
         theme: "base",
-        securityLevel: "loose",
+        securityLevel: "strict",
       });
+      const renderId = `mermaid-${Math.random().toString(36).slice(2)}`;
       mermaid
-        .render("mermaid-svg", code)
+        .render(renderId, code)
         .then(({ svg }) => {
           if (mermaidRef.current) {
-            setSvg(svg);
+            // Sanitize the SVG before injecting: mermaid with securityLevel
+            // "strict" already strips script/event handlers, but DOMPurify
+            // is belt-and-braces for LLM-generated diagram source.
+            const cleanSvg = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true } });
+            setSvg(cleanSvg);
             setRenderError(null);
           }
         })

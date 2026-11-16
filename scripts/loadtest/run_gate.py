@@ -11,10 +11,8 @@ Exits non-zero if SLOs are violated, suitable for a CI job gate.
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 LOCUSTFILE = Path(__file__).parent / "locustfile.py"

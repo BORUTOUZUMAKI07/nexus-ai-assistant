@@ -55,7 +55,7 @@ jobs:
         run: uv sync --group dev
 
       - name: Lint (ruff)
-        run: uv run ruff check app tests
+        run: uv run ruff check app tests scripts migrations
 
   typecheck:
     name: Type check (mypy allowlist)

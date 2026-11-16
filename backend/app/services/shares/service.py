@@ -9,12 +9,17 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import structlog
+from backend.app.core.config import settings
 from backend.app.domain.conversation.models import Conversation, Message
 from backend.app.domain.share.models import ConversationShare
 from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
+
+# A share link must expire within a sane window; 0 or negative means "use the
+# default TTL" rather than "never expires", preventing permanent public links.
+MAX_SHARE_TTL_SECONDS = 90 * 24 * 60 * 60  # 90 days
 
 
 # The citation fields an *unauthenticated* reader of a public share may see.
@@ -59,8 +64,15 @@ class ShareService:
             raise ValueError("Conversation not found")
         token = secrets.token_urlsafe(24)
         expires_at = None
-        if ttl_seconds:
-            expires_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=ttl_seconds)
+        if ttl_seconds is not None:
+            if ttl_seconds <= 0:
+                # Treat 0/negative as "use the configured default", not "never expires".
+                ttl_seconds = settings.SHARE_DEFAULT_TTL_SECONDS
+            if ttl_seconds is not None and ttl_seconds > MAX_SHARE_TTL_SECONDS:
+                # Clamp to the maximum so a user cannot mint a permanent link.
+                ttl_seconds = MAX_SHARE_TTL_SECONDS
+            if ttl_seconds is not None:
+                expires_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=ttl_seconds)
         share = ConversationShare(
             conversation_id=conversation_id,
             created_by=user_id,

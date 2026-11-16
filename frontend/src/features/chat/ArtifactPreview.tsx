@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { RefreshCw, ExternalLink, Smartphone, Tablet, Monitor } from "lucide-react";
+import { RefreshCw, Smartphone, Tablet, Monitor } from "lucide-react";
 import { MarkdownRenderer } from "@/features/chat/ChatArea";
 
 interface ArtifactPreviewProps {
@@ -153,12 +153,6 @@ export function ArtifactPreview({
     return buildSandboxDoc(content, lang);
   }, [content, lang, isMarkdown]);
 
-  const handleOpenNewTab = () => {
-    const blob = new Blob([srcDoc], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
-  };
-
   const deviceWidthClass = {
     desktop: "w-full",
     tablet: "w-[768px] mx-auto shadow-2xl border-x border-[var(--border-subtle)]",
@@ -223,14 +217,6 @@ export function ArtifactPreview({
           >
             <RefreshCw className="w-3 h-3" />
             Reload
-          </button>
-          <button
-            onClick={handleOpenNewTab}
-            className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-colors text-[11px]"
-            title="Open in new window"
-          >
-            <ExternalLink className="w-3 h-3" />
-            Pop out
           </button>
         </div>
       </div>

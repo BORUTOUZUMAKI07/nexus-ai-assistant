@@ -148,19 +148,9 @@ async def test_reinforce_memories_background_boosts_confidence(monkeypatch):
     """Ensure recalled memories get their confidence reinforced in background."""
     user_id = uuid4()
     mem_uuid = uuid4()
-    now = datetime.now(UTC).replace(tzinfo=None)
 
-    mem_row = UserMemory(
-        id=mem_uuid,
-        user_id=user_id,
-        content="Prefers FastAPI",
-        mem0_id="mem0-fastapi",
-        confidence=0.7,
-        retrieval_count=0,
-        is_active=True,
-        created_at=now,
-        updated_at=now,
-    )
+
+    # mem_row creation removed (unused in test)
 
     reinforced_ids = []
 

@@ -2,6 +2,7 @@
 User Settings Application Service.
 Owns user profile settings and memory management use cases (SRP).
 """
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -83,6 +84,21 @@ class UserSettingsService:
                 await long_term_memory.delete(mem0_id)
             except Exception as exc:
                 logger.warning("mem0_delete_failed", mem0_id=mem0_id, error=str(exc))
+
+    async def get_memory_history(self, user_id: UUID, memory_id: UUID) -> list[dict[str, Any]]:
+        """Retrieve mem0 audit revision history for a user's memory."""
+        memory = await self._repo.get_memory_by_id(user_id, memory_id)
+        if not memory:
+            raise ResourceNotFoundError("Memory", str(memory_id))
+        if not memory.mem0_id:
+            return []
+        try:
+            from backend.app.services.memory.long_term import long_term_memory
+
+            return await long_term_memory.get_history(memory.mem0_id)
+        except Exception as exc:
+            logger.warning("mem0_get_history_failed", mem0_id=memory.mem0_id, error=str(exc))
+            return []
 
     async def list_api_keys(self, user_id: UUID, *, limit: int = 50, offset: int = 0):
         return await self._repo.get_api_keys(user_id, limit=limit, offset=offset)

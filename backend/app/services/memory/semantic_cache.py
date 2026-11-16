@@ -57,7 +57,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 def _resolve_embedder():
     try:
-        from app.services.rag.retrieval import retrieval_service
+        from backend.app.services.rag.retrieval import retrieval_service
 
         return retrieval_service
     except Exception as exc:  # pragma: no cover - lazy import environment fault

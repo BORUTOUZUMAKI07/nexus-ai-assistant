@@ -9,7 +9,7 @@ from uuid import uuid4
 import pyotp
 import pytest
 from backend.app.core.exceptions import AuthenticationError
-from backend.app.core.security import create_access_token, get_password_hash
+from backend.app.core.security import create_access_token, decrypt_api_key, encrypt_api_key, get_password_hash
 from backend.app.domain.user.models import User, UserSettings
 from backend.app.domain.user.schemas import (
     TokenResponse,
@@ -82,7 +82,7 @@ def _make_service(user_email: str, two_factor: bool = False):
     secret = pyotp.random_base32() if two_factor else None
     settings_row = UserSettings(
         user_id=uuid4(),
-        totp_secret=secret,
+        totp_secret=encrypt_api_key(secret) if secret else None,
         custom_settings={"two_factor_enabled": two_factor} if two_factor else {},
     )
     user = User(
@@ -101,7 +101,7 @@ def test_setup_returns_secret_and_uri():
     result = _await(svc.setup(row.user_id, "a@example.com"))
     assert len(result["secret"]) >= 16
     assert "otpauth://totp/" in result["otpauth_uri"]
-    assert row.totp_secret == result["secret"]
+    assert decrypt_api_key(row.totp_secret) == result["secret"]
 
 
 def test_setup_twice_is_rejected():
@@ -130,7 +130,7 @@ def test_enable_rejects_wrong_code():
 def test_disable_clears_secret_and_flag():
     svc, row, _ = _make_service("a@example.com", two_factor=True)
     assert _await(svc.is_enabled(row.user_id))
-    code = pyotp.TOTP(row.totp_secret).now()
+    code = pyotp.TOTP(decrypt_api_key(row.totp_secret)).now()
     assert _await(svc.disable(row.user_id, code)) is True
     assert row.totp_secret is None
     assert _await(svc.is_enabled(row.user_id)) is False
@@ -138,7 +138,7 @@ def test_disable_clears_secret_and_flag():
 
 def test_verify_login_code():
     svc, row, _ = _make_service("a@example.com", two_factor=True)
-    code = pyotp.TOTP(row.totp_secret).now()
+    code = pyotp.TOTP(decrypt_api_key(row.totp_secret)).now()
     assert _await(svc.verify_login_code(row.user_id, code)) is True
     assert _await(svc.verify_login_code(row.user_id, "123456")) is False
 
@@ -147,7 +147,7 @@ def _auth_with_2fa():
     secret = pyotp.random_base32()
     settings_row = UserSettings(
         user_id=uuid4(),
-        totp_secret=secret,
+        totp_secret=encrypt_api_key(secret),
         custom_settings={"two_factor_enabled": True},
     )
     user = User(

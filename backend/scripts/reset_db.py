@@ -1,5 +1,4 @@
-"""
-Database & Cache Reset Utility.
+"""Database & Cache Reset Utility.
 Wipes all user, conversation, message, artifact, project, and RAG data
 from PostgreSQL and flushes Redis cache keys to start fresh.
 
@@ -10,19 +9,21 @@ Usage:
   # Hosted database (Supabase / Render):
   DATABASE_URL="postgresql+asyncpg://..." uv run python scripts/reset_db.py --confirm
 """
+
 import asyncio
 import os
 import sys
 from pathlib import Path
+
+from backend.app.core.config import settings
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 # Ensure repository root is on sys.path so 'backend.app' is importable
 repo_root = Path(__file__).resolve().parents[2]
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
-from backend.app.core.config import settings
 
 # Tables in topological/safe order for truncate
 TABLES_TO_TRUNCATE = [
@@ -52,13 +53,13 @@ TABLES_TO_TRUNCATE = [
 
 async def reset_database(target_url: str):
     print(f"\n[Reset] Connecting to database: {target_url.split('@')[-1] if '@' in target_url else target_url}")
-    
+
     # Ensure async driver is used
     if target_url.startswith("postgresql://"):
         target_url = target_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     elif target_url.startswith("postgres://"):
         target_url = target_url.replace("postgres://", "postgresql+asyncpg://", 1)
-        
+
     engine = create_async_engine(
         target_url,
         connect_args={"statement_cache_size": 0, "max_cached_statement_lifetime": 0},
@@ -104,7 +105,7 @@ async def main():
     print(" NEXUS AI DATABASE RESET UTILITY")
     print("=" * 60)
     print(f"Target DB: {db_url.split('@')[-1] if '@' in db_url else db_url}")
-    
+
     if "--confirm" not in sys.argv:
         print("\nWARNING: This will delete ALL records (users, messages, chats, files)!")
         print("To proceed, run with --confirm:")

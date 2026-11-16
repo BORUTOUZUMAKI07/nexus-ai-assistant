@@ -123,7 +123,7 @@ async def _maybe_compact(messages: list) -> dict | None:
 
         summary = await ai_client.completion(
             messages=[{"role": "user", "content": summary_prompt}],
-            model="gpt-4o-mini",
+            model=settings.FAST_MODEL,
             temperature=0.1,
         )
     except Exception:

@@ -17,6 +17,7 @@ import threading
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -173,7 +174,8 @@ def build_test_engine(url: str) -> AsyncEngine:
         url,
         future=True,
         echo=False,
-        pool_pre_ping=True,
+        poolclass=NullPool,
+        connect_args={"statement_cache_size": 0, "max_cached_statement_lifetime": 0},
     )
 
 

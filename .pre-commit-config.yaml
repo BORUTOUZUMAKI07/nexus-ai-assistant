@@ -1,0 +1,17 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.0
+    hooks:
+      - id: ruff-check
+        args: [--config=backend/pyproject.toml]
+      - id: ruff-format
+        args: [--config=backend/pyproject.toml]
+
+  - repo: local
+    hooks:
+      - id: mypy-typecheck
+        name: mypy allowlist type check
+        entry: bash scripts/typecheck.sh
+        language: system
+        types: [python]
+        pass_filenames: false

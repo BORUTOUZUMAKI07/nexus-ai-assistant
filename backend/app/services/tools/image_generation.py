@@ -23,6 +23,7 @@ like the other ``services/tools`` modules.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from typing import Any
 from urllib.parse import quote
@@ -48,6 +49,12 @@ _ALLOWED_MIME: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/web
 # is already far past the point where more words change the picture.
 MAX_PROMPT_CHARS = 1000
 
+# Overall deadline for the whole fallback chain (2 models × per-call timeout).
+MAX_TOTAL_SECONDS = 90.0
+
+# Per-user daily cap on image generation (free-tier abuse guard).
+DAILY_IMAGE_LIMIT = 50
+
 
 class ImageGenerationError(RuntimeError):
     """Raised when no model in the fallback chain produced a real image."""
@@ -69,7 +76,7 @@ class ImageGenerationService:
     ) -> None:
         self._timeout = timeout
         self._client_factory = client_factory or (
-            lambda: httpx.AsyncClient(timeout=timeout, follow_redirects=True)
+            lambda: httpx.AsyncClient(timeout=timeout, follow_redirects=False)
         )
 
     async def generate(
@@ -94,56 +101,65 @@ class ImageGenerationService:
         encoded_prompt = quote(cleaned, safe="")
         last_error: str = "image generation failed"
 
-        async with self._client_factory() as client:
-            for model in MODEL_FALLBACKS:
-                params: dict[str, Any] = {
-                    "width": width,
-                    "height": height,
-                    "nologo": "true",
-                    "model": model,
-                }
-                if seed is not None:
-                    params["seed"] = int(seed)
-                try:
-                    response = await client.get(
-                        f"{POLLINATIONS_PROMPT_URL}/{encoded_prompt}",
-                        params=params,
-                    )
-                except Exception as exc:  # noqa: BLE001 - one model failing must not stop the chain
-                    last_error = f"{model}: {exc}"
-                    logger.warning("image_generation_request_failed", model=model, error=str(exc))
-                    continue
+        # Overall deadline across the whole fallback chain so one slow/hung
+        # provider cannot hold a worker for 2 minutes.
+        try:
+            async with asyncio.timeout(MAX_TOTAL_SECONDS):
+                async with self._client_factory() as client:
+                    for model in MODEL_FALLBACKS:
+                        params: dict[str, Any] = {
+                            "width": width,
+                            "height": height,
+                            "nologo": "true",
+                            "model": model,
+                        }
+                        if seed is not None:
+                            params["seed"] = int(seed)
+                        try:
+                            response = await client.get(
+                                f"{POLLINATIONS_PROMPT_URL}/{encoded_prompt}",
+                                params=params,
+                            )
+                        except Exception as exc:  # noqa: BLE001 - one model failing must not stop the chain
+                            last_error = f"{model}: {exc}"
+                            logger.warning("image_generation_request_failed", model=model, error=str(exc))
+                            continue
 
-                if response.status_code != 200:
-                    last_error = f"{model}: HTTP {response.status_code}"
-                    logger.warning(
-                        "image_generation_http_error",
-                        model=model,
-                        status=response.status_code,
-                    )
-                    continue
+                        if response.status_code != 200:
+                            last_error = f"{model}: HTTP {response.status_code}"
+                            logger.warning(
+                                "image_generation_http_error",
+                                model=model,
+                                status=response.status_code,
+                            )
+                            continue
 
-                mime = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
-                if mime not in _ALLOWED_MIME:
-                    last_error = f"{model}: unexpected content-type {mime or 'unknown'}"
-                    logger.warning("image_generation_bad_content_type", model=model, mime=mime)
-                    continue
+                        mime = (
+                            response.headers.get("content-type") or ""
+                        ).split(";")[0].strip().lower()
+                        if mime not in _ALLOWED_MIME:
+                            last_error = f"{model}: unexpected content-type {mime or 'unknown'}"
+                            logger.warning("image_generation_bad_content_type", model=model, mime=mime)
+                            continue
 
-                data = response.content
-                if not data:
-                    last_error = f"{model}: empty body"
-                    logger.warning("image_generation_empty_body", model=model)
-                    continue
+                        data = response.content
+                        if not data:
+                            last_error = f"{model}: empty body"
+                            logger.warning("image_generation_empty_body", model=model)
+                            continue
 
-                encoded = base64.b64encode(data).decode("ascii")
-                return {
-                    "data_url": f"data:{mime};base64,{encoded}",
-                    "mime": mime,
-                    "model": model,
-                    "width": width,
-                    "height": height,
-                    "bytes": len(data),
-                }
+                        encoded = base64.b64encode(data).decode("ascii")
+                        return {
+                            "data_url": f"data:{mime};base64,{encoded}",
+                            "mime": mime,
+                            "model": model,
+                            "width": width,
+                            "height": height,
+                            "bytes": len(data),
+                        }
+        except TimeoutError:
+            last_error = "image generation timed out"
+            logger.warning("image_generation_timeout", timeout=MAX_TOTAL_SECONDS)
 
         raise ImageGenerationError(last_error)
 

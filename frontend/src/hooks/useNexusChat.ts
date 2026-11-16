@@ -1535,6 +1535,14 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     [updateMessages]
   );
 
+  // Abort any in-flight SSE stream on unmount so we don't leak the connection
+  // or call state setters on an unmounted component.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
   return {
     messages,
     isHydrating,

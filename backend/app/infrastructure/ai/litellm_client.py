@@ -592,7 +592,7 @@ router = Router(
         {"complex_reasoning": ["fast_chat"]},
     ],
     cooldown_time=30,
-    num_retries=1,
+    num_retries=0,
     timeout=25,
 )
 
@@ -876,88 +876,137 @@ class LiteLLMService:
         max_tokens: int = 4096,
         user_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Streams token-by-token chunks over async generator."""
+        """Streams token-by-token chunks over async generator.
+
+        Falls through the same group chain as ``complete()`` when the primary
+        group's stream yields no content, so a dead primary never kills the run.
+        Sets ``_last_resolved_model`` so the transcript reports what actually
+        answered, and records provider-reported usage (via ``stream_options``)
+        instead of only a chars/4 estimate.
+        """
         group = resolve_model_group(model)
         import time as _time
 
         _start = _time.perf_counter()
-        effective_max_tokens = min(max(max_tokens, 1), 1000) if group in ("fast_chat", "complex_reasoning") else max_tokens
+        effective_max_tokens = (
+            min(max(max_tokens, 1), 1000) if group in ("fast_chat", "complex_reasoning") else max_tokens
+        )
 
-        # Circuit breaker: refuse to start a stream against an OPEN group.
-        if not await self._breaker.allow(group):
-            logger.warning("llm_stream_circuit_open", model=group)
-            raise RuntimeError(f"Provider circuit open for model group '{group}'")
+        # Fallback chain: if the primary group's stream yields no content, try
+        # the next group before giving up — same set as complete().
+        _fallback_groups = [
+            "large_context",
+            "gemini_free",
+            "vision_analysis",
+            "vision_fallback",
+            "liquid_fallback",
+        ]
+        _attempt_groups = [group] + [g for g in _fallback_groups if g != group]
 
-        async with self._in_flight.acquire(group):
+        _streamed_chars = 0
+        _resolved_name = ""
+        _response = None
+        _usage = None
+
+        for _attempt_group in _attempt_groups:
+            # Circuit breaker: skip the group entirely while it is OPEN.
+            if not await self._breaker.allow(_attempt_group):
+                logger.warning("llm_stream_circuit_open", model=_attempt_group)
+                continue
+
             # BYOK: use the user's key for this provider when they stored one.
             _stream_kwargs: dict[str, Any] = {"stream": True}
-            _user_key = get_byok_key(resolve_provider(group))
+            _user_key = get_byok_key(resolve_provider(_attempt_group))
             if _user_key:
                 _stream_kwargs["api_key"] = _user_key
+
             try:
-                response = await self.router.acompletion(
-                    model=group,
-                    messages=_normalize_messages(messages),
-                    temperature=temperature,
-                    max_tokens=effective_max_tokens,
-                    **_stream_kwargs,
-                )
+                async with self._in_flight.acquire(_attempt_group):
+                    response = await self.router.acompletion(
+                        model=_attempt_group,
+                        messages=_normalize_messages(messages),
+                        temperature=temperature,
+                        max_tokens=effective_max_tokens,
+                        **_stream_kwargs,
+                    )
             except Exception as exc:
-                await self._breaker.record_failure(group)
+                await self._breaker.record_failure(_attempt_group)
                 logger.warning(
                     "llm_stream_start_failed",
-                    model=group,
+                    model=_attempt_group,
                     error=str(exc),
                     duration_ms=int((_time.perf_counter() - _start) * 1000),
                 )
-                raise
-            logger.info(
-                "llm_stream_started",
-                model=group,
-                resolved=getattr(response, "model", ""),
-                first_chunk_latency_ms=int((_time.perf_counter() - _start) * 1000),
-            )
-            try:
-                _streamed_chars = 0
-                async for chunk in response:
-                    # Guard: streaming chunks can have delta.content = None between
-                    # thinking tokens — skip silently rather than yielding "None" strings.
-                    delta = (chunk.choices[0].delta.content if chunk.choices else None) or ""
-                    if delta:
-                        _streamed_chars += len(delta)
-                        yield delta
-                # #33: the breaker used to be told "success" the moment the
-                # request was accepted, so a stream that then died mid-flight, or
-                # returned nothing at all, left it closed. A stream that produced
-                # no content is a provider failure, not a healthy call.
-                if _streamed_chars == 0:
-                    await self._breaker.record_failure(group)
-                    logger.warning("llm_stream_empty_output", model=group)
-                else:
-                    await self._breaker.record_success(group)
-            except Exception as exc:
+                continue
+
+            _resolved_name = getattr(response, "model", "") or ""
+            _response = response
+            break  # a response started — stop trying fallbacks
+
+        if _response is None:
+            raise RuntimeError("All model groups failed to start a stream.")
+
+        logger.info(
+            "llm_stream_started",
+            model=group,
+            resolved=_resolved_name,
+            first_chunk_latency_ms=int((_time.perf_counter() - _start) * 1000),
+        )
+
+        try:
+            async for chunk in _response:
+                # Guard: streaming chunks can have delta.content = None between
+                # thinking tokens — skip silently rather than yielding "None" strings.
+                delta = (chunk.choices[0].delta.content if chunk.choices else None) or ""
+                if delta:
+                    _streamed_chars += len(delta)
+                    yield delta
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage:
+                    _usage = chunk_usage
+
+            # Provider-reported usage supersedes the chars/4 estimate.
+            if _usage:
+                cached_tokens = _extract_cached_tokens(_usage)
+                record_provider_usage(
+                    prompt_tokens=getattr(_usage, "prompt_tokens", 0) or 0,
+                    cached_tokens=cached_tokens,
+                )
+
+            if _streamed_chars == 0:
                 await self._breaker.record_failure(group)
-                logger.warning("llm_stream_failed", model=group, error=str(exc))
-                raise
-            finally:
-                # Always release the upstream SSE connection, including when the
-                # consumer generator is closed early (client disconnect) or a
-                # provider error interrupts the loop. Leaking it stalls the provider
-                # HTTP pool and can wedge later runs.
-                try:
-                    await response.aclose()
-                except Exception as exc:
-                    logger.warning("llm_stream_aclose_failed", model=group, error=str(exc))
-                # Charge the spend meter for the stream. This is an ESTIMATE, not
-                # reported usage: litellm only exposes usage on a streaming call if
-                # the request sets stream_options={"include_usage": True}, and
-                # adding that changes the request shape for every provider in the
-                # router -- not a change to make blind, on free tiers whose exact
-                # accounting is what pays the bill. Characters/4 is the standard
-                # approximation and is deliberately cheap, because the point is
-                # to keep the final answer visible in the run total rather than to
-                # bill it. The request side is already hard-capped by
-                # `effective_max_tokens`.
+                logger.warning("llm_stream_empty_output", model=group)
+            else:
+                await self._breaker.record_success(group)
+
+            _resolved_group = (
+                resolve_model_group(_resolved_name) if _resolved_name else ""
+            )
+            if _resolved_group in _GROUP_NAMES and _resolved_group != group:
+                logger.warning(
+                    "llm_provider_fallback",
+                    model=group,
+                    resolved=_resolved_name,
+                    resolved_group=_resolved_group,
+                )
+            _last_resolved_model.set(_resolved_name)
+        except Exception as exc:
+            await self._breaker.record_failure(group)
+            logger.warning("llm_stream_failed", model=group, error=str(exc))
+            raise
+        finally:
+            try:
+                await _response.aclose()
+            except Exception as exc:
+                logger.warning("llm_stream_aclose_failed", model=group, error=str(exc))
+            # Charge the spend meter: actual tokens when the provider reported
+            # them, chars/4 estimate otherwise.
+            if _usage:
+                charge_tokens(
+                    (getattr(_usage, "prompt_tokens", 0) or 0)
+                    + (getattr(_usage, "completion_tokens", 0) or 0)
+                )
+            else:
                 charge_tokens((_streamed_chars + 3) // 4)
 
     async def completion(

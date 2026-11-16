@@ -25,10 +25,9 @@ on every boot: when there is nothing to do it issues no DDL at all.
 from __future__ import annotations
 
 import sqlalchemy as sa
+from backend.app.core.logging import logger
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import SQLModel
-
-from app.core.logging import logger
 
 __all__ = ["RECONCILE_STATE", "reconcile_missing_columns"]
 

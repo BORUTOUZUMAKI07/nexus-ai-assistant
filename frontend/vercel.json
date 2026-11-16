@@ -5,7 +5,7 @@
   "devCommand": "npm run dev",
   "installCommand": "npm ci --legacy-peer-deps",
   "framework": "nextjs",
-  "regions": ["iad1"],
+  "regions": ["sfo1"],
   "build": {
     "env": {}
   },

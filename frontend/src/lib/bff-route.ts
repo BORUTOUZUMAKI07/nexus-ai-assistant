@@ -121,7 +121,9 @@ export function createBFFRoute(
   const exports: Record<string, (req: NextRequest) => Promise<NextResponse>> = {};
   for (const m of methods) {
     if (allowedMethods.has(m)) {
-      exports[m.toLowerCase()] = handle;
+      // Next.js App Router only recognizes UPPERCASE handler exports
+      // (GET, POST, ...). Lowercase exports silently 405.
+      exports[m] = handle;
     }
   }
   return exports;

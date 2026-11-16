@@ -1,7 +1,9 @@
 ﻿#!/usr/bin/env python3
 """Tripwire: refuse to commit tracked files that look like secrets."""
 from __future__ import annotations
-import re, subprocess, sys
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 PATTERNS = [

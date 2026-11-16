@@ -1046,7 +1046,7 @@ class Settings(BaseSettings):
         if self.ENVIRONMENT == "production":
             missing = [
                 name
-                for name in ("SECRET_KEY", "ENCRYPTION_KEY", "JWT_SECRET_KEY")
+                for name in ("SECRET_KEY", "ENCRYPTION_KEY", "JWT_SECRET_KEY", "METRICS_TOKEN", "EMAIL_DEV_LINK_ENABLED")
                 if not getattr(self, name) or getattr(self, name) in PUBLISHED_EXAMPLE_SECRETS
             ]
             if missing:

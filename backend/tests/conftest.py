@@ -136,9 +136,11 @@ def session_factory(db_engine):
 
 
 @pytest.fixture(scope="session")
-async def schema_ready(db_engine):
+def schema_ready(db_engine):
     """Drop and recreate all tables once per session (deterministic state)."""
-    await init_db_schema(db_engine)
+    import asyncio
+
+    asyncio.run(init_db_schema(db_engine))
 
 
 @pytest.fixture
@@ -191,7 +193,7 @@ def redis_backend():
 
 
 @pytest.fixture
-async def override_get_db(session_factory, schema_ready):
+def override_get_db(session_factory, schema_ready):
     """Override ``get_db``/``get_db_session`` to serve Postgres-backed sessions.
 
     Every route and service dependency built on ``Depends(get_db)`` (auth,
@@ -288,7 +290,7 @@ async def admin_user(db_session):
 
 
 @pytest.fixture
-def user_auth_headers(test_user):
+async def user_auth_headers(test_user):
     """Bearer token headers for ``test_user``."""
     token = security.create_access_token(
         test_user.id,
@@ -299,7 +301,7 @@ def user_auth_headers(test_user):
 
 
 @pytest.fixture
-def admin_auth_headers(admin_user):
+async def admin_auth_headers(admin_user):
     """Bearer token headers for ``admin_user``."""
     token = security.create_access_token(
         admin_user.id,
