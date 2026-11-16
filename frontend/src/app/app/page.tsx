@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
-import { useRouter } from "next/navigation";
 import { QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Sidebar } from "@/components/layout/Sidebar";
 import WorkspaceSkeleton from "@/features/workspace/WorkspaceSkeleton";
@@ -175,8 +174,7 @@ export default function AppPage() {
 
 function AppPageInner() {
   const queryClient = useQueryClient();
-  const router = useRouter();
-  const { mode, setMode, resolved } = useTheme();
+  const { mode, setMode } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [comparisonOpen, setComparisonOpen] = useState(false);
@@ -262,7 +260,7 @@ function AppPageInner() {
   // in hand-rolled `useState` + fetch-on-mount effects. The chat stream is
   // deliberately *not* here: `useNexusChat` remains the transcript's only writer.
   const conversationsQuery = useConversations(mounted && !isAuthOpen);
-  const conversations = conversationsQuery.data ?? [];
+  const conversations = useMemo(() => conversationsQuery.data ?? [], [conversationsQuery.data]);
 
   // Archived conversations are a second, opt-in read: the sidebar list only ever
   // asks for `archived=false`, so without this an archived chat was unreachable
@@ -675,7 +673,7 @@ function AppPageInner() {
     }
   };
 
-  const handleRenameConversation = async (id: string, title: string) => {
+  const handleRenameConversation = useCallback(async (id: string, title: string) => {
     const previous = conversations.find((c) => c.id === id)?.title;
     // Optimistic: the sidebar re-renders instantly and the server call
     // follows. On failure the row snaps back to the title it had before.
@@ -693,7 +691,7 @@ function AppPageInner() {
       console.warn("Rename conversation failed:", err);
       throw err;
     }
-  };
+  }, [conversations, queryClient]);
 
   useEffect(() => {
     if (!activeConversationId || chat.isLoading || !chat.messages || chat.messages.length < 2) return;
@@ -719,7 +717,7 @@ function AppPageInner() {
     const title = raw.slice(0, 60).trim() + (raw.length > 60 ? "…" : "");
     autoTitleDoneRef.current.add(activeConversationId);
     handleRenameConversation(activeConversationId, title).catch(() => {});
-  }, [chat.messages, chat.isLoading, activeConversationId, conversations, chat]);
+  }, [chat.messages, chat.isLoading, activeConversationId, conversations, chat, handleRenameConversation]);
 
   const handleForkConversation = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();

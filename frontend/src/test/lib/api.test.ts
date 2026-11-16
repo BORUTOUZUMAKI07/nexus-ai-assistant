@@ -400,9 +400,6 @@ describe("previously unmocked endpoints", () => {
  * the call counts, not by wall-clock sleeps.
  */
 describe("OAuth provider discovery", () => {
-  const providerList = (names: string[]) => ({
-    providers: names.map((name) => ({ name, configured: true })),
-  })
 
   it("does not retry transient failures, returns empty on first failure", async () => {
     let calls = 0

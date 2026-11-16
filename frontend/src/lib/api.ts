@@ -1187,43 +1187,9 @@ export interface OAuthProviderInfo {
  * 503 heals itself instead of hiding OAuth until a manual reload. The caller
  * aborts it on unmount, so navigating away stops the probing.
  */
-const OAUTH_PROVIDERS_RETRY_ATTEMPTS = 4;
-const OAUTH_PROVIDERS_RETRY_BASE_DELAY_MS = 600;
-
 export interface OAuthProvidersOptions extends FetchRetryOptions {
   /** Aborts in-flight retries; the sign-in page passes its effect's controller. */
   signal?: AbortSignal;
-}
-
-/**
- * `sleep`, but it resolves early (never rejects) when `signal` aborts.
- *
- * Retry pauses have to be interruptible for the same reason the request does:
- * a component that has unmounted, or a navigation away, must not leave a timer
- * that later fires and drives another attempt at a page that is gone.
- */
-function sleepUntilAbort(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0 || signal?.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    function onAbort() {
-      clearTimeout(timer);
-      resolve();
-    }
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-/** Exponential backoff with jitter, matching `fetchWithRetry`'s shape. */
-function oauthProvidersRetryDelayMs(attempt: number, baseDelayMs: number): number {
-  if (baseDelayMs <= 0) return 0;
-  return (
-    Math.min(baseDelayMs * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS) +
-    Math.random() * 250
-  );
 }
 
 /**

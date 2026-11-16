@@ -163,9 +163,9 @@ async def register_user(
         # Best-effort verification email ("notify" leg of email infra).
         try:
             await auth_svc.send_verification_email(user)
-        except Exception:  # nosec B110
+        except Exception as exc:  # nosec B110
             # notify leg is best-effort; never block signup
-            pass
+            logger.warning("auth.register.verification_email_failed", user_id=str(user.id), error=str(exc))
         return user
     except UserAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=exc.message)
@@ -304,9 +304,9 @@ async def logout(
                 exp = payload.get("exp")
                 ttl_seconds = max(1, int(exp) - int(time.time())) if exp else 3600
                 await get_cache_service().blacklist_token(str(jti), ttl_seconds)
-        except Exception:  # nosec B110
+        except Exception as exc:  # nosec B110
             # revocation is best-effort; the token's exp still bounds reuse
-            pass
+            logger.warning("auth.logout.blacklist_failed", error=str(exc))
 
     revoked = await auth_svc.logout(access_token=access_token, refresh_token=refresh_token)
     if not revoked:

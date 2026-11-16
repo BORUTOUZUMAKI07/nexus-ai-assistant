@@ -709,9 +709,9 @@ class AuthService:
             if jti and exp:
                 ttl_seconds = max(1, int(exp) - int(time.time()))
                 await get_cache_service().set(f"refresh:used:{jti}", "1", ttl_seconds=ttl_seconds)
-        except Exception:  # nosec B110
+        except Exception as exc:  # nosec B110
             # Best-effort revocation: expired or malformed tokens cannot be re-used anyway
-            pass
+            logger.debug("auth.revoke_refresh_token_failed", error=str(exc))
 
     async def revoke_refresh_family(
         self, user_id: UUID, family_id: str | None = None

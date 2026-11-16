@@ -105,10 +105,6 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
     // Nothing to compare: spending two model calls on an empty prompt returns
     // two versions of "what do you need?". The panes say so instead.
     if (!question.trim()) {
-      setErrorA(NO_QUESTION);
-      setErrorB(NO_QUESTION);
-      setLoadingA(false);
-      setLoadingB(false);
       return () => {
         aborterRef.current?.abort();
       };
@@ -225,6 +221,12 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
     };
   }, [question, modelA, modelB]);
 
+  const hasQuestion = Boolean(question.trim());
+  const effectiveErrorA = !hasQuestion ? NO_QUESTION : errorA;
+  const effectiveErrorB = !hasQuestion ? NO_QUESTION : errorB;
+  const effectiveLoadingA = !hasQuestion ? false : loadingA;
+  const effectiveLoadingB = !hasQuestion ? false : loadingB;
+
   return (
     <div
       className="fixed inset-0 z-50 flex flex-col"
@@ -273,16 +275,16 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
               label={modelDisplayName(modelA) ?? modelA}
               badge={modelA}
               response={responseA}
-              loading={loadingA}
-              error={errorA}
+              loading={effectiveLoadingA}
+              error={effectiveErrorA}
             />
             <div className="w-px bg-[var(--border-subtle)] self-stretch" />
             <ModelComparisonPanel
               label={modelDisplayName(modelB) ?? modelB}
               badge={modelB}
               response={responseB}
-              loading={loadingB}
-              error={errorB}
+              loading={effectiveLoadingB}
+              error={effectiveErrorB}
             />
           </div>
         </div>

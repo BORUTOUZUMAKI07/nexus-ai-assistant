@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { X, Lock, Mail, User, ArrowRight, Sparkles, Loader2, Mail as MailIcon } from "lucide-react";
+import { X, Lock, Mail, User, ArrowRight, Sparkles, Loader2 } from "lucide-react";
 import { registerUser, loginUser, startOAuthLogin, listOAuthProviders } from "@/lib/api";
 import {
   Dialog,

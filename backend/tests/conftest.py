@@ -84,6 +84,11 @@ os.environ["NEXUS_DEV_SECRETS_FILE"] = str(
 # tests/integration/test_auth.py, which turns the flag back on.
 os.environ["FIRST_USER_IS_ADMIN"] = "false"
 
+# Guard 5 -- LiteLLM local cost map. LiteLLM.__init__ fetches the remote cost map
+# from GitHub with backoff retries when offline, which delays test execution by
+# ~10 seconds and leaves background retry threads hanging. Force local cost map.
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "true"
+
 import backend.app.infrastructure.cache.redis_client as cache_module  # noqa: E402
 import redis.asyncio as redis  # noqa: E402
 from _testcontainers import (  # noqa: E402

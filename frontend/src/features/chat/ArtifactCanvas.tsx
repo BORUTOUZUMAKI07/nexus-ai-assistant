@@ -20,7 +20,6 @@ import {
   Loader2,
 } from "lucide-react";
 import { fetchArtifact, type ArtifactVersionItem } from "@/lib/api";
-import { DiffViewer } from "@/features/chat/DiffViewer";
 
 export interface ArtifactItem {
   id: string;
@@ -71,11 +70,6 @@ export const ArtifactCanvas: React.FC<ArtifactCanvasProps> = ({
   const [versions, setVersions] = useState<ArtifactVersionItem[] | null>(null);
 // When set, the code view shows this past version instead of the live one.
 const [viewingVersion, setViewingVersion] = useState<ArtifactVersionItem | null>(null);
-// Version diff: shows old vs new side by side when comparing two versions.
-const [diffing, setDiffing] = useState<{
-  oldVersion: ArtifactVersionItem | null;
-  newVersion: ArtifactVersionItem | null;
-} | null>(null);
   // Edit buffer. `isEditing` gates the textarea; `draft` holds the unsaved text
   // so toggling Edit and back does not lose work. `saved` drives the transient
   // "version N saved" confirmation.

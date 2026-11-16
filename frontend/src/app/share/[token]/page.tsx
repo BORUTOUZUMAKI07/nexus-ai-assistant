@@ -12,6 +12,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useParams } from "next/navigation";
 import { FileWarning, Loader2, MessageSquare } from "lucide-react";
 import { MarkdownRenderer } from "@/features/chat/ChatArea";
@@ -75,7 +76,7 @@ export default function SharedConversationPage() {
       <header className="border-b border-[var(--border-subtle)]">
         <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <img src="/nexus-logo.svg" alt="Nexus" className="w-7 h-7 rounded-lg" />
+            <Image src="/nexus-logo.svg" alt="Nexus" width={28} height={28} className="w-7 h-7 rounded-lg" />
             <span className="font-semibold text-sm tracking-tight">
               {payload?.conversation.title ?? "Shared conversation"}
             </span>

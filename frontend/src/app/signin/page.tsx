@@ -2,9 +2,10 @@
 
 import React, { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Loader2, Lock, Mail, User, ArrowRight } from "lucide-react";
-import { registerUser, loginUser, startOAuthLogin, listOAuthProviders, type OAuthProviderName } from "@/lib/api";
+import { registerUser, loginUser, startOAuthLogin, listOAuthProviders } from "@/lib/api";
 import { checkAuth } from "@/lib/auth";
 
 /**
@@ -238,7 +239,7 @@ export default function SignInPage() {
       <div className="w-full max-w-md">
         <div className="mb-8 flex flex-col items-center text-center">
           <Link href="/" className="flex items-center justify-center">
-            <img src="/nexus-logo.svg" alt="Nexus" className="h-14 w-14 rounded-xl shadow-sm" />
+            <Image src="/nexus-logo.svg" alt="Nexus" width={56} height={56} className="h-14 w-14 rounded-xl shadow-sm" />
           </Link>
           <h1 className="mt-5 text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
             {mode === "login" ? "Welcome back" : "Create your account"}

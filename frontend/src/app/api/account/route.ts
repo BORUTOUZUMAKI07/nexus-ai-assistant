@@ -1,4 +1,3 @@
-import { NextRequest } from "next/server";
 import { proxyJson } from "@/lib/proxy";
 
 /**
@@ -9,11 +8,11 @@ import { proxyJson } from "@/lib/proxy";
  * was a direct database operation. Left-over test accounts could not be removed
  * through the product at all.
  */
-export async function DELETE(_req: NextRequest) {
+export async function DELETE() {
   return proxyJson("/account", { method: "DELETE" });
 }
 
 /** Data export (portability): the same gap on the read side. */
-export async function GET(_req: NextRequest) {
+export async function GET() {
   return proxyJson("/account/export", { method: "GET" });
 }

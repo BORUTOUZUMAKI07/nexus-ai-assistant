@@ -24,6 +24,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
+import Image from "next/image";
 import { MODEL_CATALOG } from "@/lib/models";
 
 export interface ConversationItem {
@@ -314,7 +315,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Brand Header */}
       <div className="p-4 flex items-center justify-between border-b border-[var(--border-subtle)]">
         <div className="flex items-center gap-2.5">
-          <img src="/nexus-logo.svg" alt="Nexus" className="w-8 h-8 rounded-lg" />
+          <Image src="/nexus-logo.svg" alt="Nexus" width={32} height={32} className="w-8 h-8 rounded-lg" />
           <div>
             <h1 className="font-semibold text-sm tracking-tight text-[var(--text-primary)]">
               Nexus AI

@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 # env vars higher-priority than the local .env file.
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
+# Prevent LiteLLM from blocking boot/imports with remote GitHub retries when
+# offline or during cold start. Bundled local cost map is used immediately.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+
 
 # Secret values that have appeared in backend/.env.example, and which therefore
 # live in a public repository. An operator who copies the example to .env and

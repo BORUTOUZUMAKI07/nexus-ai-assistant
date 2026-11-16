@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { HelpCircle, X, Keyboard, Command, Code } from "lucide-react";
+import { X, Keyboard, Command } from "lucide-react";
 
 const SHORTCUTS = [
   {
