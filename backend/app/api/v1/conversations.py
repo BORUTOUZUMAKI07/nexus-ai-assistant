@@ -3,6 +3,7 @@ Conversations API Router.
 Pure HTTP transport layer — delegates all conversation use cases to ConversationService (SRP + DIP).
 """
 import asyncio
+import json
 from collections.abc import AsyncGenerator
 from typing import Literal
 from uuid import UUID
@@ -44,7 +45,7 @@ from backend.app.services.runs.executor import (
 from backend.app.services.runs.log import tail_run
 from backend.app.services.usage.service import UsageService
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ._replay_sanitizer import _sanitize_replayed_message
@@ -102,13 +103,30 @@ async def _release_stream_slot(thread_id: str) -> None:
 async def list_conversations(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=1000000),
+    cursor: str | None = Query(default=None, description="Keyset cursor '<updated_at_iso>|<id>' from previous page"),
     archived: bool = False,
     current_user: User = Depends(get_current_user),
     conv_svc: ConversationService = Depends(get_conversation_service),
 ):
-    return await conv_svc.list_conversations(
-        user_id=current_user.id, limit=limit, offset=offset, archived=archived
+    items = await conv_svc.list_conversations(
+        user_id=current_user.id, limit=limit, offset=offset, archived=archived, cursor=cursor
     )
+    # Build keyset next_cursor from the last returned item
+    next_cursor: str | None = None
+    if items and len(items) == limit:
+        last = items[-1]
+        next_cursor = f"{last.updated_at.isoformat()}|{last.id}"
+    # Return envelope when cursor pagination is used, plain list for backward compat
+    if cursor is not None or next_cursor is not None:
+        return Response(
+            content=json.dumps({
+                "items": [ConversationResponse.model_validate(c).model_dump(mode="json") for c in items],
+                "next_cursor": next_cursor,
+                "has_more": len(items) == limit,
+            }),
+            media_type="application/json",
+        )
+    return items
 
 
 @router.get("/search", response_model=list[ConversationResponse])

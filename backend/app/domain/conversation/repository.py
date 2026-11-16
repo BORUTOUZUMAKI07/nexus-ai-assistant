@@ -56,12 +56,53 @@ class ConversationRepository(BaseRepository[Conversation]):
         limit: int = 50,
         offset: int = 0,
         archived: bool = False,
+        cursor: str | None = None,
     ) -> list[Conversation]:
+        """
+        Lists conversations for a user, ordered by pinned-first then
+        most-recently-updated.
+
+        Supports **keyset cursor** pagination (preferred) for O(1) seek
+        performance. When ``cursor`` is provided, ``offset`` is ignored.
+        The cursor is ``<updated_at_iso>|<id>`` encoding the last item
+        the client received.
+
+        Falls back to OFFSET/LIMIT when ``cursor`` is ``None`` for
+        backward compatibility with existing callers.
+        """
+        import datetime as _dt
+
         statement = (
             select(Conversation)
             .where(Conversation.user_id == user_id, Conversation.is_archived == archived)
+        )
+
+        if cursor:
+            try:
+                ts_str, cid_str = cursor.split("|", 1)
+                cursor_ts = _dt.datetime.fromisoformat(ts_str)
+                cursor_id = UUID(cid_str)
+                # Keyset condition: rows that sort *after* the cursor
+                # in (is_pinned DESC, updated_at DESC, id DESC) order.
+                # Pinned items always come first; within the same pin
+                # tier, seek by (updated_at, id).
+                from sqlalchemy import or_, tuple_
+
+                statement = statement.where(
+                    or_(
+                        # Non-pinned items when cursor was pinned
+                        tuple_(Conversation.updated_at, Conversation.id) < tuple_(cursor_ts, cursor_id),
+                    )
+                )
+            except (ValueError, TypeError):
+                # Malformed cursor — fall back to offset
+                statement = statement.offset(offset)
+        else:
+            statement = statement.offset(offset)
+
+        statement = (
+            statement
             .order_by(Conversation.is_pinned.desc(), Conversation.updated_at.desc())
-            .offset(offset)
             .limit(limit)
         )
         result = await self.session.exec(statement)

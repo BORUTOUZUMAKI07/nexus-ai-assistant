@@ -52,9 +52,10 @@ class ConversationService:
         limit: int = 50,
         offset: int = 0,
         archived: bool = False,
+        cursor: str | None = None,
     ) -> list[Conversation]:
         return await self._repo.get_all_by_user(
-            user_id=user_id, limit=limit, offset=offset, archived=archived
+            user_id=user_id, limit=limit, offset=offset, archived=archived, cursor=cursor
         )
 
     async def search_conversations(self, user_id: UUID, query: str, limit: int = 20) -> list[Conversation]:

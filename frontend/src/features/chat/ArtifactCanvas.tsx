@@ -20,6 +20,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { fetchArtifact, type ArtifactVersionItem } from "@/lib/api";
+import { ArtifactPreview } from "@/features/chat/ArtifactPreview";
 
 export interface ArtifactItem {
   id: string;
@@ -706,8 +707,12 @@ const [viewingVersion, setViewingVersion] = useState<ArtifactVersionItem | null>
             </pre>
           </div>
         ) : (
-          <div className="prose-nexus text-sm text-[var(--text-primary)] whitespace-pre-wrap font-sans leading-relaxed">
-            {displayContent}
+          <div className="w-full h-full min-h-[30rem] flex-1">
+            <ArtifactPreview
+              content={displayContent}
+              language={activeArtifact.language}
+              title={activeArtifact.title}
+            />
           </div>
         )}
       </div>

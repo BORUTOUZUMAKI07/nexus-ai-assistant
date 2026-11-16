@@ -1,0 +1,36 @@
+name: Keep-Alive 24/7 Zero-Cost Ping
+
+on:
+  schedule:
+    # Runs every 10 minutes to prevent Render free-tier containers from spinning down
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: keepalive-cron
+  cancel-in-progress: true
+
+jobs:
+  ping-services:
+    name: Ping Free Tier Infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Ping FastAPI Backend Health
+        run: |
+          echo "Pinging Render FastAPI Backend..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://nexus-ai-backend.onrender.com/api/v1/health || true)
+          echo "FastAPI Backend returned HTTP $HTTP_CODE"
+
+      - name: Ping OpenTelemetry Collector Health
+        run: |
+          echo "Pinging Render OTel Collector..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://nexus-ai-otel-collector.onrender.com/health || true)
+          echo "OTel Collector returned HTTP $HTTP_CODE"
+
+      - name: Ping Vercel Frontend
+        run: |
+          echo "Pinging Vercel Production Frontend..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://nexus-ai-assistant-azure.vercel.app/ || true)
+          echo "Vercel Frontend returned HTTP $HTTP_CODE"

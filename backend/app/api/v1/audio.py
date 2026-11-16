@@ -10,7 +10,7 @@ from backend.app.core.config import settings
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.ai.litellm_client import ai_client, tts_media_type
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 logger = structlog.get_logger(__name__)
 
@@ -94,12 +94,14 @@ async def transcribe_audio_endpoint(
 async def synthesize_speech_endpoint(
     text: str,
     voice: str | None = None,
+    stream: bool = False,
     current_user: User = Depends(get_current_user),
 ) -> Response:
     """
     Text-to-speech: synthesizes speech audio (mp3) for the given text via
     Microsoft Edge neural voices (edge-tts) — free and key-less, so this
-    endpoint never requires a provider key.
+    endpoint never requires a provider key. Supports streaming chunks when
+    stream=True for sub-200ms TTFB.
     """
     # Validate TTS_MODEL / TTS_FORMAT up front so a bad value is a clear 400
     # rather than an opaque failure buried in the synthesis call below.
@@ -111,6 +113,17 @@ async def synthesize_speech_endpoint(
         raise HTTPException(status_code=400, detail="text must not be empty")
     if len(text) > 4000:
         raise HTTPException(status_code=400, detail="text exceeds 4000 characters")
+
+    if stream:
+        return StreamingResponse(
+            ai_client.stream_speech(text.strip(), voice=voice),
+            media_type=media_type,
+            headers={
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-cache",
+            },
+        )
+
     try:
         audio_bytes = await ai_client.synthesize_speech(text.strip(), voice=voice)
     except RuntimeError as exc:
