@@ -956,9 +956,14 @@ class Settings(BaseSettings):
     # chat path (the browser records `audio/webm`, which Gemini accepts) and is
     # free and reachable over 443. Set STT_FALLBACK_ENABLED=false to disable.
     STT_PRIMARY_MODEL: str = Field(default="groq/whisper-large-v3")
+    STT_PRIMARY_TIMEOUT_SECONDS: float = Field(default=30.0)
     STT_FALLBACK_ENABLED: bool = Field(default=True)
     STT_FALLBACK_MODEL: str = Field(default="gemini/gemini-3.5-flash-lite")
     STT_FALLBACK_TIMEOUT_SECONDS: float = Field(default=60.0)
+    # edge-tts opens a websocket to Microsoft; a hung connection can occupy a
+    # worker indefinitely on a free-tier instance. Bound every TTS call.
+    TTS_TIMEOUT_SECONDS: float = Field(default=30.0)
+    TTS_MAX_CONCURRENT: int = Field(default=4)
 
     # ── Visual PDF fallback ───────────────────────────────────────────────────
     # A scanned or image-only PDF has no text layer, so `extract_text` returns

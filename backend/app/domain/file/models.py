@@ -15,7 +15,7 @@ class File(SQLModel, table=True):
     conversation_id: uuid.UUID | None = Field(default=None, foreign_key="conversations.id", index=True)
     filename: str = Field(nullable=False)
     original_filename: str = Field(nullable=False)
-    file_type: str = Field(description="pdf | docx | txt | md | py | js | image | other")
+    file_type: str = Field(description="pdf | txt | md | py | js | image | other")
     mime_type: str = Field(nullable=False)
     size_bytes: int = Field(
         description="Size in bytes",

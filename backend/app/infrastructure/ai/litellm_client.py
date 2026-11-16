@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from collections.abc import AsyncGenerator
 from contextvars import ContextVar
@@ -604,6 +605,10 @@ router = Router(
 _llm_breaker = CircuitBreaker(failure_threshold=5, open_timeout_seconds=60.0)
 _llm_in_flight = InFlightLimiter(max_in_flight=8)
 
+# TTS edge-tts opens a websocket to Microsoft; bound concurrent calls and
+# per-call duration so a hung websocket cannot occupy a worker indefinitely.
+_tts_in_flight = InFlightLimiter(max_in_flight=settings.TTS_MAX_CONCURRENT)
+
 
 class LiteLLMService:
     def __init__(
@@ -1070,12 +1075,15 @@ class LiteLLMService:
         """
         primary = model or settings.STT_PRIMARY_MODEL
         try:
-            res = await litellm.atranscription(
-                model=primary,
-                file=audio_file,
-                # BYOK: a user-supplied Groq key is used for their audio when
-                # present, falling back to the shared deployment key.
-                api_key=get_byok_key("groq") or settings.GROQ_API_KEY,
+            res = await asyncio.wait_for(
+                litellm.atranscription(
+                    model=primary,
+                    file=audio_file,
+                    # BYOK: a user-supplied Groq key is used for their audio when
+                    # present, falling back to the shared deployment key.
+                    api_key=get_byok_key("groq") or settings.GROQ_API_KEY,
+                ),
+                settings.STT_PRIMARY_TIMEOUT_SECONDS,
             )
             return res.text if hasattr(res, "text") else str(res)
         except Exception as exc:
@@ -1154,19 +1162,21 @@ class LiteLLMService:
 
         tts_media_type()
         voice_id = voice or settings.TTS_VOICE
-        try:
-            communicate = edge_tts.Communicate(text, voice=voice_id)
-            chunks: list[bytes] = []
-            async for chunk in communicate.stream():
-                if chunk.get("type") == "audio":
-                    chunks.append(chunk["data"])
-            audio = b"".join(chunks)
-            if not audio:
-                raise RuntimeError("Edge TTS returned no audio data")
-            return audio
-        except Exception as exc:
-            logger.error("tts_synthesis_failed", error=str(exc))
-            raise
+        async with _tts_in_flight.acquire("tts"):
+            try:
+                async with asyncio.timeout(settings.TTS_TIMEOUT_SECONDS):
+                    communicate = edge_tts.Communicate(text, voice=voice_id)
+                    chunks: list[bytes] = []
+                    async for chunk in communicate.stream():
+                        if chunk.get("type") == "audio":
+                            chunks.append(chunk["data"])
+                    audio = b"".join(chunks)
+                    if not audio:
+                        raise RuntimeError("Edge TTS returned no audio data")
+                    return audio
+            except Exception as exc:
+                logger.error("tts_synthesis_failed", error=str(exc))
+                raise
 
     async def stream_speech(
         self,
@@ -1182,14 +1192,16 @@ class LiteLLMService:
 
         tts_media_type()
         voice_id = voice or settings.TTS_VOICE
-        try:
-            communicate = edge_tts.Communicate(text, voice=voice_id)
-            async for chunk in communicate.stream():
-                if chunk.get("type") == "audio" and chunk.get("data"):
-                    yield chunk["data"]
-        except Exception as exc:
-            logger.error("tts_streaming_failed", error=str(exc))
-            raise
+        async with _tts_in_flight.acquire("tts"):
+            try:
+                async with asyncio.timeout(settings.TTS_TIMEOUT_SECONDS):
+                    communicate = edge_tts.Communicate(text, voice=voice_id)
+                    async for chunk in communicate.stream():
+                        if chunk.get("type") == "audio" and chunk.get("data"):
+                            yield chunk["data"]
+            except Exception as exc:
+                logger.error("tts_streaming_failed", error=str(exc))
+                raise
 
     def count_tokens(self, text: str, model: str = "complex_reasoning") -> int:
         """Estimates token count using litellm encoder."""
