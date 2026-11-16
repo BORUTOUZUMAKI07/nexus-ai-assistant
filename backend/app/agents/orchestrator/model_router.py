@@ -9,6 +9,7 @@ simple queries.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from backend.app.core.config import settings
 
@@ -59,6 +60,30 @@ class RouteDecision:
     confidence: float  # 0..1 how sure the router is
 
 
+def _routing_text(content: Any) -> str:
+    """Flatten a message's content to text for routing.
+
+    A vision turn's content is OpenAI-style blocks (``[{"type": "text"}, {"type":
+    "image_url"}]``), not a string. `route` called ``.strip()`` on it directly, so
+    every image turn raised ``'list' object has no attribute 'strip'`` inside the
+    router -- before the synthesizer, before any model call -- and the run died
+    with the user's turn stored and no answer. Routing only needs the words; the
+    blocks keep their shape for the model call that follows.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, (list, tuple)):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    parts.append(part["text"])
+            elif isinstance(part, str):
+                parts.append(part)
+        return " ".join(parts)
+    return "" if content is None else str(content)
+
+
 def _has_complex_hint(text: str) -> bool:
     lower = text.lower()
     return any(h in lower for h in _COMPLEX_HINTS)
@@ -75,7 +100,7 @@ def _estimate_cost(tokens: int, group: str) -> float:
     return tokens * rates[group] / 1000.0
 
 
-def route(user_message: str, preferred_group: str | None = None) -> RouteDecision:
+def route(user_message: Any, preferred_group: str | None = None) -> RouteDecision:
     """
     Route a user turn to a model group.
 
@@ -88,7 +113,7 @@ def route(user_message: str, preferred_group: str | None = None) -> RouteDecisio
       4. Otherwise, fall back to fast_chat (cheaper) with medium confidence --
          the synthesizer/critic can escalate mid-run if needed.
     """
-    text = user_message.strip()
+    text = _routing_text(user_message).strip()
     token_estimate = max(1, len(text) // 4)  # rough tokens
 
     if preferred_group in ("fast_chat", "complex_reasoning"):

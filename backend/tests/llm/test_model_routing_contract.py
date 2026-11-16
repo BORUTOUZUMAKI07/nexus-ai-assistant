@@ -271,3 +271,29 @@ async def test_a_provider_fallback_is_logged_rather_than_inferred(monkeypatch):
     assert fallbacks, "a fallback to another group must be logged"
     assert fallbacks[0]["model"] == "complex_reasoning"
     assert fallbacks[0]["resolved_group"] == "gemini_free"
+
+
+def test_routing_a_multimodal_turn_does_not_raise():
+    """A vision turn must route on its text, not crash on its content blocks.
+
+    Live defect: `route()` called `.strip()` on the raw message content, and a
+    vision turn's content is a list of OpenAI-style blocks. The router is the
+    second node in the graph, so EVERY image send died there with
+    ``'list' object has no attribute 'strip'`` -- the user turn was stored, no
+    model was ever called, and the transcript stayed silent. The extractor keeps
+    the words so hints still apply.
+    """
+    from backend.app.agents.orchestrator.model_router import route
+
+    blocks = [
+        {"type": "text", "text": "Compare these two charts step by step"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+    ]
+    decision = route(blocks)
+    # The text still drives the choice: a complex hint must not be lost just
+    # because the message also carries an image.
+    assert decision.group == "complex_reasoning"
+
+    # The degenerate shapes must not raise either.
+    assert route([]).group in ("fast_chat", "complex_reasoning")
+    assert route(None).group == "fast_chat"
