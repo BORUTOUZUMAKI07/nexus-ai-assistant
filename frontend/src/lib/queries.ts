@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   fetchAPIKeys,
   fetchArtifacts,
@@ -124,6 +124,21 @@ export function useConversations(enabled: boolean) {
   return useQuery({
     queryKey: conversationKeys.all,
     queryFn: async (): Promise<Conversation[]> => (await fetchConversations(1, 50)).items,
+    enabled,
+  });
+}
+
+/**
+ * Keyset cursor-driven infinite scrolling for conversations.
+ * Consumes `next_cursor` from the keyset pagination envelope.
+ */
+export function useInfiniteConversations(enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: [...conversationKeys.all, "infinite"] as const,
+    queryFn: async ({ pageParam }: { pageParam: string | null }) =>
+      fetchConversations(1, 50, {}, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled,
   });
 }

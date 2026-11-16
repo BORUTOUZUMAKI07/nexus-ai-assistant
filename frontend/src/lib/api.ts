@@ -40,6 +40,8 @@ export interface ConversationPage {
   total: number;
   page: number;
   size: number;
+  next_cursor?: string | null;
+  has_more?: boolean;
 }
 
 export interface MessageCitation {
@@ -593,18 +595,30 @@ async function fetchWithRetry(
 export async function fetchConversations(
   page = 1,
   size = 50,
-  retry: FetchRetryOptions = {}
+  retry: FetchRetryOptions = {},
+  cursor?: string | null,
 ): Promise<ConversationPage> {
   const limit = size;
   const offset = (page - 1) * size;
+  const cursorQuery = cursor ? `&cursor=${encodeURIComponent(cursor)}` : `&offset=${offset}`;
   const res = await fetchWithRetry(
-    `${API_BASE}/conversations?limit=${limit}&offset=${offset}&archived=false`,
+    `${API_BASE}/conversations?limit=${limit}${cursorQuery}&archived=false`,
     { headers: authHeaders() },
     retry
   );
   if (!res.ok) throw new Error(`Fetch conversations failed: ${res.status}`);
-  const data: Conversation[] = await res.json();
-  return { items: data, total: data.length, page, size };
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return { items: data, total: data.length, page, size };
+  }
+  return {
+    items: data.items ?? [],
+    total: data.items ? data.items.length : 0,
+    page,
+    size,
+    next_cursor: data.next_cursor ?? null,
+    has_more: data.has_more ?? false,
+  };
 }
 
 /**
