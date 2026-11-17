@@ -37,8 +37,9 @@ try:
 
     _parsed = urlparse(settings.REDIS_URL or "redis://localhost:6379/0")
     litellm.cache = Cache(type="redis", host=_parsed.hostname or "localhost", port=_parsed.port or 6379)
-except Exception:  # pragma: no cover - cache is optional
-    pass
+    logger.info("litellm_redis_cache_enabled", host=_parsed.hostname, port=_parsed.port)
+except Exception as exc:  # cache is optional; fail-open to provider
+    logger.warning("litellm_redis_cache_disabled", error=str(exc))
 
 # Register per-token cost info for the deployed provider model slugs. Groq is on
 # its free tier (all $0/token) so usage accounting reports accurate USD while
