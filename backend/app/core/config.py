@@ -315,6 +315,14 @@ class Settings(BaseSettings):
     # pointing FAST_MODEL at a different fast model changed nothing.
     DEFAULT_MODEL: str = Field(default="groq/openai/gpt-oss-120b")
     FAST_MODEL: str = Field(default="groq/qwen/qwen3.8-27b")
+    COMPLEX_REASONING_MODEL: str = Field(
+        default="groq/openai/gpt-oss-120b",
+        description="Model used by the complex_reasoning router group",
+    )
+    FAST_CHAT_MODEL: str = Field(
+        default="groq/qwen/qwen3.8-27b",
+        description="Model used by the fast_chat router group",
+    )
 
     # ── Embeddings ─────────────────────────────────────────────────────────────
     EMBEDDING_MODEL: str = Field(default="models/gemini-embedding-001")
