@@ -49,7 +49,7 @@ import { clearSession, SESSION_EXPIRED_EVENT } from "@/lib/auth";
 import { useTheme } from "@/lib/theme";
 import { createQueryClient } from "@/lib/query-client";
 import {
-  useInfiniteConversations,
+  useConversations,
   useArtifacts,
   usePlans,
   useSettingsQuery,
@@ -259,12 +259,8 @@ function AppPageInner() {
   // plan history are server state, so they live on the query client rather than
   // in hand-rolled `useState` + fetch-on-mount effects. The chat stream is
   // deliberately *not* here: `useNexusChat` remains the transcript's only writer.
-  const conversationsQuery = useInfiniteConversations(mounted && !isAuthOpen);
-  const conversations = useMemo(
-    () =>
-      (conversationsQuery.data?.pages ?? []).flatMap((p) => p.items ?? []),
-    [conversationsQuery.data]
-  );
+  const conversationsQuery = useConversations(mounted && !isAuthOpen);
+  const conversations = useMemo(() => conversationsQuery.data ?? [], [conversationsQuery.data]);
 
   // Archived conversations are a second, opt-in read: the sidebar list only ever
   // asks for `archived=false`, so without this an archived chat was unreachable
@@ -1143,8 +1139,6 @@ function AppPageInner() {
         onSignOut={handleSignOut}
         showAdmin={isAdmin}
         onOpenCommandPalette={() => setPaletteOpen(true)}
-        hasMoreConversations={conversationsQuery.hasNextPage ?? false}
-        onLoadMoreConversations={() => conversationsQuery.fetchNextPage()}
       />
       </div>
 

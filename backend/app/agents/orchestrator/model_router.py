@@ -156,5 +156,5 @@ def route(user_message: Any, preferred_group: str | None = None) -> RouteDecisio
 
 def _default_model(group: str) -> str:
     if group == "complex_reasoning":
-        return settings.COMPLEX_REASONING_MODEL
-    return settings.FAST_CHAT_MODEL
+        return getattr(settings, "COMPLEX_REASONING_MODEL", settings.DEFAULT_MODEL)
+    return getattr(settings, "FAST_CHAT_MODEL", settings.FAST_MODEL)

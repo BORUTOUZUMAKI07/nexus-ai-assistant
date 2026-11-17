@@ -14,7 +14,7 @@ import pytest
 from backend.app.core.config import settings
 from backend.app.services.observability import logs as otlp_logs
 
-OTEL_INSTALLED = importlib.util.find_spec("opentelemetry") is not None
+OTEL_INSTALLED = importlib.util.find_spec("opentelemetry.sdk") is not None
 
 
 def _set(name: str, value) -> None:

@@ -295,8 +295,8 @@ def test_every_runtimeerror_raised_in_app_is_terminal():
     # Spot-check the two that decide the policy. If either is reworded into a
     # genuinely transient condition, this is the line that should stop someone.
     joined = "\n".join(messages)
-    assert "circuit open" in joined, (
-        "the circuit-breaker RuntimeError moved or was reworded; re-check "
+    assert "All model groups" in joined, (
+        "the terminal-failure RuntimeError moved or was reworded; re-check "
         "whether RuntimeError is still safe to refuse"
     )
     assert "empty output" in joined

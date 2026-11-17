@@ -631,7 +631,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     memory_block = ""
     recalled_items: list[dict[str, Any]] = []
     if user_id:
-        memory_block, recalled_items = await long_term_memory.build_memory_context_block_with_ids(
+        memory_block, recalled_items = await long_term_memory.build_memory_context_block(
             query=last_user_msg,
             user_id=user_id,
             limit=8,

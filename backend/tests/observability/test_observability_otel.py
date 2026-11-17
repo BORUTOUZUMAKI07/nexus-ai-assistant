@@ -21,7 +21,7 @@ from backend.app.services.observability import metrics as metrics_mod
 from backend.app.services.observability import otel
 from backend.app.services.observability import tracing as tracing_mod
 
-OTEL_INSTALLED = importlib.util.find_spec("opentelemetry") is not None
+OTEL_INSTALLED = importlib.util.find_spec("opentelemetry.sdk") is not None
 
 requires_otel = pytest.mark.skipif(
     not OTEL_INSTALLED, reason="[observability] extras not installed"
