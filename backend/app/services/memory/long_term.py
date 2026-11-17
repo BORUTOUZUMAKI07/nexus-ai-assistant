@@ -415,20 +415,18 @@ class LongTermMemoryService:
         limit: int = 5,
         agent_id: str | None = None,
         run_id: str | None = None,
-    ) -> tuple[str, list[dict[str, Any]]]:
+    ) -> str:
         """
         Builds a formatted context block to inject into the system prompt.
-        Returns (block_text, recalled_items) so callers can access the
-        recalled memory items for logging or response inclusion.
         """
-        block, recalled_items = await self.build_memory_context_block_with_ids(
+        block, _ = await self.build_memory_context_block_with_ids(
             query=query,
             user_id=user_id,
             limit=limit,
             agent_id=agent_id,
             run_id=run_id,
         )
-        return block, recalled_items
+        return block
 
 
 long_term_memory = LongTermMemoryService()

@@ -631,11 +631,10 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     memory_block = ""
     recalled_items: list[dict[str, Any]] = []
     if user_id:
-        memory_block, recalled_items = await long_term_memory.build_memory_context_block(
+        memory_block = await long_term_memory.build_memory_context_block(
             query=last_user_msg,
             user_id=user_id,
             limit=8,
-            agent_id="nexus-assistant",
         )
         if memory_block:
             logger.info("mem0_memories_loaded_for_planner", user_id=user_id, count=len(recalled_items))
