@@ -84,4 +84,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # because a local `alembic upgrade head` once ran against production by
 # accident). Setting it here scopes the permission to this container's start-up
 # and to nobody's laptop.
-CMD ["sh", "-c", "cd /app/backend && { ALLOW_REMOTE_MIGRATIONS=1 alembic upgrade head 2>&1 | tail -20 || echo migration_failed_continuing; }; cd /app && exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-1} --timeout-graceful-shutdown 20"]
+CMD ["sh", "-c", "cd /app/backend && ALLOW_REMOTE_MIGRATIONS=1 alembic upgrade head 2>&1 | tail -20 & cd /app && exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-1} --timeout-graceful-shutdown 20"]
