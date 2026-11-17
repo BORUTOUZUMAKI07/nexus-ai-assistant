@@ -87,6 +87,29 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+          POSTGRES_DB: nexus_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexus -d nexus_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -101,6 +124,8 @@ jobs:
         env:
           ENVIRONMENT: development
           TESTCONTAINERS_RYUK_DISABLED: "true"
+          DATABASE_URL: postgresql+asyncpg://nexus:nexus@localhost:5432/nexus_dev
+          REDIS_URL: redis://localhost:6379/0
         run: uv run pytest -m "not e2e"
 
   frontend:
@@ -146,9 +171,34 @@ jobs:
     env:
       TESTCONTAINERS_RYUK_DISABLED: "true"
       ENVIRONMENT: development
+      DATABASE_URL: postgresql+asyncpg://nexus:nexus@localhost:5432/nexus_dev
+      REDIS_URL: redis://localhost:6379/0
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+          POSTGRES_DB: nexus_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexus -d nexus_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
