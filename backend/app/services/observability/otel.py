@@ -26,7 +26,7 @@ from __future__ import annotations
 import base64
 import socket
 import time
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import structlog
@@ -366,7 +366,11 @@ def setup_otlp_tracing() -> bool:
         from opentelemetry import trace
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExportResult
+        from opentelemetry.sdk.trace.export import (
+            BatchSpanProcessor,
+            SpanExporter,
+            SpanExportResult,
+        )
 
         exporter = _CircuitBreakingExporter(
             OTLPSpanExporter(
@@ -380,7 +384,7 @@ def setup_otlp_tracing() -> bool:
         provider = TracerProvider(resource=_resource())
         provider.add_span_processor(
             BatchSpanProcessor(
-                exporter,  # type: ignore[arg-type]
+                cast(SpanExporter, exporter),
                 schedule_delay_millis=settings.NEW_RELIC_EXPORT_INTERVAL_SECONDS * 1000,
             )
         )
@@ -418,6 +422,7 @@ def setup_otlp_metrics() -> bool:
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
         from opentelemetry.sdk.metrics import MeterProvider
         from opentelemetry.sdk.metrics.export import (
+            MetricExporter,
             MetricExportResult,
             PeriodicExportingMetricReader,
         )
@@ -432,7 +437,7 @@ def setup_otlp_metrics() -> bool:
             success=MetricExportResult.SUCCESS,
         )
         reader = PeriodicExportingMetricReader(
-            exporter,  # type: ignore[arg-type]
+            cast(MetricExporter, exporter),
             export_interval_millis=settings.NEW_RELIC_EXPORT_INTERVAL_SECONDS * 1000,
         )
         provider = MeterProvider(resource=_resource(), metric_readers=[reader])
