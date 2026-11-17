@@ -257,7 +257,7 @@ jobs:
     name: Live LLM-judge gates (prompt-regression + arena + conversational + RAG)
     runs-on: ubuntu-latest
     needs: [backend-test]
-    if: vars.RUN_LLM_EVAL_GATES == '1'
+    if: vars.RUN_LLM_EVAL_GATES != '0'
     defaults:
       run:
         working-directory: backend
