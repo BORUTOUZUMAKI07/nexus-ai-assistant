@@ -28,10 +28,15 @@ litellm.suppress_debug_info = True
 # Repeat completions and embeddings hit Redis instead of the provider, saving
 # free-tier quota and cutting latency to a few milliseconds. Fail-open: if
 # Redis is unavailable, litellm falls back to the provider without error.
+# Uses settings.REDIS_URL (Upstash in production, localhost:6379 locally) so
+# the cache actually works on Render instead of silently being a no-op.
 try:
+    from urllib.parse import urlparse
+
     from litellm.caching import Cache
 
-    litellm.cache = Cache(type="redis", host="localhost", port=6379)
+    _parsed = urlparse(settings.REDIS_URL or "redis://localhost:6379/0")
+    litellm.cache = Cache(type="redis", host=_parsed.hostname or "localhost", port=_parsed.port or 6379)
 except Exception:  # pragma: no cover - cache is optional
     pass
 

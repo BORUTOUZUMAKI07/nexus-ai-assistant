@@ -1051,7 +1051,7 @@ class Settings(BaseSettings):
         if self.ENVIRONMENT == "production":
             missing = [
                 name
-                for name in ("SECRET_KEY", "ENCRYPTION_KEY", "JWT_SECRET_KEY", "METRICS_TOKEN", "EMAIL_DEV_LINK_ENABLED")
+                for name in ("SECRET_KEY", "ENCRYPTION_KEY", "JWT_SECRET_KEY")
                 if not getattr(self, name) or getattr(self, name) in PUBLISHED_EXAMPLE_SECRETS
             ]
             if missing:
@@ -1059,6 +1059,14 @@ class Settings(BaseSettings):
                     "Refusing to start in production with missing/insecure secrets: "
                     f"{', '.join(missing)}. Set them explicitly in the environment "
                     "(generate fresh random values — do not reuse the .env.example text)."
+                )
+            # EMAIL_DEV_LINK_ENABLED leaks raw reset/verify tokens over HTTP —
+            # it must be off in production. Treat it as a boolean, not a secret.
+            if self.EMAIL_DEV_LINK_ENABLED:
+                raise ValueError(
+                    "Refusing to start in production with EMAIL_DEV_LINK_ENABLED=true: "
+                    "that returns raw password-reset / verification tokens over HTTP "
+                    "and allows account takeover. Set it to false."
                 )
         else:
             if not self.SECRET_KEY or self.SECRET_KEY in PUBLISHED_EXAMPLE_SECRETS:

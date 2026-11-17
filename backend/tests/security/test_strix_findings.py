@@ -21,6 +21,7 @@ from uuid import uuid4
 import pytest
 from backend.app.core.client_ip import resolve_client_ip
 from backend.app.core.exceptions import AuthenticationError
+from backend.app.core.security import encrypt_api_key
 from backend.app.domain.user.models import User, UserSettings
 from backend.app.domain.user.repository import UserRepository
 from backend.app.domain.user.schemas import UserCreate, UserSettingsUpdate
@@ -344,7 +345,7 @@ def _seeded_two_factor(secret: str, enabled: bool = True):
     fake = FakeSession()
     row = UserSettings(
         user_id=user_id,
-        totp_secret=secret,
+        totp_secret=encrypt_api_key(secret),
         custom_settings={"two_factor_enabled": enabled},
     )
     fake.seed(UserSettings, [row])
