@@ -46,7 +46,7 @@ from backend.app.services.runs.log import tail_run
 from backend.app.services.usage.service import UsageService
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ._replay_sanitizer import _sanitize_replayed_message
 
@@ -237,6 +237,23 @@ class StreamChatRequest(BaseModel):
     # -- two genuine turns can be word-for-word identical.
     reuse_user_message_id: UUID | None = None
 
+    @field_validator("messages")
+    @classmethod
+    def _reject_privileged_roles(cls, messages: list[dict]) -> list[dict]:
+        """Reject injected system/developer turns at the boundary (422).
+
+        Validating here — before the route touches the DB or acquires a stream
+        slot — means a rejected replay has no side effects. The same rule is
+        enforced again in `_sanitize_replayed_message` for any other caller.
+        """
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if role is not None and role not in {"user", "assistant", "tool"}:
+                raise ValueError(f"disallowed message role: {role!r}")
+        return messages
+
 
 class HITLFeedbackRequest(BaseModel):
     action: Literal["approve", "reject", "modify"]
@@ -320,13 +337,13 @@ async def stream_conversation(
         except ResourceNotFoundError:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # Serialize concurrent runs per thread so a double-submit/resume can never
-    # execute the same tools twice or interleave checkpointer writes.
-    if not await _acquire_stream_slot(thread_id):
-        raise HTTPException(
-            status_code=409,
-            detail="This conversation is already streaming. Please wait for it to finish.",
-        )
+    # The per-thread stream slot is acquired just before the run starts (see
+    # below), not here. Everything in between can reject the request — a 404 on
+    # ownership, a 422 on guardrail/role validation, a 409 on a stale reuse id —
+    # and a slot taken this early was only ever released by the executor's
+    # on_finish callback. If the run never started, no callback fired and the
+    # thread was permanently 409-ed. Acquiring late keeps rejection side-effect
+    # free while still serializing actual graph execution.
 
     config = {
         "configurable": {
@@ -480,51 +497,69 @@ async def stream_conversation(
         source="request" if body.model else ("conversation" if pinned_model else "default"),
     )
 
-    async with async_session_factory() as session:
-        run = await RunService(session).start_run(
-            conversation_id=convo_uuid,
-            user_id=current_user.id,
-            thread_id=thread_id,
-            mode=body.mode,
+    # Serialize concurrent runs per thread so a double-submit/resume can never
+    # execute the same tools twice or interleave checkpointer writes. Acquired
+    # only once every earlier rejection path has been cleared, and released on
+    # any failure to start the run — otherwise a failed start_run/spawn would
+    # strand the thread in a permanent 409 because only the executor's
+    # on_finish callback releases the slot on the success path.
+    if not await _acquire_stream_slot(thread_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This conversation is already streaming. Please wait for it to finish.",
         )
 
-    async def _release() -> None:
-        # Released by the executor, not here: the run outlives this response, so
-        # releasing on disconnect would let a second run start on the same
-        # LangGraph thread while the first was still writing checkpoints.
-        await _release_stream_slot(thread_id)
+    try:
+        async with async_session_factory() as session:
+            run = await RunService(session).start_run(
+                conversation_id=convo_uuid,
+                user_id=current_user.id,
+                thread_id=thread_id,
+                mode=body.mode,
+            )
 
-    spawn_run_task(
-        execute_run(
+        async def _release() -> None:
+            # Released by the executor, not here: the run outlives this response, so
+            # releasing on disconnect would let a second run start on the same
+            # LangGraph thread while the first was still writing checkpoints.
+            await _release_stream_slot(thread_id)
+
+        spawn_run_task(
+            execute_run(
+                run_id=run.id,
+                # Passed in rather than imported by the executor: the endpoint's own
+                # tests monkeypatch *this module's* `orchestrator_graph`, and an
+                # import inside the executor would step over that seam and run the
+                # real graph (project guidelines §9.14).
+                graph=orchestrator_graph,
+                config=config,
+                graph_input={
+                    "messages": graph_messages,
+                    "mode": body.mode,
+                    **({"model": pinned_model} if pinned_model else {}),
+                    **({"system_prompt": compiled_system_prompt} if compiled_system_prompt else {}),
+                    **({"active_skills": [s.name for s in active_skills]} if active_skills else {}),
+                },
+                conversation_id=convo_uuid,
+                user_id=current_user.id,
+                mode=body.mode,
+                org_id=org_id,
+                user_messages=user_messages,
+                parent_message_id=user_msg.id if user_msg else None,
+                on_finish=_release,
+                # Passed explicitly rather than left to the executor's default
+                # argument: a default is bound at import time, so patching the module
+                # global would not reach it and the test seam would look present but
+                # do nothing.
+                session_factory=async_session_factory,
+            ),
             run_id=run.id,
-            # Passed in rather than imported by the executor: the endpoint's own
-            # tests monkeypatch *this module's* `orchestrator_graph`, and an
-            # import inside the executor would step over that seam and run the
-            # real graph (project guidelines §9.14).
-            graph=orchestrator_graph,
-            config=config,
-            graph_input={
-                "messages": graph_messages,
-                "mode": body.mode,
-                **({"model": pinned_model} if pinned_model else {}),
-                **({"system_prompt": compiled_system_prompt} if compiled_system_prompt else {}),
-                **({"active_skills": [s.name for s in active_skills]} if active_skills else {}),
-            },
-            conversation_id=convo_uuid,
-            user_id=current_user.id,
-            mode=body.mode,
-            org_id=org_id,
-            user_messages=user_messages,
-            parent_message_id=user_msg.id if user_msg else None,
-            on_finish=_release,
-            # Passed explicitly rather than left to the executor's default
-            # argument: a default is bound at import time, so patching the module
-            # global would not reach it and the test seam would look present but
-            # do nothing.
-            session_factory=async_session_factory,
-        ),
-        run_id=run.id,
-    )
+        )
+    except BaseException:
+        # BaseException (not just Exception) so cancellation/abort also release.
+        # Once the task is spawned the executor owns the release via on_finish.
+        await _release_stream_slot(thread_id)
+        raise
 
     return StreamingResponse(
         frame_stream(run.id, after_seq=0),

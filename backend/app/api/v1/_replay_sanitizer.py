@@ -10,12 +10,28 @@ was false (audit finding #7). `guardrail_service.validate_input` raising
 """
 from typing import Any
 
+from backend.app.core.exceptions import ValidationError
+
+# A client replays the visible transcript; it must never be able to inject a
+# privileged turn. The agent's system prompt is compiled server-side from the
+# conversation's own `system_prompt` plus active skills, so a client-supplied
+# `system`/`developer` role would overwrite that trust boundary.
+_ALLOWED_REPLAY_ROLES = frozenset({"user", "assistant", "tool"})
+
 
 def _sanitize_replayed_message(msg: dict[str, Any]) -> dict[str, Any]:
     from backend.app.services.evaluation.guardrail_service import guardrail_service
 
     if not isinstance(msg, dict):
         return msg
+
+    role = msg.get("role")
+    if role is not None and role not in _ALLOWED_REPLAY_ROLES:
+        # Raises ValidationError -> the caller maps this to a 422. A benign
+        # system-role turn used to survive because guardrail validation only
+        # inspected `content`, so role injection was possible whenever the
+        # injected text itself looked harmless.
+        raise ValidationError(f"Disallowed message role in replayed history: {role!r}")
 
     sanitized = dict(msg)
     content = sanitized.get("content")
