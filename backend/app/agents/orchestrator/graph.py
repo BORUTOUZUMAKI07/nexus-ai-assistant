@@ -27,7 +27,14 @@ except ImportError:
     AsyncPostgresSaver = None
 
 from backend.app.agents.orchestrator.artifact_node import artifact_node
-from backend.app.agents.orchestrator.model_router import route
+from backend.app.agents.orchestrator.model_router import (
+    EXECUTION_MODE_FULL,
+    EXECUTION_MODE_SIMPLE_CHAT,
+    ExecutionState,
+    route,
+    should_bypass_agent_graph,
+    should_take_simple_chat_fast_path,
+)
 from backend.app.agents.orchestrator.nodes import (
     bootstrap_node,
     critic_grader_node,
@@ -50,15 +57,22 @@ from langgraph.graph import END, START, StateGraph
 
 logger = structlog.get_logger(__name__)
 
+
 # ─── Module-level compiled graph (initialised at lifespan) ───────────────────
 _compiled_graph: Any | None = None
 
 
-async def model_router_node(state: AgentState) -> dict:
+async def model_router_node(state: ExecutionState) -> dict:
     """Auto-route each turn to fast_chat vs complex_reasoning based on task
     complexity, unless the user explicitly picked a group via the picker.
-    Also compacts older conversation turns into a summary when the history
-    exceeds the compaction threshold (context window management)."""
+    Also decide the *execution* path (`execution_mode`) independently of that
+    model group, and compact older turns once the history exceeds the threshold.
+
+    The two decisions must not be conflated: a `fast_chat` model answering a
+    question is still allowed to use retrieval, whereas an unambiguous greeting
+    skips the orchestrator/critic even though its answer comes from the same
+    cheap group.
+    """
 
     user_message = ""
     messages = state.get("messages", [])
@@ -68,27 +82,30 @@ async def model_router_node(state: AgentState) -> dict:
 
     decision = route(user_message, preferred_group=state.get("model"))
 
+    # Store both decisions for observability / cost display. The execution mode
+    # is fail-closed (see should_take_simple_chat_fast_path): every signal must
+    # say "plain chat" or we keep the full graph.
+    router_patch = {
+        "answer_model": decision.model,
+        "model_group": decision.group,
+        "model_confidence": decision.confidence,
+        "model_reason": decision.reason,
+        "model_estimated_cost_usd": decision.estimated_cost_usd,
+        "execution_mode": (
+            EXECUTION_MODE_SIMPLE_CHAT
+            if should_take_simple_chat_fast_path(state)
+            else EXECUTION_MODE_FULL
+        ),
+    }
+
     # Context compaction: if history exceeds COMPACT_AFTER_TURNS turns, summarize
     # older turns into a single summary message and keep only the recent window.
     # This prevents context-window exhaustion on long threads.
     compact_result = await _maybe_compact(messages)
     if compact_result:
-        return {**compact_result, **{
-            "answer_model": decision.model,
-            "model_group": decision.group,
-            "model_confidence": decision.confidence,
-            "model_reason": decision.reason,
-            "model_estimated_cost_usd": decision.estimated_cost_usd,
-        }}
+        return {**compact_result, **router_patch}
 
-    return {
-        "answer_model": decision.model,
-        # Store decision for observability / cost display
-        "model_group": decision.group,
-        "model_confidence": decision.confidence,
-        "model_reason": decision.reason,
-        "model_estimated_cost_usd": decision.estimated_cost_usd,
-    }
+    return router_patch
 
 
 _COMPACT_AFTER_TURNS = 20
@@ -201,18 +218,21 @@ def route_after_critic(state: AgentState) -> Literal["tool_node", "synthesizer"]
 
 
 def route_after_planner(
-    state: AgentState,
+    state: ExecutionState,
 ) -> Literal["tree_of_thoughts", "orchestrator", "synthesizer"]:
     """
     Conditional routing — complex multi-step requests take the Tree of Thoughts
     reasoning path, everything else flows through the standard orchestrator.
 
-    Fast mode short-circuits to the synthesizer: a single direct answer with no
-    planner LLM call, no orchestrator routing, no subagents, no tools and no RAG
-    retrieval. The composer's Fast/Deep toggle is the only writer of this value,
-    so it is the one place the two execution shapes are chosen.
+    Two execution shapes short-circuit to the synthesizer: a single direct
+    answer with no orchestrator routing, no subagents, no tools and no RAG
+    retrieval. (1) The explicit `mode == "fast"` from the composer's Fast toggle
+    keeps its existing behaviour. (2) `execution_mode == "simple_chat"` is the
+    new decision written by `model_router_node` for a plain conversational
+    turn, re-validated here so a stale checkpoint decision cannot skip retrieval
+    on a turn that asked for it. Everything else keeps the full graph.
     """
-    if state.get("mode") == "fast":
+    if state.get("mode") == "fast" or should_bypass_agent_graph(state):
         return "synthesizer"
     if state.get("plan"):
         return "tree_of_thoughts"
@@ -250,7 +270,7 @@ def _add(workflow: StateGraph, name: str, node: Any) -> None:
 
 def _build_workflow() -> StateGraph:
     """Assembles the node/edge structure without compiling (no checkpointer yet)."""
-    workflow = StateGraph(AgentState)
+    workflow = StateGraph(ExecutionState)
 
     # Deliberately no `set_node_defaults(retry_policy=...)` here.
     #

@@ -10,6 +10,10 @@ from uuid import UUID
 
 import structlog
 from backend.app.agents.orchestrator.hitl import request_human_approval
+from backend.app.agents.orchestrator.model_router import (
+    ExecutionState,
+    should_bypass_agent_graph,
+)
 from backend.app.agents.orchestrator.state import AgentState
 from backend.app.agents.subagents.coder import coder_subagent
 from backend.app.agents.subagents.critic import critic_subagent
@@ -628,7 +632,7 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
     }
 
 
-async def planner_node(state: AgentState) -> dict[str, Any]:
+async def planner_node(state: ExecutionState) -> dict[str, Any]:
     """
     Step 1: Loads user's long-term memories via mem0, then evaluates the
     user message. If complex multi-step request, builds an execution plan.
@@ -657,11 +661,14 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         if memory_block:
             logger.info("mem0_memories_loaded_for_planner", user_id=user_id, count=len(recalled_items))
 
-    # Fast mode is a single direct answer: `route_after_planner` sends it straight
-    # to the synthesizer, so planning (and with it the orchestrator, subagents,
-    # tools and retrieval) is dropped. The memory block loaded above is kept, so
-    # fast mode still personalises; only the multi-step machinery is skipped.
-    if state.get("mode") == "fast":
+    # Two execution shapes are a single direct answer: the explicit Fast toggle
+    # (`mode == "fast"`) and a plain conversational turn whose router decision
+    # (`execution_mode == "simple_chat"`) is re-validated here. In both cases
+    # `route_after_planner` sends the turn straight to the synthesizer, so
+    # planning (and with it the orchestrator, subagents, tools and retrieval) is
+    # dropped. The memory block loaded above is kept, so both still personalise;
+    # only the multi-step machinery is skipped.
+    if state.get("mode") == "fast" or should_bypass_agent_graph(state):
         return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items}
 
     # Determine if planning is needed

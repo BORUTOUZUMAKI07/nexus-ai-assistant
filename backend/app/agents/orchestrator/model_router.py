@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from backend.app.agents.orchestrator.state import AgentState
 from backend.app.core.config import settings
 
 # Keywords that suggest complex reasoning is needed.
@@ -49,6 +50,20 @@ _SIMPLE_HINTS = [
     "ok",
     "okay",
 ]
+
+
+class ExecutionState(AgentState):
+    """The graph state plus the explicit execution-routing decision.
+
+    Declared here rather than in `state.py` because this module owns the
+    decision. Both `graph.py` (which builds the graph and routes) and `nodes.py`
+    (whose planner consumes the decision) annotate their inputs with it:
+    LangGraph filters node and conditional-edge inputs by the type annotation,
+    so annotating with plain `AgentState` would silently hide `execution_mode`
+    from the very code that has to read it.
+    """
+
+    execution_mode: str  # full | simple_chat
 
 
 @dataclass
@@ -92,6 +107,117 @@ def _has_complex_hint(text: str) -> bool:
 def _has_simple_hint(text: str) -> bool:
     lower = text.lower().strip()
     return any(h == lower or lower.startswith(h + " ") for h in _SIMPLE_HINTS)
+
+
+# The *execution* decision is deliberately separate from the model group.
+# `fast_chat` only says which model synthesises the answer; it must never be
+# read as permission to skip the agent graph. These are the only modes that
+# describe a plain chat turn -- Web/Research, Code, explicit Fast and any
+# unknown value keep today's full-graph behaviour.
+_SIMPLE_CHAT_MODES = frozenset({"agent", "normal"})
+
+EXECUTION_MODE_FULL = "full"
+EXECUTION_MODE_SIMPLE_CHAT = "simple_chat"
+
+# A greeting that ALSO asks for retrieval, a tool, code or a file is not a
+# conversational turn. Substring matching is intentionally conservative: a
+# false positive merely sends a greeting through the slower full graph, while
+# a false negative would skip the retrieval the user explicitly asked for.
+_EXPLICIT_INTENT_MARKERS = (
+    *_COMPLEX_HINTS,
+    "search",
+    "web",
+    "research",
+    "code",
+    "tool",
+    "fetch",
+    "lookup",
+    "file",
+    "document",
+    "attach",
+    "image",
+    "screenshot",
+    "upload",
+    "run ",
+    "execute",
+    "build",
+    "write",
+    "generate",
+    "create",
+    "list ",
+    "read ",
+    "show me",
+    "update ",
+    "summar",
+    "translat",
+    "draft",
+    "fix",
+    "deploy",
+    "install",
+    "email",
+    "url",
+    "http",
+    "link",
+    "download",
+    "step",
+    "what files",
+)
+
+
+def should_take_simple_chat_fast_path(state: Any) -> bool:
+    """Fail-closed decision: is this turn an unambiguous simple chat?
+
+    Every signal has to be known and benign. Anything unknown -- an
+    unrecognised mode, a multimodal attachment, a tool/web/code word in the
+    text, a stale per-turn tool flag or a non-general task type -- returns
+    False so the request keeps the full orchestrator/critic path. Skipping RAG
+    on a genuine retrieval request is a correctness bug, so the cost of a
+    false positive here is only the extra latency we were trying to remove.
+    """
+    if state.get("mode") not in _SIMPLE_CHAT_MODES:
+        return False
+    if state.get("pending_tool_calls") or state.get("needs_web_search"):
+        return False
+    if state.get("subagent_dispatches"):
+        return False
+    if state.get("task_type") not in (None, "", "general"):
+        return False
+    flags = state.get("arq_flags") or {}
+    if any(flags.get(key) for key in ("needs_tool", "safety_flag", "recency_needed")):
+        return False
+
+    messages = state.get("messages") or []
+    if not messages:
+        return False
+    last = messages[-1]
+    role = getattr(last, "type", None) or (last.get("role") if isinstance(last, dict) else None)
+    if role not in (None, "human", "user"):
+        return False
+    content = last.get("content") if isinstance(last, dict) else getattr(last, "content", None)
+    # A list is OpenAI-style multimodal content, i.e. an attachment. The model
+    # group may still be fast_chat (the text says "hi"), but the execution
+    # path must keep the full graph so the image is actually processed.
+    if not isinstance(content, str):
+        return False
+    text = content.strip()
+    if not text or not _has_simple_hint(text):
+        return False
+    lower = text.lower()
+    return not any(marker in lower for marker in _EXPLICIT_INTENT_MARKERS)
+
+
+def should_bypass_agent_graph(state: Any) -> bool:
+    """Re-check the routing decision at the point where it is consumed.
+
+    `model_router_node` writes `execution_mode`; the planner short-circuit and
+    `route_after_planner` both read it. Re-validating the signals there means a
+    stale decision restored from a checkpoint cannot bypass retrieval on a turn
+    that actually requested it.
+    """
+    return (
+        state.get("execution_mode") == EXECUTION_MODE_SIMPLE_CHAT
+        and should_take_simple_chat_fast_path(state)
+    )
 
 
 def _estimate_cost(tokens: int, group: str) -> float:
