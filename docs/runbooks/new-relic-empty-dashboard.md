@@ -5,15 +5,32 @@ batches reaching `otlphttp/newrelic` with no exporter failures, but the New
 Relic UI is empty for entity GUID
 `ODU5NDM1MnxFWFR8U0VSVklDRXwtNjE0NDUwMTQyNzM1ODM5ODUwMQ` for more than a day.
 
-## Honest status
+## Verified status (2026-11-18)
 
-**Exports present in collector logs; UI ingestion NOT proven.** That is the
-whole conclusion this runbook can reach from this repository. There is no
-evidence here for a specific root cause, and nothing in this runbook should be
-read as one. The decision between "data arrived but the UI is showing the wrong
-entity" and "data was rejected before it became queryable" needs New Relic
-NRQL/entity lookup with a real key and account access — neither is available to
-the code review environment.
+**Account-level ingestion is proven; the entity-scoped metrics panel can still
+be empty.** This was verified in the New Relic UI and Render logs, not inferred
+from collector config:
+
+- The collector debug exporter emitted metrics, traces and logs through
+  `2026-11-18T13:18:52.357Z`. At `13:33:50Z` Render logged
+  `Received signal from OS {"signal": "terminated"}`, followed by a clean
+  collector shutdown — the expected Free-tier idle-out.
+- The entity's **Logs** view over one day reported **379 logs found**, with the
+  newest visible entries at `13:18:50Z`.
+- `SHOW EVENT TYPES since 1 day ago` included `Metric`, `Log`, `Span`, and
+  `DistributedTraceSummary`, and entity search reported `"reporting": true`.
+- After a one-time collector restart and fresh live chat traffic, Render logs
+  showed metrics, traces and logs through `2026-11-18T16:24:32Z`, and the New
+  Relic entity's **Logs** view showed **30 logs found** with timestamps
+  `16:24:52Z`–`16:24:58Z`.
+
+This means the empty **Metrics — We couldn't find any items** panel is not
+evidence of a broken ingest key. It is an `EXT|SERVICE` OpenTelemetry entity, so
+APM-shaped panels may not populate even though the underlying OTLP event types
+are queryable: after fresh ingestion the **Summary** page still showed
+`No data from this entity` for web-transaction metrics and distributed tracing.
+Use the Logs view and NRQL keyed on `service.name` as the ingestion checks;
+re-check after fresh traffic if the collector has been idle.
 
 Do **not** treat a green local observability stack, a green
 `test_the_collector_really_builds_the_tracked_config`, or the admin viewer's
@@ -32,7 +49,7 @@ These are read from the tracked file, not inferred from the UI:
 | Other resource attrs | `deployment.environment: ${env:ENVIRONMENT}`, `service.version: ${env:SERVICE_VERSION}` (all `action: upsert`) |
 | Sampling | `tail_sampling` keeps 100% of `ERROR` spans, spans slower than 2000ms, and **10% of the rest** — ~90% of healthy traces are intentionally dropped; logs and metrics are **not** sampled |
 | Pipelines | `logs`, `metrics`, `traces` all export to `otlphttp/newrelic` (plus `debug`); only `traces` uses `tail_sampling` |
-| Receiver | OTLP/HTTP `:4318` requires HTTP basic auth (`basicauth/server`); the keepalive root probe expects **401** as the "awake" signal |
+| Receiver | OTLP/HTTP `:4318` requires HTTP basic auth (`basicauth/server`); an unauthenticated request receives **401** |
 
 The endpoint, header name, resource attributes and sampling behaviour match
 New Relic's documented OTLP collector pattern
@@ -149,10 +166,10 @@ fact to verify, not an assumed fault.
 
 ### Collector availability and quota
 
-- The collector is **not** continuously warm by locked decision (see
-  [scheduled runs not firing](scheduled-runs-not-firing.md)). After idle, the
-  first OTLP batch from the app hits a ~1-minute cold start and is dropped;
-  export resumes on the next batch. This is accepted behaviour
+- The collector is a Free Render service and this repository has **no warmup
+  cron**. If an external scheduler is used, it is owned outside this repo.
+  After idle, the first OTLP batch from the app hits a ~1-minute cold start and
+  can be dropped; export resumes on the next batch. This is accepted behaviour
   (`render.yaml:150-157`, `docs/deployment-guide.md:293-301`).
 - A free-tier 429 is retried only for `max_elapsed_time: 300s`; a sustained
   quota hit therefore drops batches. Check collector logs for 429s even when

@@ -187,7 +187,6 @@ Also documented there: `observability_stack_status()`
 alone (flag + package + endpoint string); it never probes the collector or New
 Relic, so it is not an ingestion check.
 
-For scheduling side effects on this pipeline, see
-[scheduled runs not firing](runbooks/scheduled-runs-not-firing.md): only the
-backend is warmed on cron; the collector is woken on demand, so a first batch
-after idle is expected to be dropped.
+The repository has no warmup cron. The collector is a Free Render service, so an
+external scheduler may need to wake it after an idle period; the first OTLP
+batch after a cold start can be dropped and the next one exported normally.

@@ -11,7 +11,6 @@ corresponds to one or more alerts from
 | [Latency SLI burn](latency-sli-burn.md) | p95/p99 latency above budget | `NexusLatencyP95Burn`, `NexusLatencyP99Burn` |
 | [Rate-limit exhaustion](rate-limit-exhaustion.md) | Clients throttled with 429s | `NexusRateLimitStorm` |
 | [Redis fail-open](redis-fail-open.md) | Redis unreachable, seams failing open | `NexusRedisFailOpenActive` |
-| [Scheduled runs not firing](scheduled-runs-not-firing.md) | GitHub `event=schedule` count is 0 but manual dispatch works; keepalive/nightly delayed | operational (GitHub scheduler + external backstop) |
 | [New Relic empty dashboard](new-relic-empty-dashboard.md) | Collector exports look healthy but the New Relic entity view is empty | operational (ingest verification) |
 
 ## Operating principles
