@@ -13,6 +13,7 @@ tell the same story. It imports the migration module rather than grepping its
 source, because the DDL is assembled from module-level tuples at runtime.
 """
 import importlib.util
+import inspect
 import pathlib
 
 import backend.app.infrastructure.database.engine  # noqa: F401  (populates metadata)
@@ -73,19 +74,30 @@ def test_index_names_match_the_model_avoiding_autogenerate_drift(migration):
         assert f"ix_user_memories_{col}" in {n for n, _t, _c in migration._NEW_INDEXES}
 
 
-def test_downgrade_reverses_exactly_what_upgrade_adds(migration):
-    src = _MIGRATION_PATH.read_text(encoding="utf-8")
-    assert "reversed(_NEW_COLUMNS)" in src
-    assert "reversed(_NEW_INDEXES)" in src
+def test_downgrade_is_non_destructive_and_forward_only(migration):
+    """Lifecycle history cannot be rebuilt, so downgrade only moves the stamp.
+
+    The old assertions expected ``reversed(...)`` DDL here. That rollback would
+    erase retrieval counts and scope data on any database that had used memory
+    lifecycle tracking. Recovery is now a forward migration; the global AST
+    guard in ``tests/infra/test_migration_graph.py`` enforces this for every
+    revision, and this test documents why this particular one matters.
+    """
+    body = inspect.getsource(migration.downgrade)
+    assert "No-op by design" in body
+    assert "Forward-fixes are the supported recovery path" in body
+    assert "op.execute" not in body
+    assert "reversed(" not in body
 
 
-def test_every_statement_is_idempotent(migration):
+def test_every_upgrade_statement_is_idempotent(migration):
     """Guarded DDL, so a database built by create_all also upgrades cleanly."""
-    src = _MIGRATION_PATH.read_text(encoding="utf-8")
-    assert "ADD COLUMN IF NOT EXISTS" in src
-    assert "CREATE INDEX IF NOT EXISTS" in src
-    assert "DROP INDEX IF EXISTS" in src
-    assert "DROP COLUMN IF EXISTS" in src
+    body = inspect.getsource(migration.upgrade)
+    assert "ADD COLUMN IF NOT EXISTS" in body
+    assert "CREATE INDEX IF NOT EXISTS" in body
+    # The upgrade must never undo schema from a database that already has it.
+    assert "DROP INDEX" not in body
+    assert "DROP COLUMN" not in body
 
 
 def test_migration_and_policy_agree_on_initial_confidence(migration):
