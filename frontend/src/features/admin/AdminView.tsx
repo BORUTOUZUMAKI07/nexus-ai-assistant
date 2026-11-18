@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   ShieldCheck,
   Users,
@@ -51,6 +52,12 @@ import {
   adminKeys,
   type AdminUser,
 } from "@/lib/queries";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type Tab = "users" | "health" | "audit" | "hooks" | "monitoring" | "optimization" | "compliance";
 
@@ -116,6 +123,16 @@ export const AdminView: React.FC = () => {
   const [optBusy, setOptBusy] = useState(false);
   // Only *mutation* errors are local now; load errors come from the queries.
   const [mutationError, setMutationError] = useState<string | null>(null);
+  // Destructive actions get an explicit confirmation: window.confirm is a
+  // blocking native prompt that cannot be labelled or announced consistently.
+  const [pendingDeleteHook, setPendingDeleteHook] = useState<HookPolicyItem | null>(null);
+
+  const reportMutationError = (fallback: string, err: unknown) => {
+    const detail = err instanceof Error && err.message ? err.message : null;
+    const message = detail ? `${fallback}: ${detail}` : fallback;
+    setMutationError(message);
+    toast.error(message);
+  };
 
   // The queries the active tab depends on. `loading` is "any still on its first
   // load"; the banner prefers a mutation error (an action the user just took)
@@ -240,7 +257,7 @@ export const AdminView: React.FC = () => {
         )
       );
     } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Toggle failed");
+      reportMutationError("User status toggle failed", err);
     }
   };
 
@@ -258,7 +275,7 @@ export const AdminView: React.FC = () => {
       ]);
       setHookForm(EMPTY_HOOK_FORM);
     } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Hook create failed");
+      reportMutationError("Hook create failed", err);
     } finally {
       setHookBusy(false);
     }
@@ -271,21 +288,21 @@ export const AdminView: React.FC = () => {
         (prev ?? []).map((h) => (h.id === hook.id ? updated : h))
       );
     } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Hook toggle failed");
+      reportMutationError("Hook toggle failed", err);
     }
   };
 
-  const removeHook = async (hook: HookPolicyItem) => {
-    if (!window.confirm("Delete this hook policy? The hook stops running for every conversation it governed.")) {
-      return;
-    }
+  const confirmRemoveHook = async () => {
+    const hook = pendingDeleteHook;
+    if (!hook) return;
+    setPendingDeleteHook(null);
     try {
       await deleteHookPolicy(hook.id);
       queryClient.setQueryData<HookPolicyItem[]>(adminKeys.hooks, (prev) =>
         (prev ?? []).filter((h) => h.id !== hook.id)
       );
     } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Hook delete failed");
+      reportMutationError("Hook delete failed", err);
     }
   };
 
@@ -319,9 +336,7 @@ export const AdminView: React.FC = () => {
         (prev) => [created, ...(prev ?? [])]
       );
     } catch (err) {
-      setMutationError(
-        err instanceof Error ? err.message : "Optimization run failed"
-      );
+      reportMutationError("Optimization run failed", err);
     } finally {
       setOptBusy(false);
     }
@@ -391,7 +406,7 @@ export const AdminView: React.FC = () => {
       </div>
 
       {error && (
-        <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--border-strong)] bg-[var(--bg-surface)] px-4 py-3 text-sm">
+        <div role="alert" aria-live="assertive" className="flex items-center justify-between gap-4 rounded-xl border border-[var(--border-strong)] bg-[var(--bg-surface)] px-4 py-3 text-sm">
           <div className="flex items-center gap-3 min-w-0">
             <AlertCircle className="w-4 h-4 text-[var(--status-danger)] shrink-0" />
             <span className="text-[var(--text-secondary)] truncate">{error}</span>
@@ -742,63 +757,84 @@ export const AdminView: React.FC = () => {
               Tool names support <code className="font-mono text-[var(--accent-ink)]">*</code> wildcards.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <input
-                value={hookForm.name}
-                onChange={(e) => setHookForm({ ...hookForm, name: e.target.value })}
-                placeholder="Name (e.g. Block shell exec)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-              />
-              <input
-                value={hookForm.tool_name}
-                onChange={(e) => setHookForm({ ...hookForm, tool_name: e.target.value })}
-                placeholder="Tool (e.g. run_shell, *)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-              />
-              <select
-                value={hookForm.event}
-                onChange={(e) =>
-                  setHookForm({ ...hookForm, event: e.target.value as "pre_tool" | "post_tool" })
-                }
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-              >
-                <option value="pre_tool">pre_tool</option>
-                <option value="post_tool">post_tool</option>
-              </select>
-              <select
-                value={hookForm.action}
-                onChange={(e) =>
-                  setHookForm({ ...hookForm, action: e.target.value as "block" | "redact" | "log" })
-                }
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-              >
-                <option value="block">block</option>
-                <option value="redact">redact</option>
-                <option value="log">log</option>
-              </select>
-              <input
-                value={hookForm.field ?? ""}
-                onChange={(e) =>
-                  setHookForm({ ...hookForm, field: e.target.value || null })
-                }
-                placeholder="Field to redact (redact only)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-              />
-              <input
-                value={hookForm.org_id ?? ""}
-                onChange={(e) =>
-                  setHookForm({ ...hookForm, org_id: e.target.value || null })
-                }
-                placeholder="Org id (empty = global)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-              />
-              <input
-                value={hookForm.message ?? ""}
-                onChange={(e) =>
-                  setHookForm({ ...hookForm, message: e.target.value || null })
-                }
-                placeholder="Message (optional)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-              />
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-[var(--text-muted)]">Policy name</span>
+                <input
+                  value={hookForm.name}
+                  onChange={(e) => setHookForm({ ...hookForm, name: e.target.value })}
+                  placeholder="Name (e.g. Block shell exec)"
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-[var(--text-muted)]">Tool name</span>
+                <input
+                  value={hookForm.tool_name}
+                  onChange={(e) => setHookForm({ ...hookForm, tool_name: e.target.value })}
+                  placeholder="Tool (e.g. run_shell, *)"
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-[var(--text-muted)]">Event</span>
+                <select
+                  value={hookForm.event}
+                  onChange={(e) =>
+                    setHookForm({ ...hookForm, event: e.target.value as "pre_tool" | "post_tool" })
+                  }
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                >
+                  <option value="pre_tool">pre_tool</option>
+                  <option value="post_tool">post_tool</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-[var(--text-muted)]">Action</span>
+                <select
+                  value={hookForm.action}
+                  onChange={(e) =>
+                    setHookForm({ ...hookForm, action: e.target.value as "block" | "redact" | "log" })
+                  }
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                >
+                  <option value="block">block</option>
+                  <option value="redact">redact</option>
+                  <option value="log">log</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-[var(--text-muted)]">Field to redact</span>
+                <input
+                  value={hookForm.field ?? ""}
+                  onChange={(e) =>
+                    setHookForm({ ...hookForm, field: e.target.value || null })
+                  }
+                  placeholder="Field to redact (redact only)"
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-[var(--text-muted)]">Organization ID</span>
+                <input
+                  value={hookForm.org_id ?? ""}
+                  onChange={(e) =>
+                    setHookForm({ ...hookForm, org_id: e.target.value || null })
+                  }
+                  placeholder="Org id (empty = global)"
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-[var(--text-muted)]">Block message</span>
+                <input
+                  value={hookForm.message ?? ""}
+                  onChange={(e) =>
+                    setHookForm({ ...hookForm, message: e.target.value || null })
+                  }
+                  placeholder="Message (optional)"
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                />
+              </label>
               <button
                 onClick={submitHook}
                 disabled={hookBusy || !hookForm.name.trim() || !hookForm.tool_name.trim()}
@@ -889,7 +925,7 @@ export const AdminView: React.FC = () => {
                             {h.enabled ? "Disable" : "Enable"}
                           </button>
                           <button
-                            onClick={() => removeHook(h)}
+                            onClick={() => setPendingDeleteHook(h)}
                             className="flex items-center gap-1 rounded-md border border-[var(--border-subtle)] px-2 py-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--status-danger)] hover:border-[var(--status-danger)]/50 transition-colors"
                             title="Delete policy"
                           >
@@ -1120,19 +1156,25 @@ export const AdminView: React.FC = () => {
               winner only if it beats the current prompt, and persist the run as evidence.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <input
-                value={optForm.prompt_key}
-                onChange={(e) => setOptForm({ ...optForm, prompt_key: e.target.value })}
-                placeholder="Prompt key (e.g. chat_system_prompt)"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-              />
-              <input
-                value={optForm.candidate_count}
-                onChange={(e) => setOptForm({ ...optForm, candidate_count: e.target.value })}
-                placeholder="Candidates (1-6, default 4)"
-                inputMode="numeric"
-                className="px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-              />
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-[var(--text-muted)]">Prompt key</span>
+                <input
+                  value={optForm.prompt_key}
+                  onChange={(e) => setOptForm({ ...optForm, prompt_key: e.target.value })}
+                  placeholder="Prompt key (e.g. chat_system_prompt)"
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-[var(--text-muted)]">Candidates</span>
+                <input
+                  value={optForm.candidate_count}
+                  onChange={(e) => setOptForm({ ...optForm, candidate_count: e.target.value })}
+                  placeholder="Candidates (1-6, default 4)"
+                  inputMode="numeric"
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                />
+              </label>
               <button
                 onClick={runOptimization}
                 disabled={optBusy || !optForm.baseline_prompt.trim()}
@@ -1146,19 +1188,26 @@ export const AdminView: React.FC = () => {
                 Run optimization
               </button>
             </div>
-            <textarea
-              value={optForm.baseline_prompt}
-              onChange={(e) => setOptForm({ ...optForm, baseline_prompt: e.target.value })}
-              placeholder="Current system prompt (baseline to beat)"
-              rows={2}
-              className="mt-3 w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-            />
-            <div className="mt-3">
-              <div className="text-[11px] text-[var(--text-muted)] mb-1">
-                Golden cases — one per line: <code className="font-mono">input | ideal</code>{" "}
-                (ideal: answer | refuse | short)
-              </div>
+            <label className="mt-3 block">
+              <span className="mb-1 block text-[10px] text-[var(--text-muted)]">Baseline prompt</span>
               <textarea
+                value={optForm.baseline_prompt}
+                onChange={(e) => setOptForm({ ...optForm, baseline_prompt: e.target.value })}
+                placeholder="Current system prompt (baseline to beat)"
+                rows={2}
+                className="w-full px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+              />
+            </label>
+            <div className="mt-3">
+              <label htmlFor="opt-golden-cases" className="text-[11px] text-[var(--text-muted)] mb-1 block">
+                Golden cases
+              </label>
+              <p className="text-[11px] text-[var(--text-faint)] mb-1">
+                One per line: <code className="font-mono">input | ideal</code>{" "}
+                (ideal: answer | refuse | short)
+              </p>
+              <textarea
+                id="opt-golden-cases"
                 value={optForm.cases}
                 onChange={(e) => setOptForm({ ...optForm, cases: e.target.value })}
                 rows={3}
@@ -1386,6 +1435,41 @@ export const AdminView: React.FC = () => {
             </div>
           )}
         </div>
+      )}
+
+      {pendingDeleteHook && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setPendingDeleteHook(null);
+          }}
+        >
+          <DialogContent aria-modal="true">
+            <DialogTitle className="text-base font-semibold text-[var(--text-primary)]">
+              Delete hook policy?
+            </DialogTitle>
+            <DialogDescription className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)]">
+              <span className="font-medium text-[var(--text-primary)]">{pendingDeleteHook.name}</span>{" "}
+              stops running for every conversation it governed. This cannot be undone.
+            </DialogDescription>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingDeleteHook(null)}
+                className="rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmRemoveHook()}
+                className="rounded-lg bg-[var(--status-danger)] px-3 py-1.5 text-xs font-semibold text-[var(--danger-foreground)] hover:opacity-90"
+              >
+                Yes, delete policy
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

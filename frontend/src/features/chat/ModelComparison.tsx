@@ -4,6 +4,12 @@ import * as React from "react";
 import { Sliders, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { modelDisplayName } from "@/lib/models";
 
 interface ModelComparisonProps {
@@ -98,6 +104,9 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
   const [errorB, setErrorB] = React.useState<string | null>(null);
 
   const aborterRef = React.useRef<AbortController | null>(null);
+  // The comparison is opened by a plain button in the chat header, not by a
+  // Radix DialogTrigger, so remember what had focus and give it back on close.
+  const returnFocusRef = React.useRef<HTMLElement | null>(null);
 
   React.useEffect(() => {
     aborterRef.current = new AbortController();
@@ -228,26 +237,40 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
   const effectiveLoadingB = !hasQuestion ? false : loadingB;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex flex-col"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Model comparison"
+    // Radix owns role/aria-modal, the scrim, Escape, focus trapping and focus
+    // restore. The content keeps the existing full-height comparison layout.
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
     >
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={onClose}
-      />
-      <div className="flex-1 flex flex-col bg-[var(--bg-surface)] border-l border-[var(--border-subtle)] shadow-2xl">
+      <DialogContent
+        aria-modal="true"
+        className="fixed inset-0 left-0 top-0 z-50 flex h-full w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 border-l border-[var(--border-subtle)] p-0 bg-[var(--bg-surface)] shadow-2xl"
+        onOpenAutoFocus={() => {
+          returnFocusRef.current = document.activeElement as HTMLElement | null;
+        }}
+        onCloseAutoFocus={(event) => {
+          const target = returnFocusRef.current;
+          if (target && document.contains(target)) {
+            event.preventDefault();
+            target.focus();
+          }
+        }}
+      >
         <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3 bg-[var(--bg-surface-elevated)] shrink-0">
-            <div className="flex items-center gap-2">
-              <Sliders className="w-4 h-4 text-[var(--accent)]" />
-            <h2 className="text-sm font-semibold text-[var(--text-primary)] uppercase tracking-tighter">
-              Model Comparison
-            </h2>
+          <div className="flex items-center gap-2">
+            <Sliders className="w-4 h-4 text-[var(--accent)]" />
+            <DialogTitle className="text-sm font-semibold text-[var(--text-primary)] uppercase tracking-tighter">
+              Model comparison
+            </DialogTitle>
           </div>
+          <DialogDescription className="sr-only">
+            Side-by-side responses from the selected models.
+          </DialogDescription>
           <button
+            type="button"
             onClick={onClose}
             className="rounded-md p-2 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)]"
             aria-label="Close comparison"
@@ -288,8 +311,8 @@ export function ModelComparison({ onClose, question, modelA, modelB }: ModelComp
             />
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   Sliders,
   Key,
@@ -94,6 +95,14 @@ export const SettingsView: React.FC = () => {
 
   const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+
+  const reportMutationError = (fallback: string, err: unknown) => {
+    const detail = err instanceof Error && err.message ? err.message : null;
+    const message = detail ? `${fallback}: ${detail}` : fallback;
+    setMutationError(message);
+    toast.error(message);
+  };
 
   const [memoryContent, setMemoryContent] = useState("");
   const [memoryCategory, setMemoryCategory] = useState("preference");
@@ -162,7 +171,10 @@ export const SettingsView: React.FC = () => {
       // pre-save values (the draft is local and would be re-hydrated from here).
       queryClient.setQueryData(settingsKeys.settings, updated);
       setSavedNotice(true);
+      setMutationError(null);
       setTimeout(() => setSavedNotice(false), 2500);
+    } catch (err) {
+      reportMutationError("Could not save settings", err);
     } finally {
       setSaving(false);
     }
@@ -183,6 +195,9 @@ export const SettingsView: React.FC = () => {
         ...(prev ?? []),
       ]);
       setMemoryContent("");
+      setMutationError(null);
+    } catch (err) {
+      reportMutationError("Could not add memory", err);
     } finally {
       setMemoryBusy(false);
     }
@@ -196,7 +211,7 @@ export const SettingsView: React.FC = () => {
         (prev ?? []).filter((m) => m.id !== id)
       );
     } catch (err) {
-      console.warn("Delete memory failed:", err);
+      reportMutationError("Could not delete memory", err);
     }
   };
 
@@ -216,6 +231,9 @@ export const SettingsView: React.FC = () => {
       );
       setKeyValue("");
       setKeyLabel("");
+      setMutationError(null);
+    } catch (err) {
+      reportMutationError("Could not add API key", err);
     } finally {
       setKeyBusy(false);
     }
@@ -229,7 +247,7 @@ export const SettingsView: React.FC = () => {
         (prev ?? []).filter((k) => k.id !== id)
       );
     } catch (err) {
-      console.warn("Delete API key failed:", err);
+      reportMutationError("Could not delete API key", err);
     }
   };
 
@@ -293,6 +311,13 @@ export const SettingsView: React.FC = () => {
           <span>{savedNotice ? "Saved" : "Save changes"}</span>
         </button>
       </div>
+
+      {mutationError && (
+        <div role="alert" aria-live="assertive" className="flex items-start gap-2 rounded-lg border border-[var(--status-danger)]/40 bg-[var(--status-danger)]/10 px-3 py-2 text-xs text-[var(--status-danger)]">
+          <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 break-words">{mutationError}</span>
+        </div>
+      )}
 
       {/* Appearance — client-side, applies instantly */}
       <AppearanceSettings />

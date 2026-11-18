@@ -63,6 +63,7 @@
   /* Status Colors */
   --status-success: #16a34a;
   --status-danger: #dc2626;
+  --danger-foreground: #ffffff;
 
   --status-warning: #d97706;
 
@@ -73,6 +74,7 @@
   /* Theme-aware helpers — differ between Paper and Void, everything else
      above (borders, surfaces) is referenced directly by component CSS. */
   --inline-code-bg: rgba(22, 23, 26, 0.06);
+  --overlay-scrim: rgba(22, 23, 26, 0.5);
   --grid-line: rgba(22, 23, 26, 0.045);
   --shadow-float-color: rgba(22, 23, 26, 0.16);
   --code-block-bg: #0b0d0f; /* code blocks stay terminal-dark in both themes, deliberately */
@@ -132,12 +134,14 @@
 
   --status-success: #27a644;
   --status-danger: #eb5757;
+  --danger-foreground: #08090a;
   --status-warning: #f59e0b;
 
   --grad-brand: linear-gradient(135deg, #a8b800 0%, #e4f222 55%, #f0fc44 100%);
   --grad-hero-floor: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(228, 242, 34, 0.15), transparent 80%);
 
   --inline-code-bg: rgba(255, 255, 255, 0.06);
+  --overlay-scrim: rgba(0, 0, 0, 0.6);
   --grid-line: rgba(255, 255, 255, 0.035);
   --shadow-float-color: rgba(0, 0, 0, 0.6);
   --btn-shadow: 0 0 20px var(--accent-glow);
@@ -593,13 +597,29 @@ body {
   .nx-overlay,
   .nx-dialog,
   .nx-palette { animation: none; }
+  .streaming-cursor,
+  .stream-caret::after,
+  .stream-dot,
+  .landing-aurora,
+  .landing-shimmer,
+  .landing-marquee,
+  .animate-bounce { animation: none !important; }
+  /* Animation `forwards` would otherwise leave these at their 0% keyframe. */
+  .reveal-up { animation: none; opacity: 1; transform: none; }
+  .sr { opacity: 1; transform: none; transition: none; }
 }
 
 /* ---- Scroll-reveal (IntersectionObserver driven) ---- */
-/* Elements start hidden; the ScrollReveal client component adds .in-view     */
-/* when they cross the viewport threshold, triggering the CSS transition.      */
+/* Progressive enhancement: a no-JS document must never contain invisible      */
+/* content. Only a JS-enabled root (`.js`/`.reveal-ready`, or the theme script's */
+/* `data-theme`) arms the hidden initial state; .in-view reveals it as before.   */
 
 .sr {
+  opacity: 1;
+  transform: none;
+}
+
+:where(html.js, html.reveal-ready, html[data-theme]) .sr {
   opacity: 0;
   transform: translateY(28px);
   transition:
@@ -608,9 +628,9 @@ body {
   will-change: opacity, transform;
 }
 
-.sr.sr-left  { transform: translateX(-32px); }
-.sr.sr-right { transform: translateX(32px); }
-.sr.sr-scale { transform: scale(0.92); }
+:where(html.js, html.reveal-ready, html[data-theme]) .sr.sr-left  { transform: translateX(-32px); }
+:where(html.js, html.reveal-ready, html[data-theme]) .sr.sr-right { transform: translateX(32px); }
+:where(html.js, html.reveal-ready, html[data-theme]) .sr.sr-scale { transform: scale(0.92); }
 
 .sr.in-view {
   opacity: 1;
@@ -624,8 +644,4 @@ body {
 .sr-d4 { transition-delay: 270ms; }
 .sr-d5 { transition-delay: 340ms; }
 .sr-d6 { transition-delay: 410ms; }
-
-@media (prefers-reduced-motion: reduce) {
-  .sr { opacity: 1; transform: none; transition: none; }
-}
 

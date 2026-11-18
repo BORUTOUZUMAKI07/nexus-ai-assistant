@@ -10,6 +10,9 @@ export function AppToaster() {
     <Toaster
       theme={resolved}
       position="bottom-right"
+      // Sonner applies this only below its 600px mobile breakpoint, lifting
+      // toasts above the fixed composer instead of covering its controls.
+      mobileOffset={{ bottom: 96 }}
       toastOptions={{
         style: {
           background: "var(--bg-surface-elevated)",

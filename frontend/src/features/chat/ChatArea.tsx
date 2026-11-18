@@ -508,8 +508,9 @@ const CodeBlock: React.FC<{
                   content: code,
                 })
               }
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-white/10 transition-colors cursor-pointer text-[11px] font-sans"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-surface-tint)] transition-colors cursor-pointer text-[11px] font-sans"
               title="Open code in interactive Canvas"
+              aria-label="Open code in interactive Canvas"
             >
               <FileCode className="w-3.5 h-3.5" />
               <span>Canvas</span>
@@ -517,8 +518,9 @@ const CodeBlock: React.FC<{
           )}
           <button
             onClick={handleCopyCode}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer text-[11px] font-sans"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-tint)] transition-colors cursor-pointer text-[11px] font-sans"
             title="Copy code"
+            aria-label="Copy code"
           >
             {copied ? (
               <>
@@ -610,8 +612,9 @@ const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
         </span>
         <button
           onClick={handleCopyCode}
-          className="flex items-center gap-1 px-2 py-0.5 rounded hover:text-white hover:bg-white/10 transition-colors cursor-pointer text-xs"
+          className="flex items-center gap-1 px-2 py-0.5 rounded hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-tint)] transition-colors cursor-pointer text-xs"
           title="Copy Diagram Source"
+          aria-label="Copy Diagram Source"
         >
           {copied ? (
             <>
@@ -1151,7 +1154,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     <div
       ref={scrollRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto px-4 py-8 md:px-8 space-y-2"
+      className="flex-1 overflow-y-auto px-4 pt-8 pb-28 md:px-8 md:py-8 space-y-2"
     >
       {messages.length === 0 &&
         (conversationTitle ? (
@@ -1592,23 +1595,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
               {/* Message Footer Toolbar - fades in on hover */}
               {!isUser && (
-                <div className="flex items-center gap-1.5 text-[var(--text-muted)] text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-150 px-0.5">
+                <div className="flex items-center gap-1.5 text-[var(--text-muted)] text-xs opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150 px-0.5">
                   <button
                     onClick={() => handleCopy(msg.id, msg.content)}
-                    className="hover:text-[var(--text-primary)] p-1 rounded transition-colors"
+                    className="hover:text-[var(--text-primary)] p-1 rounded transition-colors focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                     title="Copy response"
+                    aria-label="Copy response"
                   >
                     {copiedId === msg.id ? <Check className="w-3.5 h-3.5 text-[var(--status-success)]" /> : <Copy className="w-3.5 h-3.5" />}
                   </button>
                   {/* TTS button – backend edge-tts, browser speechSynthesis fallback, 0 cost */}
                   <button
                     onClick={() => void handleTTS(msg.id, msg.content)}
-                    className={`p-1 rounded transition-colors ${
+                    className={`p-1 rounded transition-colors focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)] ${
                       speakingId === msg.id
                         ? "text-[var(--accent-ink)] animate-pulse"
                         : "hover:text-[var(--text-primary)]"
                     }`}
                     title={speakingId === msg.id ? "Stop speaking" : "Read aloud (TTS)"}
+                    aria-label={speakingId === msg.id ? "Stop speaking" : "Read aloud"}
                   >
                     {speakingId === msg.id ? (
                       <VolumeX className="w-3.5 h-3.5" />
@@ -1620,15 +1625,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     <>
                       <button
                         onClick={() => onFeedback(msg.id, "thumbs_up")}
-                        className="hover:text-[var(--status-success)] p-1 rounded transition-colors"
+                        className="hover:text-[var(--status-success)] p-1 rounded transition-colors focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                         title="Good response"
+                        aria-label="Good response"
                       >
                         <ThumbsUp className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => onFeedback(msg.id, "thumbs_down")}
-                        className="hover:text-[var(--status-danger)] p-1 rounded transition-colors"
+                        className="hover:text-[var(--status-danger)] p-1 rounded transition-colors focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                         title="Bad response"
+                        aria-label="Bad response"
                       >
                         <ThumbsDown className="w-3.5 h-3.5" />
                       </button>
@@ -1638,8 +1645,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     <button
                       onClick={() => void runAction(msg.id, onRegenerate)}
                       disabled={actingId === msg.id}
-                      className="hover:text-[var(--accent-ink)] p-1 rounded transition-colors disabled:opacity-50"
+                      className="hover:text-[var(--accent-ink)] p-1 rounded transition-colors disabled:opacity-50 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                       title="Regenerate answer"
+                      aria-label="Regenerate answer"
                     >
                       <RotateCw
                         className={`w-3.5 h-3.5 ${actingId === msg.id ? "animate-spin" : ""}`}
@@ -1650,8 +1658,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     <button
                       onClick={() => void runAction(msg.id, onBranch)}
                       disabled={actingId === msg.id}
-                      className="hover:text-[var(--accent-ink)] p-1 rounded transition-colors disabled:opacity-50"
+                      className="hover:text-[var(--accent-ink)] p-1 rounded transition-colors disabled:opacity-50 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                       title="Branch conversation from here"
+                      aria-label="Branch conversation from here"
                     >
                       <GitBranch className="w-3.5 h-3.5" />
                     </button>
@@ -1673,12 +1682,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   labelled "edit & resend" rather than presented as a plain
                   typo fix. */}
               {isUser && (onEditMessage || onDeleteMessage || onBranch) && (
-                <div className="flex items-center gap-1.5 text-[var(--text-muted)] text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-150 px-0.5">
+                <div className="flex items-center gap-1.5 text-[var(--text-muted)] text-xs opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150 px-0.5">
                   {onEditMessage && editingId !== msg.id && (
                     <button
                       onClick={() => beginEdit(msg)}
-                      className="hover:text-[var(--text-primary)] p-1 rounded transition-colors"
+                      className="hover:text-[var(--text-primary)] p-1 rounded transition-colors focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                       title="Edit & resend (discards later turns)"
+                      aria-label="Edit and resend message"
                     >
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
@@ -1687,8 +1697,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     <button
                       onClick={() => void runAction(msg.id, onBranch)}
                       disabled={actingId === msg.id}
-                      className="hover:text-[var(--accent-ink)] p-1 rounded transition-colors disabled:opacity-50"
+                      className="hover:text-[var(--accent-ink)] p-1 rounded transition-colors disabled:opacity-50 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                       title="Branch conversation from here"
+                      aria-label="Branch conversation from here"
                     >
                       <GitBranch className="w-3.5 h-3.5" />
                     </button>
@@ -1697,8 +1708,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     <button
                       onClick={() => void runAction(msg.id, onDeleteMessage)}
                       disabled={actingId === msg.id}
-                      className="hover:text-[var(--status-danger)] p-1 rounded transition-colors disabled:opacity-50"
+                      className="hover:text-[var(--status-danger)] p-1 rounded transition-colors disabled:opacity-50 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                       title="Delete message (and the turns after it)"
+                      aria-label="Delete message"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>

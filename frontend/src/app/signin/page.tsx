@@ -252,7 +252,11 @@ export default function SignInPage() {
         </div>
 
         {errorMessage && (
-          <div className="mb-4 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-main)] p-3 text-xs text-[var(--status-danger)]">
+          <div
+            role="alert"
+            aria-live="assertive"
+            className="mb-4 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-main)] p-3 text-xs text-[var(--status-danger)]"
+          >
             {retryAfter !== null && retryAfter > 0 ? (
               <>
                 Too many attempts. Try again in {retryAfter}s.
@@ -276,10 +280,11 @@ export default function SignInPage() {
           {mode === "register" && (
             <>
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">Full Name</label>
+                <label htmlFor="signin-full-name" className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">Full Name</label>
                 <div className="relative">
                   <User className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-faint)]" />
                   <input
+                    id="signin-full-name"
                     type="text"
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
@@ -289,10 +294,11 @@ export default function SignInPage() {
                 </div>
               </div>
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">Username</label>
+                <label htmlFor="signin-username" className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">Username</label>
                 <div className="relative">
                   <User className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-faint)]" />
                   <input
+                    id="signin-username"
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
@@ -305,10 +311,11 @@ export default function SignInPage() {
           )}
 
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">Email address</label>
+            <label htmlFor="signin-email" className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">Email address</label>
             <div className="relative">
               <Mail className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-faint)]" />
               <input
+                id="signin-email"
                 type="email"
                 required
                 autoComplete="email"
@@ -321,10 +328,11 @@ export default function SignInPage() {
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">Password</label>
+            <label htmlFor="signin-password" className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">Password</label>
             <div className="relative">
               <Lock className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-faint)]" />
               <input
+                id="signin-password"
                 type="password"
                 required
                 autoComplete={mode === "login" ? "current-password" : "new-password"}

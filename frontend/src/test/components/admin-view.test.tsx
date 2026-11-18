@@ -4,8 +4,8 @@ import { AdminView } from "@/features/admin/AdminView"
 
 describe("AdminView", () => {
   beforeEach(() => {
-    // Deleting a hook policy asks first; jsdom's confirm is unimplemented and
-    // returns undefined, i.e. "cancel", so the click would stop doing anything.
+    // Deletion now goes through an accessible Radix dialog; the spy keeps any
+    // legacy code path from blocking the test if one is left behind.
     vi.spyOn(window, "confirm").mockReturnValue(true)
   })
 
@@ -72,6 +72,7 @@ describe("AdminView", () => {
     await waitFor(() => expect(screen.getByText("Disabled")).toBeInTheDocument())
 
     fireEvent.click(screen.getByTitle("Delete policy"))
+    fireEvent.click(await screen.findByRole("button", { name: /yes, delete policy/i }))
     await waitFor(() =>
       expect(screen.queryByText("Block shell exec")).not.toBeInTheDocument()
     )

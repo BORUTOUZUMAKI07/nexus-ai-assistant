@@ -22,6 +22,7 @@ import {
   promptTemplateBody,
   type PromptTemplate,
 } from "@/lib/api";
+import { toast } from "sonner";
 
 export interface SendMessageOptions {
   enableWeb: boolean;
@@ -194,6 +195,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Cmd/Ctrl+Enter submits the draft even while a slash popover is showing.
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      handleSend();
+      return;
+    }
     // Slash command keyboard navigation
     if (showSlash && filteredSlash.length > 0) {
       if (e.key === "ArrowDown") {
@@ -378,9 +385,9 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
     } catch (err) {
       // DOMException name "AbortError" means the fetch was cancelled because
       // the component unmounted — silently swallow it so the user never sees
-      // a spurious alert after they navigated away.
+      // a spurious notification after they navigated away.
       if (err instanceof Error && err.name !== "AbortError") {
-        alert("Transcription error – please try again.");
+        toast.error("Transcription error – please try again.");
       }
     } finally {
       setIsTranscribing(false);
@@ -418,7 +425,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
       setVoiceNotice(null);
       setIsRecording(true);
     } catch {
-      alert("Microphone access denied. Please allow microphone access in your browser.");
+      toast.error("Microphone access denied. Please allow microphone access in your browser.");
     }
   }, [transcribeBlob]);
 
@@ -491,6 +498,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
               onClick={() => { setImageDataUrl(null); setImageName(""); }}
               className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
               title="Remove image"
+              aria-label="Remove image"
             >
               <X className="w-3 h-3" />
             </button>
@@ -511,6 +519,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                   onClick={() => removeAttachment(idx)}
                   className="hover:text-[var(--text-primary)] p-0.5"
                   title="Remove attachment"
+                  aria-label={`Remove attachment ${file.name}`}
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -539,6 +548,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                     onClick={() => onCancelQueued(q.id)}
                     className="hover:text-[var(--text-primary)] p-0.5 shrink-0"
                     title="Remove queued message"
+                    aria-label={`Remove queued message ${idx + 1}`}
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -548,29 +558,38 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
           </div>
         )}
 
-        {/* Slash Command Popover */}
+        {/* Slash Command Popover. The textarea keeps focus and drives selection
+            through aria-activedescendant, so the options are not tab stops. */}
         {showSlash && filteredSlash.length > 0 && (
-          <div className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-1.5 shadow-2xl z-50 space-y-0.5">
+          <div
+            id="slash-command-listbox"
+            role="listbox"
+            aria-label="Slash commands"
+            className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-1.5 shadow-2xl z-50 space-y-0.5"
+          >
             <div className="text-[10px] font-semibold text-[var(--text-muted)] px-2 py-1 uppercase tracking-wider">
               Commands
             </div>
             {filteredSlash.map((cmd, idx) => (
-              <button
+              <div
                 key={cmd.command}
-                type="button"
+                id={`slash-command-option-${idx}`}
+                role="option"
+                aria-selected={idx === selectedSlashIdx}
+                tabIndex={-1}
                 onMouseDown={(e) => { e.preventDefault(); applySlashCommand(cmd); }}
-                className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors ${
+                className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer ${
                   idx === selectedSlashIdx
                     ? "bg-[var(--accent-soft)] text-[var(--accent-ink)]"
                     : "hover:bg-[var(--bg-surface)] text-[var(--text-secondary)]"
                 }`}
               >
-                <span className="text-lg leading-none">{cmd.icon}</span>
+                <span className="text-lg leading-none" aria-hidden="true">{cmd.icon}</span>
                 <div>
                   <div className="text-xs font-semibold text-[var(--text-primary)]">{cmd.command} <span className="text-[var(--text-muted)] font-normal">{cmd.label}</span></div>
                   <div className="text-[10px] text-[var(--text-faint)]">{cmd.desc}</div>
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         )}
@@ -592,6 +611,15 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
             adjustTextareaHeight();
           }}
           onKeyDown={handleKeyDown}
+          role="combobox"
+          aria-label="Message"
+          aria-expanded={showSlash && filteredSlash.length > 0}
+          aria-controls={showSlash && filteredSlash.length > 0 ? "slash-command-listbox" : undefined}
+          aria-activedescendant={
+            showSlash && filteredSlash.length > 0
+              ? `slash-command-option-${selectedSlashIdx}`
+              : undefined
+          }
           placeholder={
             imageMode
               ? "Describe the image you want Nexus to generate..."
@@ -640,6 +668,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
               onClick={() => fileInputRef.current?.click()}
               className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] transition-colors"
               title="Attach document or code"
+              aria-label="Attach document or code"
             >
               <Paperclip className="w-4 h-4" />
             </button>
@@ -660,6 +689,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                   : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)]"
               }`}
               title="Attach image for vision analysis"
+              aria-label="Attach image for vision analysis"
             >
               <ImageIcon className="w-4 h-4" />
             </button>
@@ -673,6 +703,11 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                   : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)]"
               }`}
               title={
+                imageMode
+                  ? "Image mode on — your next message becomes the prompt"
+                  : "Generate an image from a prompt"
+              }
+              aria-label={
                 imageMode
                   ? "Image mode on — your next message becomes the prompt"
                   : "Generate an image from a prompt"
@@ -699,6 +734,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
                   ? "Transcribing…"
                   : "Voice input (Groq Whisper)"
               }
+              aria-label={isRecording ? "Stop recording" : "Voice input"}
             >
               {isRecording ? (
                 <MicOff className="w-4 h-4" />
@@ -709,6 +745,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
 
             {/* Agent Mode Toggle */}
             <button
+              type="button"
+              aria-pressed={agentMode === "deep"}
               onClick={() =>
                 setAgentMode(agentMode === "deep" ? "fast" : "deep")
               }
@@ -738,6 +776,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
 
             {/* Web Search Toggle */}
             <button
+              type="button"
+              aria-pressed={enableWeb}
               onClick={() => {
                 const next = !enableWeb;
                 setEnableWeb(next);
@@ -763,6 +803,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
 
             {/* Python Sandbox Toggle */}
             <button
+              type="button"
+              aria-pressed={enableCode}
               onClick={() => {
                 const next = !enableCode;
                 setEnableCode(next);
@@ -784,6 +826,8 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
 
             {/* Plan Mode Toggle */}
             <button
+              type="button"
+              aria-pressed={planMode}
               onClick={() => {
                 const next = !planMode;
                 setPlanMode(next);
@@ -900,8 +944,9 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
             {isLoading && (
               <button
                 onClick={onStop}
-                className="p-2 rounded-xl bg-[var(--status-danger)] hover:opacity-90 text-white transition-all"
+                className="p-2 rounded-xl bg-[var(--status-danger)] hover:opacity-90 text-[var(--danger-foreground)] transition-all"
                 title="Stop generation"
+                aria-label="Stop generation"
               >
                 <StopCircle className="w-4 h-4" />
               </button>
@@ -911,6 +956,7 @@ const transcribeBlob = useCallback(async (blob: Blob) => {
               disabled={!canSend}
               className="p-2.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-35 disabled:cursor-not-allowed text-[var(--accent-foreground)] transition-all active:scale-95 shadow-[0_0_16px_var(--accent-glow)]"
               title={isLoading ? "Queue message (Enter)" : "Send message (Enter)"}
+              aria-label={isLoading ? "Queue message" : "Send message"}
             >
               <Send className="w-4 h-4" />
             </button>

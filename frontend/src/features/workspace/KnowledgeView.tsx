@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   Upload,
   FileText,
@@ -70,6 +71,16 @@ export const KnowledgeView: React.FC = () => {
     void filesQuery.refetch();
   };
 
+  const announceActionError = (message: string, toastLabel: string) => {
+    // Keep the API's exact message in the alert: callers and tests rely on the
+    // status detail ("Upload failed: 500"), while the toast names the action.
+    setActionError(message);
+    toast.error(`${toastLabel}${message.startsWith(toastLabel) ? "" : `: ${message}`}`);
+  };
+
+  const failureMessage = (fallback: string, err: unknown) =>
+    err instanceof Error && err.message ? err.message : fallback;
+
   const [isDragging, setIsDragging] = React.useState(false);
 
   /**
@@ -83,9 +94,10 @@ export const KnowledgeView: React.FC = () => {
     // BFF, so a 40MB PDF means a slow request that ends in a 413 anyway. Telling
     // the user now costs nothing and names the actual size.
     if (file.size > MAX_UPLOAD_BYTES) {
-      setActionError(
+      announceActionError(
         `"${file.name}" is ${(file.size / (1024 * 1024)).toFixed(1)}MB. The limit is ` +
-          `${Math.round(MAX_UPLOAD_BYTES / (1024 * 1024))}MB — split it into smaller files.`
+          `${Math.round(MAX_UPLOAD_BYTES / (1024 * 1024))}MB — split it into smaller files.`,
+        "Upload failed"
       );
       if (fileInputRef.current) fileInputRef.current.value = "";
       return;
@@ -102,9 +114,7 @@ export const KnowledgeView: React.FC = () => {
         ...(prev ?? []),
       ]);
     } catch (err) {
-      setActionError(
-        err instanceof Error ? err.message : "Upload failed"
-      );
+      announceActionError(failureMessage("Upload failed", err), "Upload failed");
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -131,9 +141,7 @@ export const KnowledgeView: React.FC = () => {
         (prev ?? []).filter((f) => f.id !== id),
       );
     } catch (err) {
-      setActionError(
-        err instanceof Error ? err.message : "Delete failed"
-      );
+      announceActionError(failureMessage("Delete file failed", err), "Delete failed");
     }
   };
 
@@ -187,9 +195,9 @@ export const KnowledgeView: React.FC = () => {
       setSearchResults(data.citations ?? []);
       setSearchTookMs(typeof data.took_ms === "number" ? data.took_ms : null);
     } catch (err) {
-      setSearchError(
-        err instanceof Error ? err.message : "Search failed"
-      );
+      const message = failureMessage("Search failed", err);
+      setSearchError(message);
+      toast.error(`Search failed: ${message}`);
     } finally {
       setIsSearching(false);
     }
@@ -261,9 +269,10 @@ export const KnowledgeView: React.FC = () => {
       </div>
 
       {actionError && (
-        <div className="flex items-center gap-3 rounded-xl border border-[var(--border-strong)] bg-[var(--bg-surface)] p-4 text-sm">
+        <div role="alert" aria-live="assertive" className="flex items-center gap-3 rounded-xl border border-[var(--border-strong)] bg-[var(--bg-surface)] p-4 text-sm">
           <AlertCircle className="w-4 h-4 text-[var(--status-danger)] shrink-0" />
           <span className="text-[var(--text-secondary)]">{actionError}</span>
+          <span className="sr-only">Action failed</span>
         </div>
       )}
 
@@ -473,7 +482,10 @@ export const KnowledgeView: React.FC = () => {
         </div>
 
         {searchError && (
-          <p className="text-xs text-[var(--status-danger)]">{searchError}</p>
+          <p role="alert" aria-live="assertive" className="text-xs text-[var(--status-danger)]">
+            <span>{searchError}</span>
+            <span className="sr-only">Search failed</span>
+          </p>
         )}
 
         {/* A search that matched nothing is a real answer, not an empty state

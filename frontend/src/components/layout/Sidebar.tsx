@@ -23,9 +23,13 @@ import {
   ArchiveRestore,
   ChevronDown,
   ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRight,
 } from "lucide-react";
 import Image from "next/image";
 import { MODEL_CATALOG } from "@/lib/models";
+import type { SidebarDock } from "@/lib/sidebar-layout";
 
 export interface ConversationItem {
   id: string;
@@ -78,6 +82,12 @@ interface SidebarProps {
   hasMoreConversations?: boolean;
   /** Load the next page of conversations from the server. */
   onLoadMoreConversations?: () => void;
+  /** Which edge the desktop sidebar docks to (persisted by the caller). */
+  dock?: SidebarDock;
+  /** Compact icon rail instead of the full column (persisted by the caller). */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+  onChangeDock?: (dock: SidebarDock) => void;
 }
 
 interface NavItem {
@@ -111,6 +121,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenCommandPalette,
   hasMoreConversations = false,
   onLoadMoreConversations,
+  dock = "left",
+  collapsed = false,
+  onToggleCollapsed,
+  onChangeDock,
 }: SidebarProps) => {
   const models = MODEL_CATALOG;
 
@@ -180,8 +194,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const renderConversation = (c: ConversationItem) => (
     <div
       key={c.id}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${c.title}`}
+      aria-current={activeConversationId === c.id ? "page" : undefined}
       onClick={() => onSelectConversation(c.id)}
-      className={`group flex items-center justify-between px-3 py-2 rounded-lg text-xs cursor-pointer transition-colors ${
+      onKeyDown={(e) => {
+        // Only activate for keys aimed at the row itself. Enter/Space on a
+        // nested rename or action button belongs to that button.
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelectConversation(c.id);
+        }
+      }}
+      className={`group flex items-center justify-between px-3 py-2 rounded-lg text-xs cursor-pointer transition-colors focus-visible:outline-2 focus-visible:outline-[var(--accent)] ${
         activeConversationId === c.id
           ? "bg-[var(--accent-soft)] text-[var(--accent-ink)] border border-[var(--accent)]"
           : "text-[var(--text-muted)] hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)] border border-transparent"
@@ -224,6 +251,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 void commitRename(c);
               }}
               title="Save name"
+              aria-label={`Save name for ${c.title}`}
               className="text-[var(--accent)] p-0.5"
             >
               <Check className="w-3.5 h-3.5" />
@@ -234,6 +262,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 cancelRename();
               }}
               title="Cancel rename"
+              aria-label={`Cancel rename for ${c.title}`}
               className="text-[var(--text-faint)] hover:text-[var(--text-primary)] p-0.5"
             >
               <X className="w-3.5 h-3.5" />
@@ -249,7 +278,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }}
             title="Rename conversation"
             aria-label={`Rename ${c.title}`}
-            className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent)] p-0.5 transition-opacity"
+            className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent)] p-0.5 transition-opacity focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           >
             <Pencil className="w-3.5 h-3.5" />
           </button>
@@ -265,7 +294,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className={
               c.is_pinned
                 ? "text-[var(--accent-ink)] p-0.5"
-                : "opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity"
+                : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
             }
           >
             <Pin className="w-3.5 h-3.5" />
@@ -275,7 +304,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             onClick={(e) => onForkConversation(c.id, e)}
             title="Fork/Branch conversation"
-            className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity"
+            aria-label={`Fork ${c.title}`}
+            className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           >
             <GitFork className="w-3.5 h-3.5" />
           </button>
@@ -285,7 +315,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onClick={(e) => onShareConversation(c.id, e)}
             title="Share conversation (read-only link)"
             aria-label={`Share ${c.title}`}
-            className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity"
+            className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           >
             <Share2 className="w-3.5 h-3.5" />
           </button>
@@ -295,7 +325,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onClick={(e) => onArchiveConversation(c.id, e)}
             title="Archive conversation (hidden, not deleted)"
             aria-label={`Archive ${c.title}`}
-            className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity"
+            className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 transition-opacity focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           >
             <Archive className="w-3.5 h-3.5" />
           </button>
@@ -303,7 +333,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <button
           onClick={(e) => onDeleteConversation(c.id, e)}
           title="Delete conversation"
-          className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-[var(--status-danger)] p-0.5 transition-opacity"
+          aria-label={`Delete ${c.title}`}
+          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-[var(--text-faint)] hover:text-[var(--status-danger)] p-0.5 transition-opacity focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
         >
           <Trash2 className="w-3.5 h-3.5" />
         </button>
@@ -313,8 +344,92 @@ export const Sidebar: React.FC<SidebarProps> = ({
     </div>
   );
 
+  // A collapsed sidebar is an icon rail, not a hidden sidebar: the actions a
+  // user reaches for without thinking (new chat, navigation, dock/expand) stay
+  // visible and labelled, while the conversation list yields the space back to
+  // the transcript.
+  if (collapsed) {
+    return (
+      <aside
+        className={`w-16 h-dvh flex flex-col items-center gap-2 py-3 bg-[var(--bg-main)] border-[var(--border-subtle)] select-none ${
+          dock === "right" ? "border-l" : "border-r"
+        }`}
+      >
+        <Image src="/nexus-logo.svg" alt="Nexus" width={28} height={28} className="w-7 h-7 rounded-lg" />
+        <div className="flex flex-col items-center gap-1">
+          {onChangeDock && (
+            <button
+              type="button"
+              onClick={() => onChangeDock(dock === "left" ? "right" : "left")}
+              title={dock === "left" ? "Dock sidebar on the right" : "Dock sidebar on the left"}
+              aria-label={dock === "left" ? "Dock sidebar on the right" : "Dock sidebar on the left"}
+              className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            >
+              <PanelRight className="w-4 h-4" aria-hidden="true" />
+            </button>
+          )}
+          {onToggleCollapsed && (
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+              aria-pressed={true}
+              className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            >
+              <PanelLeftOpen className="w-4 h-4" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onNewChat}
+          title="New conversation"
+          aria-label="New conversation"
+          className="p-2 rounded-lg bg-[var(--accent)] text-[var(--accent-foreground)] hover:bg-[var(--accent-hover)] focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+        >
+          <Plus className="w-4 h-4" aria-hidden="true" />
+        </button>
+        <nav aria-label="Workspace" className="flex flex-col items-center gap-1 w-full px-2">
+          {navItems.map(({ tab, label, Icon }) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              title={label}
+              aria-label={`Go to ${label}`}
+              aria-current={activeTab === tab ? "page" : undefined}
+              className={`p-2 rounded-lg w-full flex items-center justify-center transition-colors focus-visible:outline-2 focus-visible:outline-[var(--accent)] ${
+                activeTab === tab
+                  ? "bg-[var(--accent-soft)] text-[var(--accent-ink)]"
+                  : "text-[var(--text-muted)] hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+            </button>
+          ))}
+        </nav>
+        {onSignOut && (
+          <button
+            type="button"
+            onClick={onSignOut}
+            title="Sign out"
+            aria-label="Sign out"
+            className="mt-auto p-2 rounded-lg text-[var(--text-faint)] hover:text-[var(--status-danger)] hover:bg-[var(--bg-surface)] focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+          >
+            <LogOut className="w-4 h-4" aria-hidden="true" />
+          </button>
+        )}
+      </aside>
+    );
+  }
+
   return (
-    <aside className="w-72 h-screen flex flex-col bg-[var(--bg-main)] border-r border-[var(--border-subtle)] select-none">
+    <aside
+      className={`w-72 h-dvh flex flex-col bg-[var(--bg-main)] border-[var(--border-subtle)] select-none ${
+        dock === "right" ? "border-l" : "border-r"
+      }`}
+    >
       {/* Brand Header */}
       <div className="p-4 flex items-center justify-between border-b border-[var(--border-subtle)]">
         <div className="flex items-center gap-2.5">
@@ -328,15 +443,49 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
           </div>
         </div>
-        {onSignOut && (
-          <button
-            onClick={onSignOut}
-            title="Sign out"
-            className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--status-danger)] hover:bg-[var(--bg-surface)] transition-colors"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
-        )}
+        <div className="flex items-center gap-0.5">
+          {(onChangeDock || onToggleCollapsed) && (
+            <div className="flex items-center gap-0.5">
+              {onChangeDock && (
+                <button
+                  type="button"
+                  onClick={() => onChangeDock(dock === "left" ? "right" : "left")}
+                  title={dock === "left" ? "Dock sidebar on the right" : "Dock sidebar on the left"}
+                  aria-label={dock === "left" ? "Dock sidebar on the right" : "Dock sidebar on the left"}
+                  className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] transition-colors focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+                >
+                  <PanelRight className="w-4 h-4" aria-hidden="true" />
+                </button>
+              )}
+              {onToggleCollapsed && (
+                <button
+                  type="button"
+                  onClick={onToggleCollapsed}
+                  title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  aria-pressed={collapsed}
+                  className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] transition-colors focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+                >
+                  {collapsed ? (
+                    <PanelLeftOpen className="w-4 h-4" aria-hidden="true" />
+                  ) : (
+                    <PanelLeftClose className="w-4 h-4" aria-hidden="true" />
+                  )}
+                </button>
+              )}
+            </div>
+          )}
+          {onSignOut && (
+            <button
+              onClick={onSignOut}
+              title="Sign out"
+              aria-label="Sign out"
+              className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--status-danger)] hover:bg-[var(--bg-surface)] transition-colors focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Command palette trigger */}
@@ -495,18 +644,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   archivedConversations.map((c) => (
                     <div
                       key={c.id}
-                      className="group flex items-center justify-between px-3 py-1.5 rounded-lg text-[11px] text-[var(--text-faint)] hover:bg-[var(--bg-surface)]"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Restore ${c.title}`}
+                      onClick={() => onRestoreConversation?.(c.id)}
+                      onKeyDown={(e) => {
+                        if (e.target !== e.currentTarget) return;
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onRestoreConversation?.(c.id);
+                        }
+                      }}
+                      className="group flex items-center justify-between px-3 py-1.5 rounded-lg text-[11px] text-[var(--text-faint)] hover:bg-[var(--bg-surface)] cursor-pointer focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                     >
                       <span className="truncate">{c.title}</span>
                       {onRestoreConversation && (
-                        <button
-                          onClick={() => onRestoreConversation(c.id)}
-                          title="Restore to the sidebar"
-                          aria-label={`Restore ${c.title}`}
-                          className="text-[var(--text-faint)] hover:text-[var(--accent-ink)] p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <ArchiveRestore className="w-3.5 h-3.5" />
-                        </button>
+                        <ArchiveRestore className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                       )}
                     </div>
                   ))

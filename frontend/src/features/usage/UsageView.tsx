@@ -135,6 +135,47 @@ export const UsageView: React.FC = () => {
               value={stats.cached_tokens.toLocaleString("en-US")}
             />
           </div>
+
+          {/* The summary endpoint reports aggregate fields only. Present them as
+              an honest table instead of inventing per-message rows, and say
+              plainly that a per-request breakdown is not available. */}
+          <section className="glass-panel p-4 sm:p-5 space-y-3">
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+              Token and cost breakdown
+            </h3>
+            <table
+              aria-label="Token and cost breakdown"
+              className="w-full border-collapse text-left text-xs"
+            >
+              <thead>
+                <tr className="border-b border-[var(--border-subtle)] text-[var(--text-muted)]">
+                  <th scope="col" className="py-2 pr-4 font-medium">Category</th>
+                  <th scope="col" className="py-2 text-right font-medium">Tokens</th>
+                </tr>
+              </thead>
+              <tbody className="text-[var(--text-secondary)]">
+                <tr className="border-b border-[var(--border-subtle)]">
+                  <th scope="row" className="py-2 pr-4 font-normal">Prompt</th>
+                  <td className="py-2 text-right font-mono">{stats.prompt_tokens.toLocaleString("en-US")} tok</td>
+                </tr>
+                <tr className="border-b border-[var(--border-subtle)]">
+                  <th scope="row" className="py-2 pr-4 font-normal">Completion</th>
+                  <td className="py-2 text-right font-mono">{stats.completion_tokens.toLocaleString("en-US")} tok</td>
+                </tr>
+                <tr className="border-b border-[var(--border-subtle)]">
+                  <th scope="row" className="py-2 pr-4 font-normal">Cached (included in prompt)</th>
+                  <td className="py-2 text-right font-mono">{stats.cached_tokens.toLocaleString("en-US")} tok</td>
+                </tr>
+                <tr className="font-medium text-[var(--text-primary)]">
+                  <th scope="row" className="py-2 pr-4 font-medium">Total</th>
+                  <td className="py-2 text-right font-mono">{stats.total_tokens.toLocaleString("en-US")} tok</td>
+                </tr>
+              </tbody>
+            </table>
+            <p className="text-[11px] text-[var(--text-faint)]">
+              <span className="font-mono">${stats.total_cost_usd.toFixed(4)} aggregate</span>. Per-request breakdown is not available from the usage summary.
+            </p>
+          </section>
         </>
       )}
     </div>

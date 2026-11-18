@@ -136,7 +136,7 @@ export default function InvitePage() {
           )}
 
           {(phase.kind === "failed" || missingToken) && (
-            <div className="space-y-4">
+            <div role="alert" className="space-y-4">
               <p className="flex items-start gap-2 text-sm text-[var(--text-primary)]">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--status-danger)]" />
                 <span>
