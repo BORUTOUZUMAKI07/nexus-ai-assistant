@@ -53,6 +53,11 @@ from backend.app.services.llm.byok import bind_byok_keys, load_user_byok_keys, r
 from backend.app.services.memory.semantic_cache import semantic_response_cache
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.tracing import trace_span
+from backend.app.services.outbox.service import (
+    TASK_CACHE_INVALIDATION,
+    TASK_WEBHOOK_DISPATCH,
+    enqueue_post_answer_tasks,
+)
 from backend.app.services.runs.events import citation_payloads, finished_run_payloads
 from backend.app.services.runs.log import RunBroker, RunWriter, run_broker
 from backend.app.services.usage.service import UsageService
@@ -196,6 +201,9 @@ async def execute_run(
     )
 
     emitted_text = ""
+    # One structured marker for the first text that reaches the stream, not one
+    # per token: the live trace needs to know when the answer appeared.
+    answer_emitted = False
     # Collected from the frames as they pass through, because this is the only
     # place a tool call exists: the graph does not keep tool calls in state, and
     # the message row is written after the stream has already ended. Without
@@ -242,6 +250,9 @@ async def execute_run(
                     await writer.emit(frame)
                     if is_text:
                         emitted_text += str(frame.get("content", ""))
+                        if not answer_emitted and emitted_text:
+                            answer_emitted = True
+                            logger.info("answer_emitted", run_id=str(run_id))
                     elif frame.get("type") == "tool_call":
                         # The AG-UI `TOOL_CALL_START` alias carries the same call a
                         # few lines later; matching on `tool_call` alone keeps one
@@ -293,6 +304,7 @@ async def execute_run(
                 # write must not skip `_terminate`, or the run row stays
                 # "running" forever and every subscriber waits on a dead run.
                 message_id = None
+                bookkeeping_started = time.perf_counter()
                 try:
                     message_id = await _persist_reply(
                         conversation_id=conversation_id,
@@ -309,10 +321,14 @@ async def execute_run(
                         model=await _run_answer_model(graph, config),
                     )
                 except Exception as persist_exc:
+                    bookkeeping_ms = (time.perf_counter() - bookkeeping_started) * 1000.0
+                    # There is no `done` on this path; the existing failure log
+                    # is where the timing has to be visible.
                     logger.error(
                         "partial_reply_persist_failed",
                         run_id=str(run_id),
                         error_type=type(persist_exc).__name__,
+                        bookkeeping_ms=round(bookkeeping_ms, 2),
                     )
                 await _terminate(
                     run_id,
@@ -333,7 +349,12 @@ async def execute_run(
             # second `aget_state` would be a second trip to the checkpointer for
             # the same fact, in a module whose whole design is about not paying
             # for round-trips per token.
-            post_run = await _post_run_frames(graph, config)
+            # The checkpoint round-trip is its own span; the frames it produced
+            # are emitted later, under the same name with phase="emit".
+            async with trace_span(
+                "chat.post_run_frames", {"run_id": str(run_id), "phase": "read"}
+            ):
+                post_run = await _post_run_frames(graph, config)
             citations = [f for f in post_run if f.get("type") == "citation"]
             # The model that actually answered, from the same checkpoint read.
             # The `model_info` frame is built from the graph's `answer_model`,
@@ -357,8 +378,11 @@ async def execute_run(
             )
             if not emitted_text.strip() and not parked_for_approval:
                 logger.warning("run_completed_without_answer", run_id=str(run_id))
-                for frame in post_run:
-                    await writer.emit(frame)
+                async with trace_span(
+                    "chat.post_run_frames", {"run_id": str(run_id), "phase": "emit"}
+                ):
+                    for frame in post_run:
+                        await writer.emit(frame)
                 await writer.emit(
                     {
                         "type": "error",
@@ -379,6 +403,7 @@ async def execute_run(
                 )
                 return
 
+            bookkeeping_started = time.perf_counter()
             message_id = await _persist_reply(
                 conversation_id=conversation_id,
                 user_id=user_id,
@@ -393,17 +418,25 @@ async def execute_run(
                 citations=citations,
                 model=answer_model,
             )
+            # `latency_ms` above stops before this write. Keep it for contract
+            # compatibility, and report the tail honestly in its own field.
+            bookkeeping_ms = (time.perf_counter() - bookkeeping_started) * 1000.0
 
-            for frame in post_run:
-                await writer.emit(frame)
+            async with trace_span(
+                "chat.post_run_frames", {"run_id": str(run_id), "phase": "emit"}
+            ):
+                for frame in post_run:
+                    await writer.emit(frame)
 
             spend_meter = current_spend_meter()
+            logger.info("done_emitted", run_id=str(run_id))
             await writer.emit(
                 {
                     "type": "done",
                     "content": emitted_text,
                     "thread_id": config["configurable"]["thread_id"],
                     "latency_ms": latency_ms,
+                    "bookkeeping_ms": bookkeeping_ms,
                     "tokens": spend_meter.tokens if spend_meter else 0,
                     "cost_usd": round(
                         spend_meter.estimated_cost_usd, 6
@@ -926,6 +959,7 @@ async def _persist_reply(
     one legacy slug. The fallback to ``settings.DEFAULT_MODEL`` is only for a run
     that died before any model produced text.
     """
+    logger.info("bookkeeping_enqueued", run_id=str(run_id))
     if not emitted_text.strip():
         # Nothing was accumulated from the stream, so there is no answer to
         # store. Recorded rather than silent: this is the state that made a
@@ -933,6 +967,7 @@ async def _persist_reply(
         PERSIST_STATE.update(
             status="skipped_empty_text", error=None, run_id=str(run_id)
         )
+        logger.info("bookkeeping_finished", run_id=str(run_id))
         return None
     response_model = model or settings.DEFAULT_MODEL
     try:
@@ -960,74 +995,146 @@ async def _persist_reply(
                 last_user, emitted_text, prompt_tok + comp_tok, latency_ms
             )
 
-            assistant_msg = await conv_svc.add_message(
-                conversation_id=conversation_id,
-                role="assistant",
-                content=emitted_text,
-                parent_message_id=parent_message_id,
-                model=response_model,
-                # Stored, not derived. These two are the only durable record of
-                # the evidence behind this answer, and the columns have existed
-                # the whole time with nothing writing them -- so a reloaded
-                # transcript rendered the answer with an empty citation panel
-                # and no tool history, and read as though the answer had none.
-                citations=citations or [],
-                tool_calls=tool_calls or [],
-                cost_usd=cost_usd,
-            )
-            await usage_svc.log_usage(
-                UsageLogCreate(
+            async with trace_span(
+                "chat.persist.assistant_message", {"run_id": str(run_id)}
+            ):
+                assistant_msg = await conv_svc.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=emitted_text,
+                    parent_message_id=parent_message_id,
+                    model=response_model,
+                    # Stored, not derived. These two are the only durable record of
+                    # the evidence behind this answer, and the columns have existed
+                    # the whole time with nothing writing them -- so a reloaded
+                    # transcript rendered the answer with an empty citation panel
+                    # and no tool history, and read as though the answer had none.
+                    citations=citations or [],
+                    tool_calls=tool_calls or [],
+                    cost_usd=cost_usd,
+                )
+            async with trace_span(
+                "chat.persist.usage_log",
+                {"run_id": str(run_id), "message_id": str(assistant_msg.id)},
+            ):
+                await usage_svc.log_usage(
+                    UsageLogCreate(
+                        user_id=user_id,
+                        org_id=org_id,
+                        conversation_id=conversation_id,
+                        message_id=assistant_msg.id,
+                        model=response_model,
+                        provider=resolve_provider(response_model),
+                        prompt_tokens=prompt_tok,
+                        completion_tokens=comp_tok,
+                        cached_tokens=cached_tok,
+                        # The non-stream path passes `duration_ms` here; omitting it
+                        # left every streamed run at 0, which is why
+                        # `average_latency_ms` read 0 for them. `latency_ms` is in
+                        # scope on the call above (`evaluate_response_quality`).
+                        latency_ms=latency_ms,
+                        cost_usd=cost_usd,
+                        metadata_json={
+                            "quality": quality,
+                            # Recorded, not inferred: 0.0 here means "the provider
+                            # reported no cache hit", which is the number that
+                            # decides whether the static-first prompt is paying off.
+                            "cached_tokens": cached_tok,
+                            "cache_hit_rate": round(cached_tok / prompt_tok, 4) if prompt_tok else 0.0,
+                        },
+                    )
+                )
+            async with trace_span(
+                "chat.persist.cost_log",
+                {"run_id": str(run_id), "message_id": str(assistant_msg.id)},
+            ):
+                await cost_tracking_service.record_cost_log(
+                    session=session,
                     user_id=user_id,
                     org_id=org_id,
-                    conversation_id=conversation_id,
-                    message_id=assistant_msg.id,
                     model=response_model,
                     provider=resolve_provider(response_model),
                     prompt_tokens=prompt_tok,
                     completion_tokens=comp_tok,
-                    cached_tokens=cached_tok,
-                    # The non-stream path passes `duration_ms` here; omitting it
-                    # left every streamed run at 0, which is why
-                    # `average_latency_ms` read 0 for them. `latency_ms` is in
-                    # scope on the call above (`evaluate_response_quality`).
-                    latency_ms=latency_ms,
-                    cost_usd=cost_usd,
-                    metadata_json={
-                        "quality": quality,
-                        # Recorded, not inferred: 0.0 here means "the provider
-                        # reported no cache hit", which is the number that
-                        # decides whether the static-first prompt is paying off.
-                        "cached_tokens": cached_tok,
-                        "cache_hit_rate": round(cached_tok / prompt_tok, 4) if prompt_tok else 0.0,
-                    },
                 )
-            )
-            await cost_tracking_service.record_cost_log(
-                session=session,
-                user_id=user_id,
-                org_id=org_id,
-                model=response_model,
-                provider=resolve_provider(response_model),
-                prompt_tokens=prompt_tok,
-                completion_tokens=comp_tok,
-            )
             await session.commit()
-            # Invalidate the semantic cache bucket so a freshly persisted
-            # answer cannot be served stale on a repeated question.
-            await semantic_response_cache.invalidate(
-                user_id=str(user_id),
-                model=response_model,
-            )
-            # Fire-and-forget: an endpoint that is slow, down or retrying must
-            # not delay the `done` frame the user is waiting on.
-            _spawn_webhook_dispatch(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                message_id=assistant_msg.id,
-                model=response_model,
-                content=emitted_text,
-            )
+            # The assistant row, usage row and cost row above are one committed
+            # transaction. Everything below is *after* that commit: the two
+            # jobs that used to run inline now become durable outbox rows, so a
+            # slow cache call or webhook endpoint can no longer hold `done`.
+            # These span names are kept exactly as the timing work named them
+            # -- the dashboards key on them -- but they now measure the fast
+            # enqueue that replaced each inline stage. The enqueue is
+            # fail-open: a missing table before the migration is applied must
+            # not turn an already-persisted answer into a failed turn.
+            try:
+                async with trace_span(
+                    "chat.persist.cache_invalidate",
+                    {"run_id": str(run_id), "message_id": str(assistant_msg.id)},
+                ):
+                    await enqueue_post_answer_tasks(
+                        session,
+                        run_id=run_id,
+                        message_id=assistant_msg.id,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        model=response_model,
+                        content=emitted_text,
+                        task_types=(TASK_CACHE_INVALIDATION,),
+                    )
+                async with trace_span(
+                    "chat.persist.webhook_enqueue",
+                    {"run_id": str(run_id), "message_id": str(assistant_msg.id)},
+                ):
+                    await enqueue_post_answer_tasks(
+                        session,
+                        run_id=run_id,
+                        message_id=assistant_msg.id,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        model=response_model,
+                        content=emitted_text,
+                        task_types=(TASK_WEBHOOK_DISPATCH,),
+                    )
+                await session.commit()
+            except Exception as enqueue_exc:
+                logger.warning(
+                    "outbox_enqueue_failed",
+                    run_id=str(run_id),
+                    error_type=type(enqueue_exc).__name__,
+                )
+                # Safe deploy before the migration: when the queue is not there
+                # yet, keep the old best-effort behaviour rather than silently
+                # dropping the invalidation and the webhook. Still after the
+                # commit, and still fail-open.
+                try:
+                    async with trace_span(
+                        "chat.persist.cache_invalidate",
+                        {"run_id": str(run_id), "message_id": str(assistant_msg.id)},
+                    ):
+                        await semantic_response_cache.invalidate(
+                            user_id=str(user_id),
+                            model=response_model,
+                        )
+                    async with trace_span(
+                        "chat.persist.webhook_enqueue",
+                        {"run_id": str(run_id), "message_id": str(assistant_msg.id)},
+                    ):
+                        _spawn_webhook_dispatch(
+                            user_id=user_id,
+                            conversation_id=conversation_id,
+                            message_id=assistant_msg.id,
+                            model=response_model,
+                            content=emitted_text,
+                        )
+                except Exception as inline_exc:
+                    logger.warning(
+                        "inline_post_answer_bookkeeping_failed",
+                        run_id=str(run_id),
+                        error_type=type(inline_exc).__name__,
+                    )
             PERSIST_STATE.update(status="ok", error=None, run_id=str(run_id))
+            logger.info("bookkeeping_finished", run_id=str(run_id))
             return assistant_msg.id
     except Exception as exc:
         logger.warning(

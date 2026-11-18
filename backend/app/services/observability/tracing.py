@@ -62,11 +62,15 @@ async def trace_span(
         except Exception as exc:
             duration_ms = (time.perf_counter() - start_time) * 1000
             metrics_collector.record_error(f"{span_name}_{type(exc).__name__}")
+            # `error.type` is the APM semantic-convention field: a fixed
+            # identifier (the exception class), never the exception message.
+            # `error_type` is kept for the existing dashboards/logs.
             logger.error(
                 f"span_error_{span_name}",
                 duration_ms=round(duration_ms, 2),
                 error=str(exc),
                 error_type=type(exc).__name__,
+                **{"error.type": type(exc).__name__},
                 **span_data,
             )
             if span is not None:
@@ -78,6 +82,7 @@ async def trace_span(
                     {
                         "duration_ms": round(duration_ms, 2),
                         "error_type": type(exc).__name__,
+                        "error.type": type(exc).__name__,
                     },
                 )
                 span.record_exception(exc)

@@ -298,6 +298,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         retry_task = asyncio.create_task(_run_periodic_webhook_retry())
 
+        # 4f. Durable post-answer outbox worker. Enqueueing happens on the run
+        #     path regardless, so polling is opt-in: the code can be deployed
+        #     before f9a0b1c2d3e4 is applied. Set POST_ANSWER_OUTBOX_ENABLED=true
+        #     once the migration is live.
+        from backend.app.services.outbox.worker import (
+            OutboxWorker,
+            outbox_worker_enabled,
+        )
+
+        outbox_worker = None
+        if outbox_worker_enabled():
+            outbox_worker = OutboxWorker(session_factory=async_session_factory)
+            outbox_worker.start()
+            logger.info("post_answer_outbox_worker_started")
+        else:
+            logger.info("post_answer_outbox_worker_disabled")
+
         # 4c. Start the FastMCP sub-application's own lifespan so its
         #     streamable-HTTP session-manager task group is running before the
         #     first request. Mounting the sub-app does not start it; without this
@@ -315,6 +332,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             try:
                 yield
             finally:
+                if outbox_worker is not None:
+                    await outbox_worker.stop()
                 decay_task.cancel()
                 retry_task.cancel()
         else:
@@ -344,6 +363,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     try:
                         yield
                     finally:
+                        if outbox_worker is not None:
+                            await outbox_worker.stop()
                         decay_task.cancel()
                         if app is not None and hasattr(app, "state"):
                             try:
@@ -359,6 +380,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 try:
                     yield
                 finally:
+                    if outbox_worker is not None:
+                        await outbox_worker.stop()
                     decay_task.cancel()
 
     # Graceful Shutdown (outside lifespan_graph context — pool already closed)
