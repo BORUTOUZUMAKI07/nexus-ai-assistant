@@ -142,3 +142,36 @@ def test_the_breaker_is_shared_because_there_is_one_collector(breaker):
     logs.export([])
     traces.export([])  # threshold reached across signals, not per signal
     assert otel._collector_breaker.should_skip() is True
+
+
+def test_production_defaults_tolerate_one_cold_start_batch(monkeypatch):
+    """One failing batch after the collector wakes must NOT open the circuit.
+
+    Regression: the defaults were threshold=1 / cooldown=3600, so the first
+    batch after the free-tier collector slept (all three signals failing
+    together) silenced every export for an hour — the opposite of the
+    documented "resumes immediately after" behaviour.
+    """
+    clock = FakeClock()
+    fresh = otel._ExportBreaker(clock=clock)  # production defaults
+    monkeypatch.setattr(otel, "_collector_breaker", fresh)
+
+    assert otel._EXPORT_FAILURE_THRESHOLD > 3, "threshold must exceed 3 signals per batch"
+    assert otel._EXPORT_COOLDOWN_SECONDS < 3600, "an hour cooldown hides real outages"
+
+    # A whole cold-start batch (logs + metrics + traces) fails.
+    for signal in ("logs", "metrics", "traces"):
+        wrapper = otel._CircuitBreakingExporter(
+            RecordingExporter("FAILURE"), signal=signal, success="SUCCESS"
+        )
+        assert wrapper.export([]) == "FAILURE"
+    assert fresh.should_skip() is False, "one cold-start batch must not open the circuit"
+
+    # The next batch, ~30 s later when the collector is awake, gets through and
+    # resets the failure count.
+    clock.advance(30.0)
+    ok = otel._CircuitBreakingExporter(
+        RecordingExporter("SUCCESS"), signal="logs", success="SUCCESS"
+    )
+    assert ok.export([]) == "SUCCESS"
+    assert fresh.should_skip() is False

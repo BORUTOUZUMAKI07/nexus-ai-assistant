@@ -58,8 +58,19 @@ _collector_resolved: bool | None = None
 # many consecutive failed exports, exports are dropped without touching the
 # network for the cool-off period, then a single probe is let through. A
 # successful probe closes the circuit and normal reporting resumes.
-_EXPORT_FAILURE_THRESHOLD = 1
-_EXPORT_COOLDOWN_SECONDS = 3600.0
+#
+# The threshold must be LARGER than the number of signals (logs, metrics,
+# traces) exported per batch. All three fail together on a cold start — the
+# shared breaker sees three failures within seconds — so a threshold of 1 (the
+# original value) opened the circuit on the very first batch after idle and
+# silenced telemetry for a full hour. That contradicts render.yaml's documented
+# "the first batch is dropped, export resumes immediately after" contract. With
+# 4, one whole failing batch is tolerated and the next batch (~30 s later, once
+# the collector has woken) is allowed through; if it succeeds the breaker
+# resets. The cool-off is short enough to retry while a genuine outage clears,
+# but long enough to avoid the per-30-second retry storm this breaker replaced.
+_EXPORT_FAILURE_THRESHOLD = 4
+_EXPORT_COOLDOWN_SECONDS = 120.0
 
 
 class _ExportBreaker:
