@@ -57,6 +57,55 @@ describe("ChatArea", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("does not render a review panel for an empty quality frame", () => {
+    // The backend emits `quality` on every finished run with score 0 and no gate
+    // result when there was nothing to grade. Showing that as "Answer passed
+    // review on first draft" manufactured a claim the reviewer never made.
+    render(
+      <ChatArea
+        messages={[assistant]}
+        isLoading={false}
+        turnVerdict={{ revision_count: 0, evidence_score: 0, evidence_gate_passed: null }}
+      />
+    )
+    expect(screen.queryByText(/review/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/evidence/i)).not.toBeInTheDocument()
+  })
+
+  it("labels an actual critique without claiming a first-draft pass", () => {
+    render(
+      <ChatArea
+        messages={[assistant]}
+        isLoading={false}
+        turnVerdict={{
+          critique: "too thin",
+          revision_count: 0,
+          evidence_score: 0.4,
+          evidence_gate_passed: false,
+        }}
+      />
+    )
+    expect(screen.getByText("Reviewer checked this answer")).toBeInTheDocument()
+    expect(screen.queryByText("Answer passed review on first draft")).not.toBeInTheDocument()
+  })
+
+  it("marks the saved feedback and disables feedback buttons while saving", () => {
+    const onFeedback = vi.fn()
+    render(
+      <ChatArea
+        messages={[assistant]}
+        isLoading={false}
+        onFeedback={onFeedback}
+        feedbackState={{ a1: "thumbs_up" }}
+        pendingFeedbackIds={new Set(["a1"])}
+      />
+    )
+    const good = screen.getByRole("button", { name: "Good response" })
+    expect(good).toHaveAttribute("aria-pressed", "true")
+    expect(good).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Bad response" })).toBeDisabled()
+  })
+
   it("renders user and assistant bubbles", () => {
     render(
       <ChatArea

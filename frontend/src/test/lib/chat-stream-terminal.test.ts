@@ -65,6 +65,53 @@ describe("consumeChatStream — terminal frame", () => {
     expect(patches[patches.length - 1].content).toBe("hello")
   })
 
+  it("notifies the sink as soon as the terminal frame is parsed, before EOF", async () => {
+    // Live defect: the answer text arrived, but the composer kept showing
+    // "Stop generation" while the BFF drained its post-answer tail. The terminal
+    // frame is the authoritative completion signal; consumers need it at parse
+    // time, not only after the reader closes.
+    let releaseTail!: () => void;
+    const tail = new Promise<void>((resolve) => {
+      releaseTail = resolve;
+    });
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('0:"OK"\n'));
+        controller.enqueue(encoder.encode(terminalFrame({ run_id: "run-42" }) + "\n"));
+        void tail.then(() => {
+          try {
+            controller.close();
+          } catch {
+            // The reader may have been cancelled; closing then throws.
+          }
+        });
+      },
+    });
+
+    let notify!: (terminal: { type: string; run_id?: string }) => void;
+    const notified = new Promise<{ type: string; run_id?: string }>((resolve) => {
+      notify = resolve;
+    });
+    let settled = false;
+    const consuming = consumeChatStream(body, {
+      patch: () => {},
+      onTerminal: (terminal) => notify(terminal),
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    const terminal = await notified;
+    expect(terminal).toEqual({ type: "done", run_id: "run-42" });
+    // The callback must fire during the stream, not after it has closed.
+    expect(settled).toBe(false);
+
+    releaseTail();
+    const result = await consuming;
+    expect(result.content).toBe("OK");
+  });
+
   it("leaves terminal null for a stream that ended without one", async () => {
     // Older BFFs and interrupted sockets produce this shape. The field must be
     // explicitly null rather than absent, so a consumer can branch on it.

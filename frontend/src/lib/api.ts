@@ -379,46 +379,50 @@ async function runRefresh(): Promise<boolean> {
   const ch = openRefreshChannel();
   let stopBeating: (() => void) | null = null;
 
-  if (ch) {
-    if (!(await runElection(ch))) {
-      // Another tab is the leader. Wait for it to report rather than guessing:
-      // claiming first is not the same as succeeding, and returning early would
-      // retry the original request against a token that is still expired.
-      const refreshed = await waitForPeerDone(ch);
-      ch.close();
-      return refreshed;
+  try {
+    if (ch) {
+      if (!(await runElection(ch))) {
+        // Another tab is the leader. Wait for it to report rather than guessing:
+        // claiming first is not the same as succeeding, and returning early would
+        // retry the original request against a token that is still expired.
+        return await waitForPeerDone(ch);
+      }
+      // We lead. Keep re-announcing until we are finished, so a tab that starts
+      // *after* us learns the lock is held instead of racing us.
+      stopBeating = startBeating(ch, ch.__nonce, ch.__at);
     }
-    // We lead. Keep re-announcing until we are finished, so a tab that starts
-    // *after* us learns the lock is held instead of racing us.
-    stopBeating = startBeating(ch, ch.__nonce, ch.__at);
-  }
 
-  // No body needed: the route handler reads the refresh token from its
-  // httpOnly cookie. The browser attaches it automatically.
-  const res = await fetch(`${API_BASE}/auth/refresh`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  const ok = res.ok
-    ? Boolean(
-        ((await res.json().catch(() => null)) as { ok?: boolean } | null)?.ok,
-      )
-    : false;
-  stopBeating?.();
-  if (ch && ok) {
-    // Announce the result under *our* nonce. The tabs that stood down are
-    // waiting on this message, and a nonce they never sent themselves is
-    // unambiguous -- whereas a fixed "leader" tag would also match messages from
-    // a different refresh round that happened to overlap this one.
-    ch.postMessage({
-      type: "done",
-      nonce: ch.__nonce,
-      at: ch.__at,
-    } satisfies RefreshMessage);
+    // No body needed: the route handler reads the refresh token from its
+    // httpOnly cookie. The browser attaches it automatically.
+    const res = await fetch(`${API_BASE}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const ok = res.ok
+      ? Boolean(
+          ((await res.json().catch(() => null)) as { ok?: boolean } | null)?.ok,
+        )
+      : false;
+    if (ch && ok) {
+      // Announce the result under *our* nonce. The tabs that stood down are
+      // waiting on this message, and a nonce they never sent themselves is
+      // unambiguous -- whereas a fixed "leader" tag would also match messages from
+      // a different refresh round that happened to overlap this one.
+      ch.postMessage({
+        type: "done",
+        nonce: ch.__nonce,
+        at: ch.__at,
+      } satisfies RefreshMessage);
+    }
+    return ok;
+  } finally {
+    // A failed exchange is still the end of this refresh round. Leaving the
+    // heartbeat or the channel open kept a leaderless lock alive in the tab and
+    // made later elections defer to a process that was never coming back.
+    stopBeating?.();
+    ch?.close();
   }
-  ch?.close();
-  return ok;
 }
 
 /**

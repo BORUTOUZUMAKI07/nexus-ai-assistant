@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import { render, screen, fireEvent, waitFor, act } from "@/test/test-utils"
 import { http, HttpResponse } from "msw"
 import { server } from "@/test/mocks/server"
 import Home from "@/app/app/page"
@@ -109,6 +109,10 @@ describe("Home page integration", () => {
     toastMock.error.mockClear()
     toastMock.dismiss.mockClear()
     mockAuthLifecycle()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it("opens the login gate when no token is present", async () => {
@@ -492,5 +496,34 @@ describe("Home page integration", () => {
     expect(screen.queryByText("Saving feedback: Good response…")).not.toBeInTheDocument()
     expect(screen.queryByText("Feedback saved: Good response")).not.toBeInTheDocument()
     expect(attempts).toBe(1)
+  })
+
+  it("dismisses a saved-feedback notice instead of leaving it on screen forever", async () => {
+    server.use(
+      http.post(
+        "/api/conversations/:id/messages/:messageId/feedback",
+        () => HttpResponse.json({ ok: true })
+      )
+    )
+
+    await login()
+    fireEvent.click(screen.getAllByText("Project kickoff")[0])
+    expect(
+      await screen.findByText("RAG grounds answers in your indexed documents.")
+    ).toBeInTheDocument()
+
+    // Fake timers start only after the shell is hydrated, so React Query's
+    // bootstrap backoff stays on real timers. The notice's dismissal timer is
+    // armed by the click below.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fireEvent.click(screen.getByRole("button", { name: "Good response" }))
+
+    expect(await screen.findByText("Feedback saved: Good response")).toBeInTheDocument()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(
+      screen.queryByText("Feedback saved: Good response")
+    ).not.toBeInTheDocument()
   })
 })

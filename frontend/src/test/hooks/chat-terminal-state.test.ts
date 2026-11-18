@@ -165,4 +165,130 @@ describe("chat terminal state in useNexusChat", () => {
     )
     expect(result.current.isLoading).toBe(false)
   })
+
+  it("clears the streaming UI at the terminal frame, before the stream closes", async () => {
+    // Live defect: "OK" was on screen while "Writing…", "Stop generation" and
+    // "Queue message" stayed up until the BFF finished its post-answer tail.
+    let releaseTail!: () => void
+    const tail = new Promise<void>((resolve) => {
+      releaseTail = resolve
+    })
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  statusFrame("Writing the answer") +
+                    '0:"OK"\n' +
+                    terminalFrame({ run_id: RUN })
+                )
+              )
+              void tail.then(() => {
+                try {
+                  controller.close()
+                } catch {
+                  // The stream may already have been cancelled.
+                }
+              })
+            },
+          }),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        )
+      )
+    )
+
+    const { result } = renderHook(() => useNexusChat())
+    let settled = false
+    let send!: Promise<void>
+    act(() => {
+      send = result.current.sendMessage("hello").then(() => {
+        settled = true
+      })
+    })
+
+    await waitFor(() =>
+      expect(result.current.messages.find((m) => m.role === "assistant")?.content).toBe(
+        "OK"
+      )
+    )
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(result.current.statusLabel).toBeNull()
+    // The UI has finished, but the promise is still draining the tail. This is
+    // the window the old code rendered as a stuck stream.
+    expect(settled).toBe(false)
+
+    await act(async () => {
+      releaseTail()
+      await send
+    })
+    expect(settled).toBe(true)
+  })
+
+  it("clears stale verdict and progress state when the active conversation changes", async () => {
+    // Switching away from a run that has emitted a verdict must not carry that
+    // verdict or its stage label into the next conversation's transcript.
+    let releaseTail!: () => void
+    const tail = new Promise<void>((resolve) => {
+      releaseTail = resolve
+    })
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  statusFrame("Checking evidence") +
+                    `8:${JSON.stringify([
+                      {
+                        type: "quality",
+                        data: { evidence_score: 0.8, evidence_gate_passed: true },
+                      },
+                    ])}\n` +
+                    '0:"Answer."\n'
+                )
+              )
+              void tail.then(() => {
+                try {
+                  controller.close()
+                } catch {
+                  // The stream may already have been cancelled.
+                }
+              })
+            },
+          }),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        )
+      ),
+      http.get("/api/conversations/:id", () =>
+        HttpResponse.json({ id: "new-conversation", title: "t", messages: [] })
+      )
+    )
+
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useNexusChat({ conversationId: id }),
+      { initialProps: { id: "old-conversation" } }
+    )
+    let send!: Promise<void>
+    act(() => {
+      send = result.current.sendMessage("hello")
+    })
+
+    await waitFor(() => expect(result.current.turnVerdict).not.toBeNull())
+    expect(result.current.statusLabel).toBe("Checking evidence")
+
+    rerender({ id: "new-conversation" })
+
+    await waitFor(() => expect(result.current.turnVerdict).toBeNull())
+    expect(result.current.statusLabel).toBeNull()
+    expect(result.current.isLoading).toBe(false)
+
+    await act(async () => {
+      releaseTail()
+      await send
+    })
+  })
 })

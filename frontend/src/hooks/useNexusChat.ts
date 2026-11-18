@@ -351,6 +351,14 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   // check alone cannot distinguish "untouched" from "a turn started under me".
   const transcriptEpochRef = useRef(0);
   const loadingRef = useRef(isLoading);
+  // A live turn owns `loadingRef` from its synchronous claim until its own
+  // `finally`. The terminal frame clears the *visual* loading state early, so
+  // the mirror effect below must not treat that render as permission to release
+  // the queue guard while the stream still has a tail to drain.
+  const runActiveRef = useRef(false);
+  // The id rendered on the previous commit. Used to reset per-turn UI state on
+  // a real conversation change, not on the initial mount.
+  const previousConversationIdRef = useRef(options.conversationId ?? "");
   const abortRef = useRef<AbortController | null>(null);
   // A stream that closed without a terminal frame leaves the run's completion
   // ambiguous. Polling owns a separate controller so Stop (which aborts the
@@ -387,7 +395,10 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   }, [options]);
 
   useEffect(() => {
-    loadingRef.current = isLoading;
+    // The terminal frame legitimately sets `isLoading` false before EOF. That
+    // must not clear the synchronous send guard: only the run's `finally` owns
+    // the slot, or a follow-up sent during the tail would start a second run.
+    if (!runActiveRef.current) loadingRef.current = isLoading;
   }, [isLoading]);
 
   useEffect(() => {
@@ -630,6 +641,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       // saw `false` and both sent, duplicating the user turn. The ref is the
       // guard's source of truth; `setIsLoading` is only the render-facing mirror.
       loadingRef.current = true;
+      runActiveRef.current = true;
 
       setError(null);
       setPendingHITL(null);
@@ -863,6 +875,16 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
             onArtifactSavedRef.current?.(artifact),
           onTurnVerdict: setTurnVerdict,
           onStatus: setStatusLabel,
+          onTerminal: () => {
+            // Visual completion only. The answer is fully on screen and the
+            // backend's authoritative `done` frame has arrived, so the stage
+            // chip, Stop button and queue badge must disappear now rather than
+            // when the BFF finishes flushing metadata after the answer.
+            // `loadingRef` stays true until this run's `finally`, preserving the
+            // one-run-at-a-time send guard.
+            setIsLoading(false);
+            setStatusLabel(null);
+          },
           onModelResolved: (resolvedModel) => {
             // Report the model that actually answered, not the picker's label:
             // a provider fallback must be visible in the transcript rather than
@@ -939,8 +961,14 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         // half of the stuck-spinner bug: the answer stopped but "Writing the
         // answer" stayed on screen for the rest of the session.
         setStatusLabel(null);
+        // Only now does the run release the single-stream slot. The terminal
+        // callback may have taken the visual flag down much earlier, but the
+        // queue still waits for this exact teardown.
+        runActiveRef.current = false;
         loadingRef.current = false;
-        abortRef.current = null;
+        // A conversation switch can start a rejoin with its own controller while
+        // this stream is draining; never clear a controller we do not own.
+        if (abortRef.current === controller) abortRef.current = null;
         if (conflicted) {
           // Deliberately does not drain the queue: the backend slot is still
           // held by the other run, so starting the next queued turn now would
@@ -1395,6 +1423,9 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
             onArtifactSavedRef.current?.(artifact),
           onTurnVerdict: setTurnVerdict,
           onStatus: setStatusLabel,
+          // A replay can also carry a late stage frame. Its terminal ends that
+          // progress display even though the rejoin never owns `isLoading`.
+          onTerminal: () => setStatusLabel(null),
           onModelResolved: (resolvedModel) =>
             updateMessages((prev) =>
               prev.map((m) =>
@@ -1532,11 +1563,31 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   }, [hydrateThenRejoin]);
 
   useEffect(() => {
+    const nextId = options.conversationId ?? "";
+    if (previousConversationIdRef.current === nextId) return;
+    previousConversationIdRef.current = nextId;
+    // These all describe the conversation being left: its stage, its verdict,
+    // its error and any follow-ups typed against its answer. Carrying them into
+    // another transcript produced a "Writing…" chip and a review panel over a
+    // conversation that had not started a run. The stream's own slot is still
+    // held by `loadingRef`, so clearing the visual flag here does not free the
+    // queue until the old run's `finally`.
+    setTurnVerdict(null);
+    setStatusLabel(null);
+    setError(null);
+    setPendingHITL(null);
+    pendingHITLRef.current = null;
+    setIsLoading(false);
+    clearQueued();
+  }, [options.conversationId, clearQueued]);
+
+  useEffect(() => {
     const conversationId = optionsRef.current.conversationId;
     if (!conversationId) return;
-    // A live turn already owns this conversation's stream. Hydrating or joining as
-    // well would replace the transcript out from under the in-flight answer, and
-    // put two runs' worth of requests against one backend thread slot.
+    // A live turn already owns a stream. Hydrating or joining as well would
+    // replace the transcript out from under the in-flight answer and put two
+    // runs' worth of requests against one backend thread slot. This guard is
+    // deliberately global: the browser has one stream slot, not one per thread.
     if (loadingRef.current || abortRef.current) return;
     void hydrateThenRejoin(conversationId);
     // `hydrateThenRejoin` is in the dependency list and that is correct, not a

@@ -225,6 +225,18 @@ describe("cross-tab refresh coordination", () => {
     await both
   })
 
+  it("closes the leader's channel when the refresh exchange itself fails", async () => {
+    // A rejected fetch used to leave both the heartbeat interval and the
+    // BroadcastChannel open. Later tabs would then keep deferring to a leader
+    // that had already died, turning one failed refresh into a permanent lock.
+    server.use(http.post("/api/auth/refresh", () => HttpResponse.error()))
+    const tab = await freshClient()
+
+    await expect(tab.fetchConversations(1, 50, OPTS)).rejects.toThrow()
+    await settle()
+    expectTabsInBus(0)
+  })
+
   it("elects exactly one refresher when two tabs demand one simultaneously", async () => {
     // The regression this feature exists for. If both tabs stood down, both
     // would retry against a still-expired token, both would fail, and the user

@@ -197,6 +197,31 @@ export interface TurnVerdict {
   evidence_gate_passed: boolean | null;
 }
 
+/**
+ * The backend emits a `quality` frame on every finished run. An empty one —
+ * score 0, no revisions, no gate result — says nothing was reviewed, and used
+ * to render as "Answer passed review on first draft". Only a real reviewer
+ * claim earns a panel.
+ */
+function hasReviewEvidence(verdict: TurnVerdict | null | undefined): boolean {
+  if (!verdict) return false;
+  return Boolean(
+    verdict.critique ||
+      verdict.revision_count > 0 ||
+      verdict.evidence_gate_passed !== null
+  );
+}
+
+function verdictHeadline(verdict: TurnVerdict): string {
+  if (verdict.critique) return "Reviewer checked this answer";
+  if (verdict.revision_count > 0) {
+    return `Answer revised ${verdict.revision_count}× before delivery`;
+  }
+  return verdict.evidence_gate_passed === false
+    ? "Reviewer flagged low evidence"
+    : "Evidence gate passed";
+}
+
 export interface ChatAreaProps {
   messages: MessageItem[];
   isLoading: boolean;
@@ -233,6 +258,10 @@ export interface ChatAreaProps {
     messageId: string,
     feedback: "thumbs_up" | "thumbs_down"
   ) => void;
+  /** Feedback the user has committed for each assistant message, when known. */
+  feedbackState?: Record<string, "thumbs_up" | "thumbs_down">;
+  /** Messages whose feedback POST is still in flight. */
+  pendingFeedbackIds?: ReadonlySet<string>;
   onOpenArtifact?: (artifact: ArtifactItem) => void;
   onSaveArtifact?: (artifact: ArtifactItem) => void | Promise<void>;
   onSelectCitation?: (citation: CitationItem) => void;
@@ -915,6 +944,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   turnVerdict,
   conversationTitle,
   onFeedback,
+  feedbackState,
+  pendingFeedbackIds,
   onOpenArtifact,
   onSaveArtifact,
   onSelectCitation,
@@ -1323,6 +1354,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         const hasThought = Boolean(msg.thought_process);
         const artifact = !isUser ? extractArtifact(msg.id, msg.content) : null;
         const isStreamingThought = isLoading && msgIndex === lastAssistantIdx && hasThought;
+        const selectedFeedback = feedbackState?.[msg.id];
+        const feedbackPending = pendingFeedbackIds?.has(msg.id) ?? false;
 
         return (
           <div
@@ -1625,7 +1658,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     <>
                       <button
                         onClick={() => onFeedback(msg.id, "thumbs_up")}
-                        className="hover:text-[var(--status-success)] p-1 rounded transition-colors focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+                        disabled={feedbackPending}
+                        aria-pressed={selectedFeedback === "thumbs_up"}
+                        className={`p-1 rounded transition-colors focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50 ${
+                          selectedFeedback === "thumbs_up"
+                            ? "text-[var(--status-success)]"
+                            : "hover:text-[var(--status-success)]"
+                        }`}
                         title="Good response"
                         aria-label="Good response"
                       >
@@ -1633,7 +1672,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </button>
                       <button
                         onClick={() => onFeedback(msg.id, "thumbs_down")}
-                        className="hover:text-[var(--status-danger)] p-1 rounded transition-colors focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+                        disabled={feedbackPending}
+                        aria-pressed={selectedFeedback === "thumbs_down"}
+                        className={`p-1 rounded transition-colors focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50 ${
+                          selectedFeedback === "thumbs_down"
+                            ? "text-[var(--status-danger)]"
+                            : "hover:text-[var(--status-danger)]"
+                        }`}
                         title="Bad response"
                         aria-label="Bad response"
                       >
@@ -1742,7 +1787,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           The block did not exist at all originally: the backend emitted both
           frames on every finished run, the BFF route dropped them, and the user
           was never told. */}
-      {turnVerdict && messages.some((m) => m.role === "assistant") && (
+      {turnVerdict && hasReviewEvidence(turnVerdict) && messages.some((m) => m.role === "assistant") && (
         <div className="max-w-3xl mx-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3.5 mt-2">
           <button
             onClick={() => setVerdictOpen((v) => !v)}
@@ -1751,9 +1796,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           >
             <span className="flex items-center gap-2 text-xs font-semibold text-[var(--text-secondary)]">
               <ScaleIcon verdict={turnVerdict} />
-              {turnVerdict.revision_count > 0
-                ? `Answer revised ${turnVerdict.revision_count}× before delivery`
-                : "Answer passed review on first draft"}
+              {verdictHeadline(turnVerdict)}
             </span>
             <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wide">
               {/* Three states, not two. `null` is the backend not reporting the

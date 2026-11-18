@@ -155,6 +155,17 @@ export interface ChatStreamSink {
    * just has no progress to show.
    */
   onStatus?: (label: string) => void;
+  /**
+   * The stream's explicit completion frame, delivered at parse time rather than
+   * after EOF.
+   *
+   * The BFF can have post-answer work left to drain after the backend's `done`
+   * event. A consumer that waits for `consumeChatStream` to resolve keeps the
+   * Stop button and stage label on screen beside a finished answer, so anything
+   * rendering run state needs this signal while the tail is still in flight.
+   * The frame is metadata and is never passed to `patch`.
+   */
+  onTerminal?: (terminal: ChatTerminal) => void;
 }
 
 /**
@@ -309,6 +320,11 @@ export async function consumeChatStream(
             if (typeof value === "string" && value) terminal[key] = value;
           }
           streamTerminal = terminal;
+          // Fire here, not after the reader closes: EOF can be arbitrarily far
+          // behind the answer on a stream that still has checkpoint metadata to
+          // flush. The consumer clears only its *visual* loading state on this
+          // signal; its queue guard stays owned by the caller's `finally`.
+          sink.onTerminal?.(terminal);
           continue;
         }
         if (verdict.type === "critique") {

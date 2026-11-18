@@ -83,8 +83,20 @@ const FOCUSABLE_SELECTOR = [
 const BOOTSTRAP_BACKOFF_MS = [400, 1200, 3000, 6000, 10000];
 
 type FeedbackValue = "thumbs_up" | "thumbs_down";
-type FeedbackView = { feedback: FeedbackValue; status: "pending" | "committed" };
+type FeedbackView = {
+  feedback: FeedbackValue;
+  status: "pending" | "committed";
+  conversationId: string;
+};
+type FeedbackNoticeKind = "success" | "error";
+type FeedbackNotice = {
+  id: number;
+  kind: FeedbackNoticeKind;
+  message: string;
+  conversationId: string;
+};
 
+const FEEDBACK_NOTICE_MS = 3000;
 const FEEDBACK_LABEL: Record<FeedbackValue, string> = {
   thumbs_up: "Good response",
   thumbs_down: "Bad response",
@@ -237,9 +249,48 @@ function AppPageInner() {
   // committed map is only touched on success — a failed request restores the
   // previous entry instead of leaving a like/dislike that never reached the API.
   const [feedbackViews, setFeedbackViews] = useState<Record<string, FeedbackView>>({});
-  const [failedFeedbackIds, setFailedFeedbackIds] = useState<Record<string, true>>({});
+  // Notices are deliberately separate from `feedbackViews`: the selected state
+  // belongs to the message and should survive a switch, but "Feedback saved"
+  // is a transient acknowledgement and used to sit on screen forever.
+  const [feedbackNotices, setFeedbackNotices] = useState<FeedbackNotice[]>([]);
+  const feedbackNoticeTimersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+  const feedbackNoticeSeqRef = useRef(0);
   const committedFeedbackRef = useRef<Record<string, FeedbackValue>>({});
   const feedbackRequestSeqRef = useRef<Record<string, number>>({});
+
+  const dismissFeedbackNotice = useCallback((id: number) => {
+    const timer = feedbackNoticeTimersRef.current[id];
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      delete feedbackNoticeTimersRef.current[id];
+    }
+    setFeedbackNotices((prev) => prev.filter((notice) => notice.id !== id));
+  }, []);
+
+  const showFeedbackNotice = useCallback(
+    (kind: FeedbackNoticeKind, message: string) => {
+      const id = feedbackNoticeSeqRef.current + 1;
+      feedbackNoticeSeqRef.current = id;
+      setFeedbackNotices((prev) => [
+        ...prev,
+        { id, kind, message, conversationId: activeConversationId },
+      ]);
+      feedbackNoticeTimersRef.current[id] = setTimeout(
+        () => dismissFeedbackNotice(id),
+        FEEDBACK_NOTICE_MS
+      );
+    },
+    [activeConversationId, dismissFeedbackNotice]
+  );
+
+  useEffect(() => {
+    return () => {
+      for (const timer of Object.values(feedbackNoticeTimersRef.current)) {
+        clearTimeout(timer);
+      }
+      feedbackNoticeTimersRef.current = {};
+    };
+  }, []);
   // The model the user (or the command palette) picked in this session, or null
   // while they have not picked one. `currentModel` below is *derived* from this
   // plus the saved default: it used to be a second piece of state written from
@@ -826,10 +877,11 @@ function AppPageInner() {
     const lastMsgId = currentMsgs[currentMsgs.length - 1].id;
     try {
       const forked = await forkConversation(id, lastMsgId, "Forked Branch");
-      queryClient.setQueryData<Conversation[]>(conversationKeys.all, (prev) => [
-        forked,
-        ...(prev ?? []),
-      ]);
+      queryClient.setQueryData<Conversation[]>(conversationKeys.all, (prev) =>
+        prev?.some((c) => c.id === forked.id)
+          ? prev
+          : [forked, ...(prev ?? [])]
+      );
       setActiveConversationId(forked.id);
     } catch (err) {
       console.warn("Fork conversation failed:", err);
@@ -1186,6 +1238,29 @@ function AppPageInner() {
     };
   });
 
+  const feedbackStateById = useMemo<Record<string, FeedbackValue>>(
+    () =>
+      Object.fromEntries(
+        Object.entries(feedbackViews)
+          .filter(([, view]) => view.conversationId === activeConversationId)
+          .map(([id, view]) => [id, view.feedback])
+      ),
+    [feedbackViews, activeConversationId]
+  );
+  const pendingFeedbackIds = useMemo<Set<string>>(
+    () =>
+      new Set(
+        Object.entries(feedbackViews)
+          .filter(
+            ([, view]) =>
+              view.status === "pending" &&
+              view.conversationId === activeConversationId
+          )
+          .map(([id]) => id)
+      ),
+    [feedbackViews, activeConversationId]
+  );
+
   const isAdmin = currentUser?.role === "admin";
 
   // Non-admins can't see the Admin tab in the sidebar, but if activeTab is ever
@@ -1204,29 +1279,35 @@ function AppPageInner() {
 
   const handleFeedback = async (messageId: string, feedback: FeedbackValue) => {
     if (!activeConversationId) return;
+    // Capture the owning conversation: a switch during the POST must not make a
+    // late response look like feedback on the conversation now on screen.
+    const targetConversationId = activeConversationId;
     const requestSeq = (feedbackRequestSeqRef.current[messageId] ?? 0) + 1;
     feedbackRequestSeqRef.current[messageId] = requestSeq;
     const toastId = toast.loading("Saving feedback…");
-    setFailedFeedbackIds((prev) => {
-      if (!prev[messageId]) return prev;
-      const next = { ...prev };
-      delete next[messageId];
-      return next;
-    });
     setFeedbackViews((prev) => ({
       ...prev,
-      [messageId]: { feedback, status: "pending" },
+      [messageId]: {
+        feedback,
+        status: "pending",
+        conversationId: targetConversationId,
+      },
     }));
 
     try {
-      await sendMessageFeedback(activeConversationId, messageId, feedback);
+      await sendMessageFeedback(targetConversationId, messageId, feedback);
       if (feedbackRequestSeqRef.current[messageId] !== requestSeq) return;
       committedFeedbackRef.current[messageId] = feedback;
       setFeedbackViews((prev) => ({
         ...prev,
-        [messageId]: { feedback, status: "committed" },
+        [messageId]: {
+          feedback,
+          status: "committed",
+          conversationId: targetConversationId,
+        },
       }));
       toast.success("Feedback saved", { id: toastId });
+      showFeedbackNotice("success", `Feedback saved: ${FEEDBACK_LABEL[feedback]}`);
     } catch {
       if (feedbackRequestSeqRef.current[messageId] !== requestSeq) return;
       // Roll back to the last value that actually reached the server. A failed
@@ -1235,13 +1316,17 @@ function AppPageInner() {
       setFeedbackViews((prev) => {
         const next = { ...prev };
         if (committed) {
-          next[messageId] = { feedback: committed, status: "committed" };
+          next[messageId] = {
+            feedback: committed,
+            status: "committed",
+            conversationId: targetConversationId,
+          };
         } else {
           delete next[messageId];
         }
         return next;
       });
-      setFailedFeedbackIds((prev) => ({ ...prev, [messageId]: true }));
+      showFeedbackNotice("error", "Feedback could not be saved. Please try again.");
       toast.error("Could not save feedback. Please try again.", { id: toastId });
     }
   };
@@ -1550,6 +1635,8 @@ function AppPageInner() {
                       ?.title ?? null
                   }
                   onFeedback={handleFeedback}
+                  feedbackState={feedbackStateById}
+                  pendingFeedbackIds={pendingFeedbackIds}
                   onOpenArtifact={handleOpenArtifact}
                   onSelectCitation={setActiveCitation}
                   onDeleteMessage={handleDeleteMessage}
@@ -1564,28 +1651,40 @@ function AppPageInner() {
                   planBusy={planBusy}
                 />
               )}
-              {/* Feedback is a page-owned server write. These notices make the
-                  optimistic state visible and give a failed POST a durable
-                  error after the optimistic entry has been rolled back. */}
-              {Object.entries(feedbackViews).map(([messageId, view]) => (
+              {/* Feedback is a page-owned server write. The selected/pending
+                  state also lives on the message buttons; the pending line here
+                  lasts exactly as long as the POST, while the success/error
+                  acknowledgements below retire themselves after a few seconds. */}
+              {Object.entries(feedbackViews)
+                .filter(
+                  ([, view]) =>
+                    view.status === "pending" &&
+                    view.conversationId === activeConversationId
+                )
+                .map(([messageId, view]) => (
+                  <div
+                    key={`${messageId}-feedback-pending`}
+                    role="status"
+                    aria-live="polite"
+                    className="px-4 py-1 text-xs text-[var(--text-muted)]"
+                  >
+                    {`Saving feedback: ${FEEDBACK_LABEL[view.feedback]}…`}
+                  </div>
+                ))}
+              {feedbackNotices
+                .filter((notice) => notice.conversationId === activeConversationId)
+                .map((notice) => (
                 <div
-                  key={`${messageId}-feedback`}
-                  role="status"
+                  key={notice.id}
+                  role={notice.kind === "error" ? "alert" : "status"}
                   aria-live="polite"
-                  className="px-4 py-1 text-xs text-[var(--text-muted)]"
+                  className={`px-4 py-1 text-xs ${
+                    notice.kind === "error"
+                      ? "text-[var(--status-danger)]"
+                      : "text-[var(--text-muted)]"
+                  }`}
                 >
-                  {view.status === "pending"
-                    ? `Saving feedback: ${FEEDBACK_LABEL[view.feedback]}…`
-                    : `Feedback saved: ${FEEDBACK_LABEL[view.feedback]}`}
-                </div>
-              ))}
-              {Object.keys(failedFeedbackIds).map((messageId) => (
-                <div
-                  key={`${messageId}-feedback-error`}
-                  role="alert"
-                  className="px-4 py-1 text-xs text-[var(--status-danger)]"
-                >
-                  Feedback could not be saved. Please try again.
+                  {notice.message}
                 </div>
               ))}
               <SavedArtifacts artifacts={allArtifacts} onOpen={handleOpenArtifact} />
