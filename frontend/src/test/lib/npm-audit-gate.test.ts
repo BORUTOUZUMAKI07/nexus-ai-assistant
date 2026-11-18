@@ -1,20 +1,17 @@
 /**
  * The npm audit gate's decision logic.
  *
- * `npm audit --audit-level=high` is the CI gate, but it has no `--ignore-vuln`
- * equivalent, so a no-fix advisory can only be tolerated through an allowlist.
- * The wrapper's value depends entirely on it failing for every advisory NOT on
- * that list, so the interesting cases are the ones it must still reject: an
- * unknown high advisory, and a high `via` *string* (a transitive consequence)
- * that must never be mistaken for a root advisory.
+ * The gate is scoped to the dependency graph that ships. `npm audit` also flags
+ * dev/build-only packages such as the no-fix picomatch advisory reached through
+ * eslint/vitest; those never reach a user, and suppressing them by name used to
+ * leave a permanent allowlist that could hide a future production advisory.
+ * Instead the gate runs `npm audit --omit=dev` and rejects every high/critical
+ * advisory in that report, with no exceptions.
  */
 import { describe, it, expect } from "vitest"
-import {
-  advisoryId,
-  collectBlockingAdvisories,
-  evaluateAuditReport,
-  ALLOWED,
-} from "../../../scripts/npm-audit-gate.mjs"
+import * as auditGate from "../../../scripts/npm-audit-gate.mjs"
+
+const { advisoryId, collectBlockingAdvisories, evaluateAuditReport, AUDIT_ARGS } = auditGate
 
 const bracesAdvisory = {
   url: "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
@@ -79,32 +76,22 @@ describe("advisoryId", () => {
 })
 
 describe("evaluateAuditReport", () => {
-  it("permits the documented no-fix advisory", () => {
-    const { permitted, unallowed } = evaluateAuditReport(realReport)
-    expect(permitted.map((a: { id: string }) => a.id)).toEqual(["GHSA-vfj7-8cjw-p6xm"])
-    expect(unallowed).toEqual([])
-  })
-
-  it("permits every documented allowance when they co-occur", () => {
+  it("fails on every high advisory, including picomatch", () => {
     const picomatchAdvisory = {
       url: "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
       severity: "high",
       name: "picomatch",
       title: "picomatch vulnerable to ReDoS through single-branch repeated extglobs",
     }
-    const { permitted, unallowed } = evaluateAuditReport({
+    const { unallowed } = evaluateAuditReport({
       vulnerabilities: {
-        ...realReport.vulnerabilities,
         picomatch: { severity: "high", via: [picomatchAdvisory] },
       },
     })
-    expect(unallowed).toEqual([])
-    for (const id of ALLOWED.keys()) {
-      expect(permitted.map((a: { id: string }) => a.id)).toContain(id)
-    }
+    expect(unallowed.map((a: { id: string }) => a.id)).toEqual(["GHSA-fc5q-39xc-vjpf"])
   })
 
-  it("fails on an unknown high advisory (the allowlist is not blanket)", () => {
+  it("fails on a critical advisory", () => {
     const { unallowed } = evaluateAuditReport({
       vulnerabilities: {
         evil: {
@@ -115,14 +102,28 @@ describe("evaluateAuditReport", () => {
     })
     expect(unallowed.map((a: { id: string }) => a.id)).toEqual(["GHSA-zzzz-yyyy-xxxx"])
   })
+
+  it("passes a production graph with no high/critical advisories", () => {
+    const { blocking, unallowed } = evaluateAuditReport({
+      vulnerabilities: {
+        moderate: {
+          severity: "moderate",
+          via: [{ url: "https://github.com/advisories/GHSA-aaaa-bbbb-cccc", severity: "moderate" }],
+        },
+      },
+    })
+    expect(blocking).toEqual([])
+    expect(unallowed).toEqual([])
+  })
 })
 
-describe("ALLOWED", () => {
-  it("every allowance names its package and a reason", () => {
-    for (const [id, entry] of ALLOWED) {
-      expect(id).toMatch(/^GHSA-|^CVE-|^npm:/)
-      expect(entry.package).toBeTruthy()
-      expect((entry.reason || "").length).toBeGreaterThan(40)
-    }
+describe("gate scope", () => {
+  it("audits only production dependencies", () => {
+    expect(AUDIT_ARGS).toContain("--omit=dev")
+    expect(AUDIT_ARGS).not.toContain("--include=dev")
+  })
+
+  it("does not expose a per-advisory allowlist", () => {
+    expect("ALLOWED" in auditGate).toBe(false)
   })
 })

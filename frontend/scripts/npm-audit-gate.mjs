@@ -1,14 +1,13 @@
 /**
- * npm-audit-gate.mjs — the CI gate for `npm audit`, with a documented
- * allowlist for advisories that have no fixed release.
+ * npm-audit-gate.mjs — the CI gate for advisories in the shipped dependency graph.
  *
- * `npm audit` has no `--ignore-vuln` flag (pip-audit does, which is why the
- * backend needs no equivalent), so an advisory with no patched release forces a
- * choice between turning the gate off and writing this wrapper. The wrapper
- * keeps the gate: it fails on every high/critical advisory EXCEPT the exact
- * ones named in ALLOWED, each carrying the reason its exposure is acceptable.
- * An entry must be deleted the moment an upstream fix ships — an allowlist
- * entry that outlives its advisory is how a real one gets ignored.
+ * `npm audit` also reports dev/build-only packages reached through eslint and
+ * vitest. Picomatch is the concrete case: its ReDoS advisory has no fixed
+ * release, and a name-based allowlist would stay in the repo forever — exactly
+ * the shape that eventually hides a real production advisory. Scoping the audit
+ * to `--omit=dev` is structural instead: dev tooling is visible in the full
+ * report but never reaches a user, while every high/critical advisory in the
+ * production graph fails the gate with no exceptions.
  *
  * Run: node scripts/npm-audit-gate.mjs
  */
@@ -18,41 +17,8 @@ import { pathToFileURL } from "node:url"
 /** npm's severity ladder, so the gate can match `--audit-level=high`. */
 export const SEVERITY_RANK = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 }
 
-/**
- * Advisories allowed to fail the audit gate. Each MUST have no fixed release
- * (a fixable advisory belongs in the lockfile, not here) and a stated reason
- * that names why the affected path is unreachable or harmless.
- */
-export const ALLOWED = new Map([
-  [
-    "GHSA-vfj7-8cjw-p6xm",
-    {
-      package: "braces",
-      reason:
-        "CVE-2026-93687, depth-guard stack overflow in braces <= 3.0.3; no " +
-        "patched release exists (upstream advisory first_patched_version: null) " +
-        "and 3.0.3 is the latest published version. Reached only through " +
-        "eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> " +
-        "micromatch, a dev-only lint-time glob matcher: it never ships to " +
-        "production and only ever globs this repository's own file names, never " +
-        "untrusted input.",
-    },
-  ],
-  [
-    "GHSA-fc5q-39xc-vjpf",
-    {
-      package: "picomatch",
-      reason:
-        "ReDoS through single-branch repeated extglobs in picomatch <= 4.0.7 " +
-        "(advisory range '*'); no fixed release exists and 4.0.7 is the latest " +
-        "published version as of 2026-11-18. Reached only through dev/build " +
-        "tooling: eslint-config-next -> fast-glob/micromatch (2.x, lint-time " +
-        "glob over repo files) and vitest/vite/tinyglobby (4.x, local " +
-        "test/build). Never ships to production and never matches untrusted " +
-        "glob input.",
-    },
-  ],
-])
+/** The authoritative boundary: advisories in the graph that ships. */
+export const AUDIT_ARGS = ["audit", "--omit=dev", "--json"]
 
 /** Extract a stable advisory id from an `npm audit` `via` entry. */
 export function advisoryId(via) {
@@ -92,27 +58,26 @@ export function collectBlockingAdvisories(report) {
 }
 
 /**
- * Pure decision: which blocking advisories are allowed, which are not.
+ * Pure decision: which production advisories block the gate.
  * Split from the CLI so the gate can be tested without running `npm`.
  */
-export function evaluateAuditReport(report, allowed = ALLOWED) {
+export function evaluateAuditReport(report) {
   const blocking = collectBlockingAdvisories(report)
-  const permitted = blocking.filter((a) => allowed.has(a.id))
-  const unallowed = blocking.filter((a) => !allowed.has(a.id))
-  return { blocking, permitted, unallowed }
+  return { blocking, unallowed: blocking }
 }
 
 function runAudit() {
-  return process.platform === "win32"
-    ? spawnSync("npm audit --json", { encoding: "utf8", shell: true })
-    : spawnSync("npm", ["audit", "--json"], { encoding: "utf8" })
+  if (process.platform === "win32") {
+    return spawnSync(["npm", ...AUDIT_ARGS].join(" "), { encoding: "utf8", shell: true })
+  }
+  return spawnSync("npm", AUDIT_ARGS, { encoding: "utf8" })
 }
 
 function main() {
   const result = runAudit()
 
   if (!result.stdout) {
-    console.error("npm-audit-gate: `npm audit --json` produced no output")
+    console.error("npm-audit-gate: `npm audit --omit=dev --json` produced no output")
     if (result.stderr) console.error(result.stderr.trim())
     process.exit(1)
   }
@@ -126,15 +91,10 @@ function main() {
     process.exit(1)
   }
 
-  const { permitted, unallowed } = evaluateAuditReport(report)
-
-  for (const advisory of permitted) {
-    console.log(`npm-audit-gate: allowed ${advisory.id} (${advisory.package}, ${advisory.severity})`)
-    console.log(`  reason: ${ALLOWED.get(advisory.id).reason}`)
-  }
+  const { unallowed } = evaluateAuditReport(report)
 
   if (unallowed.length > 0) {
-    console.error(`npm-audit-gate: ${unallowed.length} unallowed high/critical advisory(ies):`)
+    console.error(`npm-audit-gate: ${unallowed.length} high/critical production advisory(ies):`)
     for (const advisory of unallowed) {
       console.error(`  - ${advisory.id} ${advisory.package} (${advisory.severity}) ${advisory.url}`)
       if (advisory.title) console.error(`    ${advisory.title}`)
@@ -142,7 +102,7 @@ function main() {
     process.exit(1)
   }
 
-  console.log(`npm-audit-gate: OK — no high/critical advisories beyond the ${ALLOWED.size} documented allowance(s)`)
+  console.log("npm-audit-gate: OK — no high/critical advisories in production dependencies")
 }
 
 const invokedDirectly =
