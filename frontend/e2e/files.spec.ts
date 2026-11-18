@@ -1,4 +1,4 @@
-import { test, expect, NexusAppPage, setupConversationMocks, setAuthState, mockApi } from "./fixtures"
+import { test, expect, NexusAppPage, setupConversationMocks, setMockAuthState, mockApi } from "./fixtures"
 
 const FILE = {
   id: "file-1",
@@ -11,7 +11,7 @@ const FILE = {
 
 test.describe("Knowledge & RAG", () => {
   test.beforeEach(async ({ page }) => {
-    await setAuthState(page)
+    await setMockAuthState(page)
     await setupConversationMocks(page).setup()
   })
 
@@ -88,6 +88,8 @@ test.describe("Knowledge & RAG", () => {
     await page.getByRole("button", { name: "Knowledge", exact: true }).click()
 
     await expect(page.getByText("nexus-spec.pdf")).toBeVisible()
+    // Confirmation is part of the destructive flow, not an implementation detail.
+    page.once("dialog", (dialog) => void dialog.accept())
     await page.getByTitle("Delete document").click()
 
     await expect(page.getByText("nexus-spec.pdf")).not.toBeVisible()

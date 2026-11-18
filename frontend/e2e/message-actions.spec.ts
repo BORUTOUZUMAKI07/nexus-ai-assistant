@@ -3,7 +3,7 @@ import {
   expect,
   openConversation,
   historyTranscript,
-  setAuthState,
+  setMockAuthState,
   HISTORY_USER_ID,
   HISTORY_ASSISTANT_ID,
   HISTORY_QUESTION,
@@ -21,7 +21,7 @@ import {
  */
 test.describe("Message actions", () => {
   test.beforeEach(async ({ page }) => {
-    await setAuthState(page)
+    await setMockAuthState(page)
   })
 
   test("edits a user turn and resends the edited text", async ({ page }) => {

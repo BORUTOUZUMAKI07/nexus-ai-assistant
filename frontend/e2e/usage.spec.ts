@@ -1,4 +1,4 @@
-import { test, expect, NexusAppPage, setupConversationMocks, setAuthState, mockApi } from "./fixtures"
+import { test, expect, NexusAppPage, setupConversationMocks, setMockAuthState, mockApi } from "./fixtures"
 
 const SUMMARY = {
   total_tokens: 250000,
@@ -12,7 +12,7 @@ const SUMMARY = {
 
 test.describe("Usage panel", () => {
   test.beforeEach(async ({ page }) => {
-    await setAuthState(page)
+    await setMockAuthState(page)
     await setupConversationMocks(page).setup()
   })
 

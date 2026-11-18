@@ -2,7 +2,7 @@ import {
   test,
   expect,
   mockApi,
-  setAuthState,
+  setMockAuthState,
   openConversation,
   historyTranscript,
   setupConversationMocks,
@@ -23,7 +23,7 @@ import {
 
 test.describe("Plan mode", () => {
   test.beforeEach(async ({ page }) => {
-    await setAuthState(page)
+    await setMockAuthState(page)
   })
 
   test("drafts a plan, and approving it sends the plan to the agent", async ({
@@ -105,7 +105,7 @@ test.describe("Public share", () => {
     context,
   }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"])
-    await setAuthState(page)
+    await setMockAuthState(page)
 
     const mocks = await openConversation(page, historyTranscript())
     const shareUrl = "https://nexus.example.com/share/tok-1"
@@ -163,7 +163,7 @@ test.describe("Public share", () => {
 
 test.describe("Command palette", () => {
   test.beforeEach(async ({ page }) => {
-    await setAuthState(page)
+    await setMockAuthState(page)
     await setupConversationMocks(page).setup()
     await setupFilesMock(page).setup()
   })
@@ -190,7 +190,7 @@ test.describe("Command palette", () => {
 
 test.describe("Organizations and webhooks", () => {
   test.beforeEach(async ({ page }) => {
-    await setAuthState(page)
+    await setMockAuthState(page)
     await setupConversationMocks(page).setup()
     await setupSettingsMock(page).setup()
   })
@@ -289,7 +289,8 @@ test.describe("Organizations and webhooks", () => {
     await page.getByRole("button", { name: /Create/ }).click()
     expect((await created).postData() ?? "").toContain("Acme Labs")
 
-    await orgs.getByRole("button", { name: "Invite" }).click()
+    // Exact name: the section also has an "Invites" history control.
+    await orgs.getByRole("button", { name: "Invite", exact: true }).click()
     await page.getByLabel("Invitee email").fill("dev@example.com")
     await orgs.getByRole("button", { name: "Create invite" }).click()
     await expect(
@@ -315,7 +316,7 @@ test.describe("Organizations and webhooks", () => {
 
 test.describe("Audio", () => {
   test.beforeEach(async ({ page }) => {
-    await setAuthState(page)
+    await setMockAuthState(page)
   })
 
   test("dictates a message through the transcriber", async ({ page }) => {

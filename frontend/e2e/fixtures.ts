@@ -122,7 +122,13 @@ export function mockApi(page: Page) {
   return { route, setup, capturedChatRequests: entry.capturedChatRequests }
 }
 
-export function setupAuthMocks(page: Page) {
+/**
+ * Deterministic login/refresh/register responses for the mocked UI suite.
+ *
+ * This is deliberately not real authentication: it exists to drive UI state.
+ * The hosted, credential-backed flow lives in `e2e/live-auth.spec.ts`.
+ */
+export function setupMockAuthRoutes(page: Page) {
   const mocks = mockApi(page)
 
   const authCookieHeaders = (accessToken: string) => ({
@@ -263,10 +269,23 @@ export function setupChatMock(page: Page, streamBody: string = CHAT_STREAM) {
   return mocks
 }
 
-export async function setAuthState(page: Page, accessToken = TEST_TOKEN) {
-  await page.addInitScript(({ token, name }) => {
-    document.cookie = `${name}=${encodeURIComponent(token)}; path=/; max-age=604800; samesite=lax`
-  }, { token: accessToken, name: AUTH_COOKIE })
+/**
+ * Plants a fake access cookie once. Never use this as proof of real auth.
+ *
+ * An `addInitScript` here looked equivalent but re-planted the cookie on every
+ * navigation, so the sign-out test's logout response was immediately undone
+ * and the auth gate bounced the page back to /app. Context cookies behave like
+ * a real session: they survive navigation until logout clears them.
+ */
+export async function setMockAuthState(page: Page, accessToken = TEST_TOKEN) {
+  await page.context().addCookies([
+    {
+      name: AUTH_COOKIE,
+      value: accessToken,
+      url: "http://localhost:3000",
+      sameSite: "Lax",
+    },
+  ])
 }
 
 export class NexusAppPage {

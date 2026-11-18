@@ -542,7 +542,10 @@ function Footer() {
 
 export default function Landing() {
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[var(--bg-main)] text-[var(--text-primary)]">
+    <main
+      data-testid="landing-ready"
+      className="relative min-h-screen overflow-hidden bg-[var(--bg-main)] text-[var(--text-primary)]"
+    >
       <ScrollReveal />
       <Navbar />
       <Hero />

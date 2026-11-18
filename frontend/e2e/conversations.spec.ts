@@ -1,8 +1,8 @@
-import { test, expect, NexusAppPage, mockApi, setAuthState, TEST_CONVERSATION } from "./fixtures"
+import { test, expect, NexusAppPage, mockApi, setMockAuthState, TEST_CONVERSATION } from "./fixtures"
 
 test.describe("Conversation management", () => {
   test.beforeEach(async ({ page }) => {
-    await setAuthState(page)
+    await setMockAuthState(page)
   })
 
   test("starts a new conversation with the backend id", async ({ page }) => {
@@ -58,6 +58,9 @@ test.describe("Conversation management", () => {
     await app.goto()
     await expect(page.getByText("Security review")).toBeVisible()
 
+    // The UI asks before deleting. Playwright dismisses dialogs by default,
+    // which would silently turn this into "cancel" and keep the row visible.
+    page.once("dialog", (dialog) => void dialog.accept())
     await page
       .locator("div.group")
       .filter({ hasText: "Security review" })

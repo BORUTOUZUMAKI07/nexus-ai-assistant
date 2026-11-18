@@ -1,8 +1,8 @@
-import { test, expect, NexusAppPage, setupConversationMocks, setupFilesMock, setupSettingsMock, setupChatMock, setAuthState } from "./fixtures"
+import { test, expect, NexusAppPage, setupConversationMocks, setupFilesMock, setupSettingsMock, setupChatMock, setMockAuthState } from "./fixtures"
 
 test.describe("Chat & Workspace", () => {
   test.beforeEach(async ({ page }) => {
-    await setAuthState(page)
+    await setMockAuthState(page)
     await setupConversationMocks(page).setup()
   })
 
