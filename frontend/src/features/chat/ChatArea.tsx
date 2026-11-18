@@ -54,45 +54,47 @@ const SyntaxHighlighterBlock = dynamic(
       codeTagProps?: unknown;
       showLineNumbers?: boolean;
       [key: string]: unknown;
-    }>;
+    }> & {
+      registerLanguage: (lang: string, def: unknown) => void;
+    };
 
     // Register every language the app renders code blocks in. Without this,
     // PrismLight silently falls back to plain text (zero highlighting).
-    const modAny = mod as Record<string, unknown>;
-    const registerLanguage = modAny.registerLanguage as (
-      lang: string,
-      def: unknown
-    ) => void;
-    const langs = [
-      "javascript",
-      "typescript",
-      "python",
-      "bash",
-      "json",
-      "html",
-      "css",
-      "sql",
-      "yaml",
-      "go",
-      "rust",
-      "cpp",
-      "java",
-      "csharp",
-      "php",
-      "ruby",
-      "diff",
-      "shell",
-      "powershell",
-      "markdown",
-      "xml",
-    ];
-    for (const lang of langs) {
+    // `registerLanguage` lives on PrismLight itself, not on the package
+    // namespace — reading it from the module returned `undefined` and crashed
+    // the workspace on the first code block. Prism also has no `html`, `xml`
+    // or `shell` grammar files; those aliases use `markup`/`shell-session`.
+    const registerLanguage = PrismLight.registerLanguage.bind(PrismLight);
+    const languages: Record<string, string> = {
+      javascript: "javascript",
+      typescript: "typescript",
+      python: "python",
+      bash: "bash",
+      json: "json",
+      html: "markup",
+      css: "css",
+      sql: "sql",
+      yaml: "yaml",
+      go: "go",
+      rust: "rust",
+      cpp: "cpp",
+      java: "java",
+      csharp: "csharp",
+      php: "php",
+      ruby: "ruby",
+      diff: "diff",
+      shell: "shell-session",
+      powershell: "powershell",
+      markdown: "markdown",
+      xml: "markup",
+    };
+    for (const [alias, grammar] of Object.entries(languages)) {
       const def = (
         await import(
-          `react-syntax-highlighter/dist/esm/languages/prism/${lang}`
+          `react-syntax-highlighter/dist/esm/languages/prism/${grammar}`
         )
       ).default;
-      registerLanguage(lang, def);
+      registerLanguage(alias, def);
     }
 
     function SyntaxHighlighterBlock(props: {
@@ -123,7 +125,12 @@ const SyntaxHighlighterBlock = dynamic(
       );
     }
 
-    return SyntaxHighlighterBlock;
+    // `next/dynamic` mirrors React.lazy: the loader must resolve to a module
+    // with a default export. Returning the bare component worked in older
+    // builds but crashes the production runtime on Next 16 (`l is not a
+    // function` in loadableGenerated.modules), taking down the whole workspace
+    // as soon as a message contains a code block.
+    return { default: SyntaxHighlighterBlock };
   },
   { ssr: false, loading: () => null }
 );
