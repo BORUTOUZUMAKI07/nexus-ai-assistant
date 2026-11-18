@@ -16,6 +16,7 @@ jobs:
       contents: write
       packages: write
       id-token: write      # required for provenance attestation
+      attestations: write  # required to persist provenance attestations
       security-events: write  # required for SBOM upload
 
     steps:
@@ -45,26 +46,32 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Build and push backend
+        id: build-backend
         shell: bash
         run: |
           docker buildx build \
+            --metadata-file /tmp/backend-meta.json \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
             --tag ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/backend:${{ steps.version.outputs.VERSION }} \
             --tag ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/backend:latest \
             --push \
             ./backend
+          echo "digest=$(jq -r '.["containerimage.digest"]' /tmp/backend-meta.json)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push frontend
+        id: build-frontend
         shell: bash
         run: |
           docker buildx build \
+            --metadata-file /tmp/frontend-meta.json \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
             --tag ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/frontend:${{ steps.version.outputs.VERSION }} \
             --tag ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/frontend:latest \
             --push \
             ./frontend
+          echo "digest=$(jq -r '.["containerimage.digest"]' /tmp/frontend-meta.json)" >> "$GITHUB_OUTPUT"
 
       - name: Generate SBOM for backend
         shell: bash
@@ -84,12 +91,22 @@ jobs:
             *-sbom-*.spdx.json
             *-sbom-*.cyclonedx.json
 
-      - name: Attest build provenance (SLSA)
-        uses: actions/attest-build-provenance@v1
+      # Bind the attestation to the images actually pushed to GHCR, not to the
+      # Dockerfiles. A Dockerfile subject would "prove" the provenance of a
+      # source file nobody pulls, while the shipped image went unattested.
+      - name: Attest backend image provenance (SLSA)
+        uses: actions/attest-build-provenance@v2
         with:
-          subject-path: |
-            ./backend/Dockerfile
-            ./frontend/Dockerfile
+          subject-name: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/backend
+          subject-digest: ${{ steps.build-backend.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest frontend image provenance (SLSA)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/frontend
+          subject-digest: ${{ steps.build-frontend.outputs.digest }}
+          push-to-registry: true
 
       - name: Generate changelog (fixed range since previous tag)
         id: changelog
