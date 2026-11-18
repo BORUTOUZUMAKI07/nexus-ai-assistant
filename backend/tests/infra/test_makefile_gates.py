@@ -25,6 +25,7 @@ import pytest
 BACKEND = Path(__file__).resolve().parents[2]
 MAKEFILE = BACKEND.parent / "Makefile"
 MYPY_TARGETS = BACKEND / "scripts" / "mypy_targets.txt"
+CI_WORKFLOW = BACKEND.parent / ".github" / "workflows" / "ci.yml"
 
 pytestmark = pytest.mark.skipif(
     not MAKEFILE.exists(), reason="Makefile not present in this checkout"
@@ -258,3 +259,37 @@ def test_uv_is_the_managed_runner_not_bare_python():
         f"by uv, so bare python runs against whatever is on PATH"
     )
     assert shutil.which("uv") or True  # uv may legitimately be absent in CI
+
+
+# ─── local gate must include CI's security scans ──────────────────────────────
+
+
+def test_check_depends_on_the_security_target():
+    """A green `make check` must say something about the security gate.
+
+    The old target ran lint, types and tests only, so a developer could report
+    "full local verification passed" while CI's security job had never run.
+    """
+    check_line = next(
+        (line for line in _text().splitlines() if line.startswith("check:")), ""
+    )
+    assert re.match(r"^check\s*:.*\bsecurity\b", check_line), (
+        "check: does not depend on security; local verification is not CI parity"
+    )
+
+
+def test_security_target_runs_every_ci_security_command():
+    """No scan may exist only in CI — that is the parity gap being closed."""
+    recipe = _recipe_for("security")
+    assert recipe, "no `security:` target in the Makefile"
+
+    ci = CI_WORKFLOW.read_text(encoding="utf-8")
+    commands = (
+        "python3 .github/scripts/check_secrets.py",
+        "uv run bandit -c pyproject.toml -r app -q",
+        "uv run pip-audit -l --skip-editable",
+        "npm run audit:gate",
+    )
+    for command in commands:
+        assert command in ci, f"CI no longer runs {command!r}; update this guard"
+        assert command in recipe, f"security target does not run {command!r}"

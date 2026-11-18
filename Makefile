@@ -106,13 +106,21 @@ e2e: ## Run the Playwright end-to-end specs (requires infra + a built frontend)
 # These are the repository's agent-facing verification surface. They exist so
 # there is exactly ONE command that means "this repo is green", and one that
 
-check: lint type-check test-unit frontend-test ## Full local verification pipeline (lint + types + backend unit + frontend unit)
+check: lint type-check test-unit frontend-test security ## Full local verification pipeline (lint + types + tests + security)
 
 # Two halves, both required: the declarative registry (fast, static, prints
 # WHAT/WHY/FIX for each violation) and the behavioural invariant suites (which
 # need the app graph). (static layering/observability rules)
 	cd backend && $(PYTEST) tests/test_behavioral_invariants.py tests/test_rag_architecture.py \
 		tests/test_effect_scan.py tests/test_wiring.py -q
+
+# The CI security job must have a local equivalent. A green `make check` that
+# skipped these scans used to be indistinguishable from one that passed them.
+security: ## Run the CI security scans locally (secrets, bandit, pip-audit, npm audit)
+	python3 .github/scripts/check_secrets.py
+	cd backend && $(UV) run bandit -c pyproject.toml -r app -q
+	cd backend && $(UV) run pip-audit -l --skip-editable
+	cd frontend && $(NPM) run audit:gate
 
 arch-rules: ## Architecture rules check
 	@echo "No arch rules configured"
