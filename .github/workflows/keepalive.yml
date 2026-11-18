@@ -10,28 +10,60 @@ on:
 
 concurrency:
   group: render-keepalive
-  cancel-in-progress: true
+  # A cold start can outlast one five-minute interval. Cancelling the previous
+  # run exactly when it is about to finish waking Render left both services
+  # asleep, so overlap must be allowed to complete.
+  cancel-in-progress: false
 
 jobs:
-  ping:
+  backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 8
     steps:
       - name: Wake backend
+        # A single 30s request treated Render's 503 "waking up" response as a
+        # hard failure. Poll long enough for a real cold start instead.
         run: |
-          code=$(curl --silent --show-error --max-time 30 -o /dev/null -w '%{http_code}' https://nexus-backend-owq5.onrender.com/health)
-          if [ "$code" != "200" ]; then
-            echo "Unexpected backend status: $code"
-            exit 1
-          fi
-          echo "Backend awake (200 OK from /health)"
+          set -uo pipefail
+          url="https://nexus-backend-owq5.onrender.com/health"
+          expected="200"
+          code="000"
+          for attempt in $(seq 1 12); do
+            code=$(curl --silent --show-error --max-time 20 -o /dev/null -w '%{http_code}' "$url" || true)
+            echo "backend attempt ${attempt}/12: HTTP ${code}"
+            if [ "$code" = "$expected" ]; then
+              echo "Backend awake (${code} from /health)"
+              exit 0
+            fi
+            if [ "$attempt" -lt 12 ]; then
+              sleep 10
+            fi
+          done
+          echo "Backend did not wake after 12 attempts (last status: ${code})"
+          exit 1
 
+  collector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
       - name: Wake OTLP collector
-        # The receiver requires HTTP basic auth, so 401 means it is awake.
+        # The receiver requires HTTP basic auth, so 401 means it is awake; 503
+        # means Render has not finished starting it yet.
         run: |
-          code=$(curl --silent --show-error --max-time 30 -o /dev/null -w '%{http_code}' https://nexus-otel-collector.onrender.com/)
-          if [ "$code" != "401" ]; then
-            echo "Unexpected collector status: $code"
-            exit 1
-          fi
-          echo "Collector awake (401 Unauthorized from basic auth, as expected)"
+          set -uo pipefail
+          url="https://nexus-otel-collector.onrender.com/"
+          expected="401"
+          code="000"
+          for attempt in $(seq 1 12); do
+            code=$(curl --silent --show-error --max-time 20 -o /dev/null -w '%{http_code}' "$url" || true)
+            echo "collector attempt ${attempt}/12: HTTP ${code}"
+            if [ "$code" = "$expected" ]; then
+              echo "Collector awake (${code} Unauthorized from basic auth, as expected)"
+              exit 0
+            fi
+            if [ "$attempt" -lt 12 ]; then
+              sleep 10
+            fi
+          done
+          echo "Collector did not wake after 12 attempts (last status: ${code})"
+          exit 1
