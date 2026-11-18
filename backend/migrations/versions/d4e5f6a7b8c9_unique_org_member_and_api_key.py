@@ -63,7 +63,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(f"ALTER TABLE api_keys DROP CONSTRAINT IF EXISTS {_API_KEY_UQ}")
-    op.execute(
-        f"ALTER TABLE organization_members DROP CONSTRAINT IF EXISTS {_ORG_MEMBER_UQ}"
-    )
+    """No-op by design: the uniqueness rules protect identity data.
+
+    Removing them would permit duplicate memberships and API key names. A bad
+    release is corrected in a new revision, not by weakening this constraint.
+    """

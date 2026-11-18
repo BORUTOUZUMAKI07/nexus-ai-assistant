@@ -139,43 +139,6 @@ END
 $$;
 """
 
-_RESTORE_PUBLIC_GRANTS = """
-DO $$
-DECLARE
-    role_name text;
-BEGIN
-    FOREACH role_name IN ARRAY ARRAY['anon', 'authenticated'] LOOP
-        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
-            EXECUTE format(
-                'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %I',
-                role_name
-            );
-            EXECUTE format('GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %I', role_name);
-        END IF;
-    END LOOP;
-END
-$$;
-"""
-
-_DISABLE_RLS_LOOP = """
-DO $$
-DECLARE
-    tbl record;
-BEGIN
-    FOR tbl IN
-        SELECT c.relname
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-          AND c.relkind = 'r'
-    LOOP
-        EXECUTE format('ALTER TABLE public.%I DISABLE ROW LEVEL SECURITY', tbl.relname);
-    END LOOP;
-END
-$$;
-"""
-
-
 def upgrade() -> None:
     op.execute(_ENABLE_RLS_LOOP)
     op.execute(_REVOKE_PUBLIC_GRANTS)
@@ -185,10 +148,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Removes the automatic protection first, so nothing created during the
-    # downgrade is left half-protected. Both are single statements for the same
-    # asyncpg reason as upgrade().
-    op.execute(_DROP_RLS_TRIGGER)
-    op.execute("DROP FUNCTION IF EXISTS public.nexus_enable_rls_on_new_table()")
-    op.execute(_DISABLE_RLS_LOOP)
-    op.execute(_RESTORE_PUBLIC_GRANTS)
+    """No-op by design: re-enabling the old grants would reopen tenant data.
+
+    Disabling RLS and restoring broad public grants is a security regression,
+    not a rollback. Any corrective change ships as a new forward migration.
+    """

@@ -112,9 +112,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    for index_name, _table, _column in reversed(_NEW_INDEXES):
-        op.execute(f"DROP INDEX IF EXISTS {index_name}")
-    for column_name, _column_type in reversed(_NEW_COLUMNS):
-        op.execute(f"ALTER TABLE user_memories DROP COLUMN IF EXISTS {column_name}")
-    # Restore the previous default so the schema matches the old model.
-    op.execute("ALTER TABLE user_memories ALTER COLUMN confidence SET DEFAULT 1.0")
+    """No-op by design: lifecycle columns hold memory usage history.
+
+    Dropping them would erase retrieval counts and lifecycle state that cannot
+    be rebuilt. Forward-fixes are the supported recovery path.
+    """

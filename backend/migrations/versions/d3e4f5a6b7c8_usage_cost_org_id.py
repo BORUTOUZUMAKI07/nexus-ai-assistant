@@ -50,7 +50,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX IF EXISTS ix_usage_logs_org_id")
-    op.execute("ALTER TABLE usage_logs DROP COLUMN IF EXISTS org_id")
-    op.execute("DROP INDEX IF EXISTS ix_cost_logs_org_id")
-    op.execute("ALTER TABLE cost_logs DROP COLUMN IF EXISTS org_id")
+    """No-op by design: org attribution cannot be reconstructed backwards.
+
+    The org_id columns carry reporting data; dropping them on a rollback would
+    lose it. Forward-fix any schema problem instead.
+    """

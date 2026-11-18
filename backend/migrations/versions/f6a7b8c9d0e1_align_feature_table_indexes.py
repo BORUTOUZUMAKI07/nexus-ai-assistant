@@ -52,5 +52,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    for index_name, _table in reversed(_MISSING_ID_INDEXES):
-        op.execute(f"DROP INDEX IF EXISTS {index_name}")
+    """No-op by design: these indexes close a cold-start gap.
+
+    Removing them would recreate the missing-id-index failure this revision
+    fixes. The cost of leaving them is negligible; the cost of dropping them is
+    a slow or failed boot on the next deploy.
+    """

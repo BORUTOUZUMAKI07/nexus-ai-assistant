@@ -118,7 +118,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP TABLE IF EXISTS artifact_versions")
-    op.execute("DROP TABLE IF EXISTS artifacts")
-    op.execute("DROP TABLE IF EXISTS hook_policies")
-    op.execute("DROP TABLE IF EXISTS plans")
+    """No-op by design: these tables may contain user plans and artifacts.
+
+    A version stamp can move backwards; deleted rows cannot. Fix a bad release
+    with a forward migration and leave the data intact.
+    """

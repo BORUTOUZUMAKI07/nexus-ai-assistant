@@ -115,7 +115,9 @@ def upgrade() -> None:
         )
 
 
-def downgrade() -> None:
-    # Events first: they reference runs.
-    op.execute(f"DROP TABLE IF EXISTS {_EVENTS_TABLE}")
-    op.execute(f"DROP TABLE IF EXISTS {_RUNS_TABLE}")
+def downgrade() -> None:
+    """No-op by design: run and event history is not reproducible.
+
+    Removing the tables would destroy the audit trail this feature exists to
+    provide. A forward migration is the only safe recovery path.
+    """

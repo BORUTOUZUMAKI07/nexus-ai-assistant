@@ -32,7 +32,7 @@ migrate: ## Run pending Alembic migrations
 migrate-auto: ## Auto-generate a new migration (MSG required: make migrate-auto MSG="add users")
 	cd backend && $(ALEMBIC) revision --autogenerate -m "$(MSG)"
 
-migrate-down: ## Rollback one migration
+migrate-down: ## Move the Alembic stamp back one revision (schema/data are not reverted)
 	cd backend && $(ALEMBIC) downgrade -1
 
 migrate-history: ## Show migration history

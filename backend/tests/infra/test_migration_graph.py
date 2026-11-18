@@ -17,6 +17,7 @@ graph, not a database, so they run in the unit suite with no Postgres.
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -271,4 +272,109 @@ def test_every_declared_unique_constraint_is_created_by_a_migration() -> None:
         f"{missing}. `create_all` does not alter existing tables, so these would "
         "be missing on any database that already has the table. Add a revision "
         "under backend/migrations/versions/ that creates them."
+    )
+
+
+# ─── downgrades must never destroy data ───────────────────────────────────────
+
+
+_DESTRUCTIVE_CALLS = frozenset(
+    {"drop_all", "drop_column", "drop_constraint", "drop_index", "drop_table"}
+)
+_DESTRUCTIVE_SQL = re.compile(
+    r"\bDROP\s+(?:TABLE|COLUMN|CONSTRAINT|INDEX|FUNCTION|TRIGGER|SCHEMA)\b",
+    re.IGNORECASE,
+)
+
+
+def _module_string_constants(tree: ast.Module) -> dict[str, str]:
+    """Top-level string assignments, so `op.execute(_SQL)` is still inspected."""
+    constants: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
+            continue
+        if not isinstance(node.value.value, str):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                constants[target.id] = node.value.value
+    return constants
+
+
+def _downgrade_violations(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    fn = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "downgrade"
+        ),
+        None,
+    )
+    assert fn is not None, f"{path.name} has no downgrade() function"
+    constants = _module_string_constants(tree)
+    module_functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def _inspect(node: ast.AST, visited: set[str]) -> set[str]:
+        docstrings: set[int] = set()
+        for child in ast.walk(node):
+            if isinstance(child, ast.Expr) and isinstance(child.value, ast.Constant):
+                if isinstance(child.value.value, str):
+                    docstrings.add(id(child.value))
+
+        found: set[str] = set()
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                called = (
+                    child.func.attr
+                    if isinstance(child.func, ast.Attribute)
+                    else getattr(child.func, "id", "")
+                )
+                if called in _DESTRUCTIVE_CALLS:
+                    found.add(f"{called}() call")
+                # Follow module-level helpers: `_drop_fk()` is just as
+                # destructive as the `DROP CONSTRAINT` it hides.
+                if (
+                    isinstance(child.func, ast.Name)
+                    and child.func.id in module_functions
+                    and child.func.id not in visited
+                ):
+                    visited.add(child.func.id)
+                    found |= _inspect(module_functions[child.func.id], visited)
+            if (
+                isinstance(child, ast.Constant)
+                and isinstance(child.value, str)
+                and id(child) not in docstrings
+                and _DESTRUCTIVE_SQL.search(child.value)
+            ):
+                found.add("DROP statement")
+            if isinstance(child, ast.Name) and child.id in constants:
+                if _DESTRUCTIVE_SQL.search(constants[child.id]):
+                    found.add(f"DROP statement via {child.id}")
+        return found
+
+    return _inspect(fn, {fn.name})
+
+
+def test_no_migration_downgrade_destroys_schema_or_data() -> None:
+    """Downgrades only move the Alembic stamp; data recovery is a forward fix.
+
+    Several historical downgrades dropped tables, columns, constraints, RLS
+    objects, or every table in the metadata. A mistaken `downgrade -1` on a
+    deployed database turned a version change into irreversible data loss, and
+    the later repair migrations already adopted the opposite policy. Keep every
+    revision — old and new — on the same non-destructive side of that line.
+    """
+    violations = {
+        path.name: sorted(_downgrade_violations(path)) for path in _revision_files()
+    }
+    violations = {name: items for name, items in violations.items() if items}
+    assert not violations, (
+        "destructive downgrade operations found; replace them with no-op "
+        "docstrings explaining that recovery is a forward migration: "
+        f"{violations}"
     )

@@ -69,8 +69,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX IF EXISTS uq_users_oauth_identity")
-    op.execute("DROP INDEX IF EXISTS ix_users_oauth_sub")
-    op.execute("DROP INDEX IF EXISTS ix_users_oauth_provider")
-    op.execute("ALTER TABLE users DROP COLUMN IF EXISTS oauth_sub")
-    op.execute("ALTER TABLE users DROP COLUMN IF EXISTS oauth_provider")
+    """No-op by design: OAuth identity links cannot be reconstructed.
+
+    Dropping the columns would strand accounts that only have an OAuth issuer
+    and subject. Recover forward instead of deleting the mapping.
+    """

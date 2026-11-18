@@ -193,9 +193,16 @@ Make targets: `make infra`, `make infra-down`, `make migrate`,
 ```bash
 make migrate-auto MSG="add widgets"   # alembic revision --autogenerate
 make migrate                          # alembic upgrade head
-make migrate-down                     # alembic downgrade -1
+make migrate-down                     # move the Alembic stamp back one revision
 make migrate-history                  # alembic history --verbose
 ```
+
+**Downgrades are stamp-only.** Historical `downgrade()` functions are no-ops by
+design: dropping tables, columns, constraints, or RLS protection would turn a
+version change into irreversible data loss or a security regression. Recover
+from a bad release with a new forward migration. A structural test in
+`backend/tests/infra/test_migration_graph.py` rejects any future destructive
+downgrade.
 
 ## 8. SLO / alerting / runbooks
 

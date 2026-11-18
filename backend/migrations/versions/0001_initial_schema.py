@@ -32,5 +32,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    SQLModel.metadata.drop_all(bind=bind)
+    """No-op by design: a downgrade must never drop every table.
+
+    ``create_all`` built this schema against the current models, so there is no
+    faithful older shape to return to. Recovery from a bad deployment is a
+    forward migration; this function only lets Alembic move its stamp.
+    """

@@ -102,6 +102,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP TABLE IF EXISTS redteam_runs")
-    op.execute("DROP TABLE IF EXISTS prompt_optimization_runs")
-    op.execute("DROP TABLE IF EXISTS bandit_rewards")
+    """No-op by design: evaluation history is data, not schema state.
+
+    Dropping these tables to move an Alembic stamp would erase completed runs
+    that cannot be reconstructed. Recover forward instead.
+    """
