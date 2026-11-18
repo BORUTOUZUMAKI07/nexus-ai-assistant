@@ -38,6 +38,20 @@ export const ALLOWED = new Map([
         "untrusted input.",
     },
   ],
+  [
+    "GHSA-fc5q-39xc-vjpf",
+    {
+      package: "picomatch",
+      reason:
+        "ReDoS through single-branch repeated extglobs in picomatch <= 4.0.7 " +
+        "(advisory range '*'); no fixed release exists and 4.0.7 is the latest " +
+        "published version as of 2026-11-18. Reached only through dev/build " +
+        "tooling: eslint-config-next -> fast-glob/micromatch (2.x, lint-time " +
+        "glob over repo files) and vitest/vite/tinyglobby (4.x, local " +
+        "test/build). Never ships to production and never matches untrusted " +
+        "glob input.",
+    },
+  ],
 ])
 
 /** Extract a stable advisory id from an `npm audit` `via` entry. */

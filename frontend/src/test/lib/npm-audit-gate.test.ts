@@ -85,6 +85,25 @@ describe("evaluateAuditReport", () => {
     expect(unallowed).toEqual([])
   })
 
+  it("permits every documented allowance when they co-occur", () => {
+    const picomatchAdvisory = {
+      url: "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+      severity: "high",
+      name: "picomatch",
+      title: "picomatch vulnerable to ReDoS through single-branch repeated extglobs",
+    }
+    const { permitted, unallowed } = evaluateAuditReport({
+      vulnerabilities: {
+        ...realReport.vulnerabilities,
+        picomatch: { severity: "high", via: [picomatchAdvisory] },
+      },
+    })
+    expect(unallowed).toEqual([])
+    for (const id of ALLOWED.keys()) {
+      expect(permitted.map((a: { id: string }) => a.id)).toContain(id)
+    }
+  })
+
   it("fails on an unknown high advisory (the allowlist is not blanket)", () => {
     const { unallowed } = evaluateAuditReport({
       vulnerabilities: {
