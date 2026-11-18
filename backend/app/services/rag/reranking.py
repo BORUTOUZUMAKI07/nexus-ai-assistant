@@ -4,8 +4,9 @@ Re-orders retrieved candidate chunks using fast cross-encoder models
 (FlashRank or lightweight cross-attention scoring).
 
 Also provides sentence-level salience filtering ("Sense & Expand") that
-scores individual sentences from retrieved parent chunks against the query
-vector via cosine similarity, keeping only the top-K most salient sentences.
+scores individual sentences from retrieved parent chunks by lexical
+centrality (with the query/chunk dense cosine as a weak tie-breaker), keeping
+only the top-K most salient sentences.
 This prevents “lost-in-the-middle” attention degradation and reduces the
 synth prompt footprint by 60-80% (Sentence-Level Salience / “Sense & Expand”
 sentence filtering).
@@ -79,6 +80,36 @@ def _split_sentences(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def _sentence_tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _sentence_salience(
+    index: int, token_sets: list[set[str]], chunk_dense_similarity: float
+) -> float:
+    """Score one sentence against the rest of its chunk.
+
+    Per-sentence dense embeddings are not available here (embedding every
+    sentence would add a network round-trip to retrieval), so use lexical
+    centrality: a sentence that reuses the chunk's vocabulary is more central to
+    what the chunk is about than one built from isolated words. This is a real
+    per-sentence signal — the previous implementation recomputed the *same*
+    chunk-level cosine for every sentence, so every score tied and the top-K
+    selection was simply the first K sentences in document order.
+    """
+    own = token_sets[index]
+    if not own:
+        return 0.0
+    neighbours: set[str] = set()
+    for other_index, tokens in enumerate(token_sets):
+        if other_index != index:
+            neighbours |= tokens
+    centrality = len(own & neighbours) / len(own)
+    # Keep the dense query/chunk similarity as a weak tie-breaker only; it is a
+    # chunk-level constant and must not dominate per-sentence ordering.
+    return centrality + 1e-6 * chunk_dense_similarity
+
+
 def salience_filter_chunks(
     chunks: list[dict[str, Any]],
     query_vector: list[float],
@@ -87,9 +118,10 @@ def salience_filter_chunks(
 ) -> list[dict[str, Any]]:
     """
     Sense & Expand: for each retrieved chunk, scores its individual sentences
-    against the query vector via cosine similarity and retains only the
-    top-K most salient sentences.  The chunk’s ``content`` field is replaced
-    with the filtered, relevance-ordered snippet.
+    by lexical centrality within the chunk (dense query/chunk similarity is a
+    weak tie-breaker) and retains only the top-K most salient sentences. The
+    chunk’s ``content`` field is replaced with the filtered, relevance-ordered
+    snippet.
 
     Args:
         chunks: List of candidate dicts with ``content`` and optional
@@ -117,18 +149,15 @@ def salience_filter_chunks(
             filtered.append({**chunk, "salience_filtered": False})
             continue
 
-        # Score each sentence dot-product against the query vector.
-        # We use the chunk-level dense_vector as a proxy for sentence embeddings
-        # (fast, zero extra API calls). Real sentence embeddings would be better
-        # but add latency on free-tier — this is a good trade-off.
-        # The query vector already encodes the semantics; comparing sentence
-        # TF similarity via cosine against a constant chunk vector still produces
-        # a meaningful relative ordering for intra-chunk sentence selection.
+        # Score each sentence individually. There are no per-sentence embeddings
+        # available, so lexical centrality within the chunk is the discriminator;
+        # the dense query/chunk cosine is retained only as a weak tie-breaker.
         chunk_vec = chunk.get("dense_vector") or query_vector  # fallback if no vec
+        chunk_dense_similarity = _cosine_sim_numpy(query_vector, chunk_vec)
+        token_sets = [_sentence_tokens(sent) for sent in sentences]
         scored = []
-        for sent in sentences:
-            # Weight by position (earlier sentences get slight priority)
-            sim = _cosine_sim_numpy(query_vector, chunk_vec)
+        for index, sent in enumerate(sentences):
+            sim = _sentence_salience(index, token_sets, chunk_dense_similarity)
             scored.append((sim, sent))
 
         # Sort descending by score and take top-K

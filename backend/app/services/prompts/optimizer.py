@@ -170,7 +170,10 @@ class PromptOptimizationService:
                 except Exception as exc:
                     logger.warning("optimizer_candidate_judge_failed", index=i, error=str(exc))
                     continue
-                scored.append({"index": i, "score": round(score, 4), "prompt": candidate[:500]})
+                # Keep the full candidate: the promoted variant must be exactly
+                # what the judge scored. The 500-char cap belongs in the
+                # `details` audit payload below, not in the stored prompt.
+                scored.append({"index": i, "score": round(score, 4), "prompt": candidate})
 
             best = max(scored, key=lambda s: s["score"], default=None)
             accepted_variant = baseline_prompt
@@ -194,7 +197,11 @@ class PromptOptimizationService:
             )
             created.details = {
                 "candidate_count_actual": len(scored),
-                "candidates": scored,
+                # Bounded view for the audit record only — promotion above uses
+                # the untruncated `scored` entries.
+                "candidates": [
+                    {**s, "prompt": s["prompt"][:500]} for s in scored
+                ],
                 "promoted": accepted_variant != baseline_prompt,
                 "cases_evaluated": len(cases),
                 "promote_only_if_better": promote_only_if_better,

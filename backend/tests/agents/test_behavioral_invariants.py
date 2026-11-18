@@ -130,6 +130,36 @@ def test_salience_compresses_long_chunks():
     assert r[0]["filtered_content_len"] < r[0]["original_content_len"]
 
 
+def test_salience_ranking_is_not_a_constant_vector_noop():
+    """Sentences are ranked by their own content, not by one shared chunk cosine.
+
+    The first three sentences use isolated vocabulary; the last three share a
+    common topic. With top_k=3 the central sentences must win — the old code
+    recomputed the same chunk-level cosine for every sentence, so the stable
+    sort always kept the first three in document order.
+    """
+    from backend.app.services.rag.reranking import salience_filter_chunks
+
+    isolated = [
+        "Aardvark quantum zebra meadow.",
+        "Bluish embroidery satellite vinegar.",
+        "Crimson origami glacier plywood.",
+    ]
+    central = [
+        "Orbit orbit lantern lantern.",
+        "Orbit lantern with copper.",
+        "Orbit lantern and copper wiring.",
+    ]
+    r = salience_filter_chunks(
+        [{"content": " ".join(isolated + central), "score": 0.9}],
+        [0.1] * 768,
+        top_sentences_per_chunk=3,
+    )[0]
+    assert r["salience_filtered"] is True
+    assert " ".join(central) in r["content"]
+    assert isolated[0] not in r["content"]
+
+
 def test_salience_passes_short_chunks():
     from backend.app.services.rag.reranking import salience_filter_chunks
     content = "RAG retrieves chunks. It synthesizes answers."

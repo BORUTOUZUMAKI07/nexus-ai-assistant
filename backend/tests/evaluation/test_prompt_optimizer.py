@@ -51,6 +51,25 @@ async def test_promotes_candidate_when_better_than_baseline():
 
 
 @pytest.mark.asyncio
+async def test_promoted_candidate_is_not_truncated():
+    """Only the audit payload is capped; the promoted prompt must be whole."""
+    long_candidate = "P" * 900 + " — the important tail the judge scored"
+    fake = FakeSession()
+    svc = PromptOptimizationService(
+        proposer=await _propose([long_candidate]),
+        judge=await _judge_with({BASELINE: 0.5, long_candidate: 0.9}),
+    )
+
+    run = await svc.run(
+        fake, prompt_key="chat_system_prompt", baseline_prompt=BASELINE, cases=CASES
+    )
+
+    assert run.accepted_variant == long_candidate
+    assert len(run.accepted_variant) > 500
+    assert len(run.details["candidates"][0]["prompt"]) == 500
+
+
+@pytest.mark.asyncio
 async def test_keeps_baseline_when_no_candidate_wins():
     fake = FakeSession()
     svc = PromptOptimizationService(
