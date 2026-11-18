@@ -363,10 +363,10 @@ class _NoInflight:
 def test_streaming_charges_an_estimate_not_nothing(monkeypatch):
     """A stream that charges nothing would make the whole number a fiction.
 
-    litellm only reports usage on a stream when the request opts in with
-    stream_options, which is not set here, so the charge is a documented
-    estimate. It still has to happen: the final answer is often the largest
-    single item in a run.
+    litellm only reports usage on a stream when the provider accepts the
+    stream_options opt-in and the request sends it; this fake stream sends no
+    usage, so the charge is a documented estimate. It still has to happen: the
+    final answer is often the largest single item in a run.
     """
     from backend.app.infrastructure.ai import litellm_client as lc
 

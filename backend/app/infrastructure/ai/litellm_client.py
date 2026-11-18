@@ -497,6 +497,30 @@ def group_primary_model(group: str) -> str:
     return _GROUP_TO_MODEL.get(group, group)
 
 
+def _supports_stream_options(group: str) -> bool:
+    """Whether this group's primary provider accepts ``stream_options``.
+
+    LiteLLM keeps a per-provider list of OpenAI-compatible parameters. Sending
+    ``stream_options.include_usage`` to a provider that does not advertise it is
+    not benign: the call can be rejected, or the parameter silently dropped,
+    leaving the spend meter on a chars/4 estimate while the logs imply real
+    usage. Unknown groups and a broken capability lookup both fail closed —
+    the estimate is honest, a rejected stream is not.
+    """
+    primary = group_primary_model(group)
+    try:
+        supported = litellm.get_supported_openai_params(model=primary)
+    except Exception as exc:
+        logger.warning(
+            "llm_stream_options_probe_failed",
+            model=group,
+            provider_model=primary,
+            error=str(exc),
+        )
+        return False
+    return bool(supported) and "stream_options" in supported
+
+
 # The provider model string of the most recent successful ``complete()`` in this
 # task. A contextvar, not an instance attribute, so concurrent runs cannot read
 # each other's answers. ``complete()`` sets it on the way out; the synthesizer
@@ -903,8 +927,8 @@ class LiteLLMService:
         Falls through the same group chain as ``complete()`` when the primary
         group's stream yields no content, so a dead primary never kills the run.
         Sets ``_last_resolved_model`` so the transcript reports what actually
-        answered, and records provider-reported usage (via ``stream_options``)
-        instead of only a chars/4 estimate.
+        answered, and records provider-reported usage when the provider
+        advertises ``stream_options``; otherwise the chars/4 estimate stands.
         """
         group = resolve_model_group(model)
         import time as _time
@@ -938,9 +962,11 @@ class LiteLLMService:
 
             # BYOK: use the user's key for this provider when they stored one.
             _stream_kwargs: dict[str, Any] = {"stream": True}
-            # stream_options reports provider-aggregated usage on the final
-            # chunk so astream can record real token counts (not chars/4).
-            _stream_kwargs["stream_options"] = {"include_usage": True}
+            # Only OpenAI-compatible providers that advertise the parameter
+            # get it. Others keep the honest chars/4 estimate instead of
+            # risking a rejected stream over an unsupported option.
+            if _supports_stream_options(_attempt_group):
+                _stream_kwargs["stream_options"] = {"include_usage": True}
             _user_key = get_byok_key(resolve_provider(_attempt_group))
             if _user_key:
                 _stream_kwargs["api_key"] = _user_key
