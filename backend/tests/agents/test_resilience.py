@@ -7,6 +7,7 @@ service degrades gracefully via its documented fallback/retry seam instead
 of propagating the failure.
 """
 from types import SimpleNamespace
+from uuid import UUID
 
 import litellm
 import pytest
@@ -263,6 +264,31 @@ async def test_critic_grader_falls_back_to_web_when_rag_unavailable(monkeypatch)
     assert update["pending_tool_calls"] == [
         {"name": "web_search", "arguments": {"query": "tell me about hybrid search", "max_results": 5}}
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", ["", None, "not-a-uuid", str(UUID(int=0))])
+async def test_critic_grader_does_not_query_user_scoped_rag_without_identity(monkeypatch, user_id):
+    """No proven user means no user-scoped retrieval, even as a nil UUID."""
+    calls: list[dict[str, object]] = []
+
+    async def _rag_spy(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(citations=[])
+
+    monkeypatch.setattr(nodes.rag_service, "query", _rag_spy)
+
+    state = {
+        "messages": [HumanMessage(content="tell me about hybrid search")],
+        "user_id": user_id,
+    }
+
+    update = await nodes.critic_grader_node(state)
+
+    assert calls == []
+    assert update["citations"] == []
+    assert update["grader_verdict"] == "unrelated"
+    assert update["needs_web_search"] is True
 
 
 # ── Synthesizer: best-effort blocks degrade without failing the turn ──────────

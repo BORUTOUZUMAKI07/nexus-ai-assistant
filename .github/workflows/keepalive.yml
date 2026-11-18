@@ -1,0 +1,37 @@
+name: Keep Render warm
+
+on:
+  schedule:
+    # Render's free instances suspend after ~15 minutes idle. A five-minute
+    # heartbeat keeps both the API and the OTLP collector ready so the first
+    # user request does not pay a 50-60s cold start and telemetry is not lost.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: render-keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Wake backend
+        run: |
+          code=$(curl --silent --show-error --max-time 30 -o /dev/null -w '%{http_code}' https://nexus-backend-owq5.onrender.com/health)
+          if [ "$code" != "200" ]; then
+            echo "Unexpected backend status: $code"
+            exit 1
+          fi
+          echo "Backend awake (200 OK from /health)"
+
+      - name: Wake OTLP collector
+        # The receiver requires HTTP basic auth, so 401 means it is awake.
+        run: |
+          code=$(curl --silent --show-error --max-time 30 -o /dev/null -w '%{http_code}' https://nexus-otel-collector.onrender.com/)
+          if [ "$code" != "401" ]; then
+            echo "Unexpected collector status: $code"
+            exit 1
+          fi
+          echo "Collector awake (401 Unauthorized from basic auth, as expected)"

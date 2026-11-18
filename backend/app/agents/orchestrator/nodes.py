@@ -58,7 +58,25 @@ _STEP_TRIGGER_KEYWORDS = (
     "research", "fetch", "lookup", "translat", "email", "draft", "fix",
 )
 
-_FALLBACK_USER_ID = "00000000-0000-0000-0000-000000000000"
+
+def _authenticated_user_id(state: AgentState) -> UUID | None:
+    """Return the run's authenticated user, or ``None`` if it cannot be proven.
+
+    A nil UUID used to be substituted when the graph was invoked without a
+    user identity (or with a malformed one), which silently ran tools and
+    user-scoped RAG queries as a fake user. Callers must fail closed instead.
+    """
+    raw = state.get("user_id")
+    if not raw:
+        return None
+    try:
+        parsed = UUID(str(raw))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if parsed == UUID(int=0):
+        return None
+    return parsed
+
 
 # Untrusted-reference boundary. Web content, scraped pages, code output and RAG
 # snippets are attacker-influenced data, NOT instructions. Wrapping them in an
@@ -898,14 +916,29 @@ async def tool_node(state: AgentState) -> dict[str, Any]:
     ({action: approve|reject|modify, data}) so either HITL resume contract works.
     """
     pending = state.get("pending_tool_calls", [])
-    user_id_str = state.get("user_id") or "00000000-0000-0000-0000-000000000000"
-    try:
-        user_id = UUID(user_id_str)
-    except (ValueError, TypeError, AttributeError):
-        # bootstrap_node sets user_id to "" when absent â€” never let a bad
-        # string crash the execution node.
-        user_id = UUID(int=0)
+    user_id = _authenticated_user_id(state)
     tool_results: list[dict[str, Any]] = list(state.get("tool_results", []))
+
+    if user_id is None:
+        logger.error(
+            "tool_execution_denied_missing_authenticated_user",
+            count=len(pending),
+        )
+        return {
+            "tool_results": tool_results
+            + [
+                {
+                    "tool_name": str(call.get("name") or ""),
+                    "status": "denied",
+                    "error": (
+                        "Tool execution denied: this run has no authenticated "
+                        "user identity."
+                    ),
+                }
+                for call in pending
+            ],
+            "pending_tool_calls": [],
+        }
 
     for call in pending:
         # An unnamed tool call cannot be executed and must not be passed to the
@@ -986,23 +1019,26 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
     if not query:
         return {"pending_tool_calls": [], "needs_web_search": False}
 
-    user_id_str = state.get("user_id") or _FALLBACK_USER_ID
-    try:
-        user_id = UUID(user_id_str)
-    except ValueError:
-        user_id = UUID(_FALLBACK_USER_ID)
+    user_id = _authenticated_user_id(state)
 
     # 1. Local RAG retrieval (multi-query + conditional HyDE + childâ†’parent)
+    # RAG is user-scoped: never query it as a nil/placeholder user. Without a
+    # proven identity, fall through to the existing CRAG web-search path.
     retrieval_ok = False
+    result = None
+    citations: list[dict[str, Any]] = []
     try:
-        result = await rag_service.query(
-            query=query,
-            user_id=user_id,
-            top_k=5,
-            score_threshold=0.35,
-        )
-        citations = [c.model_dump() for c in result.citations]
-        retrieval_ok = True
+        if user_id is None:
+            logger.warning("critic_rag_skipped_missing_authenticated_user")
+        else:
+            result = await rag_service.query(
+                query=query,
+                user_id=user_id,
+                top_k=5,
+                score_threshold=0.35,
+            )
+            citations = [c.model_dump() for c in result.citations]
+            retrieval_ok = True
     except Exception as exc:
         # Retrieval infrastructure unavailable â†’ treat as no grounding and
         # fall through to CRAG web search instead of failing the whole turn.
@@ -1043,7 +1079,7 @@ async def critic_grader_node(state: AgentState) -> dict[str, Any]:
         # and the user is not asking for fresh/current data, run one corrective
         # local re-query with a refined query variant. Only if that still fails
         # do we fall through to the web_search supplement below.
-        if verdict == "insufficient" and not wants_recency:
+        if verdict == "insufficient" and not wants_recency and user_id is not None:
             try:
                 from backend.app.services.rag.retrieval_guard import (
                     retrieval_guard_service,

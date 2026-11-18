@@ -17,7 +17,7 @@ real ``interrupt()`` and a ``MemorySaver``, because §9.15: a test that exercise
 the piece directly cannot tell you the caller accepts it.
 """
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from backend.app.agents.orchestrator import nodes
@@ -292,3 +292,32 @@ async def test_tool_node_denies_on_rejection_without_executing(monkeypatch):
     denied = resumed["tool_results"][-1]
     assert denied["status"] == "denied"
     assert "too risky" in denied["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", ["", None, "not-a-uuid", str(UUID(int=0))])
+async def test_tool_node_never_executes_as_a_nil_or_unknown_user(monkeypatch, user_id):
+    """A graph resumed without a proven identity must not run tools at all.
+
+    The old fallback substituted the nil UUID and called ``execute_tool`` with
+    it, so a checkpoint restored outside an authenticated request could act as
+    a fake user. Failing closed keeps the run from touching any tool.
+    """
+    executed: list[str] = []
+
+    async def _spy_execute(*args, **kwargs):
+        executed.append(kwargs.get("tool_name") or "called")
+        return {"status": "success"}
+
+    monkeypatch.setattr(nodes.tool_gateway, "execute_tool", _spy_execute)
+
+    state = _flagged_state()
+    state["user_id"] = user_id
+    update = await nodes.tool_node(state)
+
+    assert executed == []
+    assert update["pending_tool_calls"] == []
+    assert len(update["tool_results"]) == 1
+    denied = update["tool_results"][0]
+    assert denied["status"] == "denied"
+    assert "authenticated user" in denied["error"]
