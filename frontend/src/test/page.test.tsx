@@ -3,19 +3,86 @@ import { render, screen, fireEvent, waitFor } from "@/test/test-utils"
 import { http, HttpResponse } from "msw"
 import { server } from "@/test/mocks/server"
 import Home from "@/app/app/page"
+import { mockConversations, mockSettings } from "@/test/mocks/handlers"
 
-const { routerMock } = vi.hoisted(() => ({
+const { routerMock, authState, toastMock } = vi.hoisted(() => ({
   routerMock: { replace: vi.fn(), push: vi.fn() },
+  // MSW cannot see the httpOnly cookies the real /api/auth/login sets, so the
+  // bootstrap mock has to be told when the test's login succeeded. Without the
+  // flip, a successful login would immediately refetch a stale
+  // `{ authenticated: false }` verdict and reopen the modal.
+  authState: { signedIn: false },
+  // The real Toaster lives in the root layout, which this test does not render.
+  // Spy on the calls instead so a silent console.warn cannot pass as feedback.
+  toastMock: {
+    loading: vi.fn(() => "feedback-toast"),
+    success: vi.fn(),
+    error: vi.fn(),
+    dismiss: vi.fn(),
+  },
 }))
 
 vi.mock("next/navigation", () => ({
   useRouter: () => routerMock,
 }))
 
+vi.mock("sonner", () => ({ toast: toastMock }))
+
 function clearCookie() {
   document.cookie.split(";").forEach((c) => {
     document.cookie = `${c.split("=")[0].trim()}=; path=/; max-age=0`
   })
+}
+
+/**
+ * Model the two halves of a session with the aggregate endpoint: signed out on
+ * first paint, signed in for every bootstrap refetch after a successful login.
+ * The login handler keeps the same credential check as the shared mock, so the
+ * existing "wrong password" behaviour is not lost.
+ */
+function mockAuthLifecycle() {
+  authState.signedIn = false
+  server.use(
+    http.post("/api/auth/login", async ({ request }) => {
+      const contentType = request.headers.get("content-type") ?? ""
+      let email = ""
+      let password = ""
+      if (contentType.includes("application/x-www-form-urlencoded")) {
+        const params = new URLSearchParams(await request.text())
+        email = params.get("username") ?? ""
+        password = params.get("password") ?? ""
+      } else {
+        const body = (await request.json()) as { email?: string; password?: string }
+        email = body.email ?? ""
+        password = body.password ?? ""
+      }
+      if (!email || password !== "password123") {
+        return HttpResponse.json(
+          { detail: "Incorrect email or password." },
+          { status: 401 }
+        )
+      }
+      authState.signedIn = true
+      return HttpResponse.json({ ok: true })
+    }),
+    http.get("/api/bootstrap", () =>
+      authState.signedIn
+        ? HttpResponse.json({
+            authenticated: true,
+            user: { id: "user-1", email: "test@nexus.ai", role: "user" },
+            conversations: {
+              items: mockConversations,
+              total: mockConversations.length,
+              page: 1,
+              size: 50,
+              next_cursor: null,
+              has_more: false,
+            },
+            settings: mockSettings,
+          })
+        : HttpResponse.json({ authenticated: false })
+    )
+  )
 }
 
 /** Log in through the gate and wait for the sidebar to populate. */
@@ -30,13 +97,18 @@ async function login() {
     target: { value: "password123" },
   })
   fireEvent.click(screen.getByRole("button", { name: /Sign In/ }))
-  await screen.findByText("Project kickoff")
+  await screen.findAllByText("Project kickoff")
 }
 
 describe("Home page integration", () => {
   beforeEach(() => {
     routerMock.replace.mockClear()
     routerMock.push.mockClear()
+    toastMock.loading.mockClear()
+    toastMock.success.mockClear()
+    toastMock.error.mockClear()
+    toastMock.dismiss.mockClear()
+    mockAuthLifecycle()
   })
 
   it("opens the login gate when no token is present", async () => {
@@ -63,7 +135,7 @@ describe("Home page integration", () => {
     await waitFor(() =>
       expect(screen.queryByText("Welcome back")).not.toBeInTheDocument()
     )
-    await screen.findByText("Project kickoff")
+    await screen.findAllByText("Project kickoff")
 
     // Send a message; the assistant streams back through /api/chat
     const textarea = screen.getByPlaceholderText(
@@ -100,7 +172,7 @@ describe("Home page integration", () => {
     })
     fireEvent.click(screen.getByRole("button", { name: /Sign In/ }))
 
-    await screen.findByText("Project kickoff")
+    await screen.findAllByText("Project kickoff")
     fireEvent.click(screen.getByTitle("Sign out"))
 
     // The logout route answered 200, so the cookies are gone and the plain page
@@ -124,7 +196,7 @@ describe("Home page integration", () => {
       target: { value: "password123" },
     })
     fireEvent.click(screen.getByRole("button", { name: /Sign In/ }))
-    await screen.findByText("Project kickoff")
+    await screen.findAllByText("Project kickoff")
 
     // Enable the Plan toggle and send a task
     fireEvent.click(screen.getByTitle("Plan mode OFF: respond directly"))
@@ -155,7 +227,7 @@ describe("Home page integration", () => {
       target: { value: "password123" },
     })
     fireEvent.click(screen.getByRole("button", { name: /Sign In/ }))
-    await screen.findByText("Project kickoff")
+    await screen.findAllByText("Project kickoff")
 
     // Loaded from the server, so the artifact survives a reload. The canvas is
     // not open yet — nothing in the message stream opened it.
@@ -182,7 +254,7 @@ describe("Home page integration", () => {
       target: { value: "password123" },
     })
     fireEvent.click(screen.getByRole("button", { name: /Sign In/ }))
-    await screen.findByText("Project kickoff")
+    await screen.findAllByText("Project kickoff")
 
     // The stored plan is listed even though no plan was drafted in this session.
     expect(await screen.findByText("Refactor auth service")).toBeInTheDocument()
@@ -222,7 +294,7 @@ describe("Home page integration", () => {
     )
 
     await login()
-    fireEvent.click(screen.getByText("Project kickoff"))
+    fireEvent.click(screen.getAllByText("Project kickoff")[0])
     await screen.findByText("Tell me about RAG")
 
     fireEvent.click(screen.getAllByTitle("Branch conversation from here")[0])
@@ -287,7 +359,7 @@ describe("Home page integration", () => {
     )
 
     await login()
-    fireEvent.click(screen.getByText("Project kickoff"))
+    fireEvent.click(screen.getAllByText("Project kickoff")[0])
     await screen.findByText("Tell me about RAG")
 
     fireEvent.click(screen.getAllByTitle("Branch conversation from here")[0])
@@ -299,5 +371,126 @@ describe("Home page integration", () => {
     ).toBeInTheDocument()
 
     gate.release?.()
+  })
+
+  it("renders the persisted cost and token count of a history-loaded reply", async () => {
+    // The page maps NexusMessage -> MessageItem by hand. Both fields already
+    // survive the history mapper (`messagesFromHistory`), so dropping them
+    // here made ChatArea's cost pill and token chip unreachable for any reply
+    // that was not produced live in this tab.
+    server.use(
+      http.get("/api/conversations/:id", () =>
+        HttpResponse.json({
+          ...mockConversations[0],
+          system_prompt: null,
+          messages: [
+            {
+              id: "msg-cost-user",
+              role: "user",
+              content: "What did that cost?",
+              thought_process: null,
+              model: null,
+              prompt_tokens: 10,
+              completion_tokens: 0,
+              total_tokens: 10,
+              cost_usd: 0,
+              citations: [],
+              tool_calls: [],
+              user_feedback: null,
+              created_at: "2026-09-02T10:00:00Z",
+            },
+            {
+              id: "msg-cost-assistant",
+              role: "assistant",
+              content: "That turn used 456 tokens.",
+              thought_process: null,
+              model: "llama-3.3-70b-versatile",
+              prompt_tokens: 300,
+              completion_tokens: 156,
+              total_tokens: 456,
+              cost_usd: 0.0123,
+              citations: [],
+              tool_calls: [],
+              user_feedback: null,
+              created_at: "2026-09-02T10:00:01Z",
+            },
+          ],
+        })
+      )
+    )
+
+    await login()
+    fireEvent.click(screen.getAllByText("Project kickoff")[0])
+    expect(
+      await screen.findByText("That turn used 456 tokens.")
+    ).toBeInTheDocument()
+    expect(screen.getByText("$0.0123")).toBeInTheDocument()
+    expect(screen.getByText("456 tokens")).toBeInTheDocument()
+  })
+
+  it("opens the mobile navigation drawer as a focus-managed modal dialog", async () => {
+    await login()
+    const menu = screen.getByRole("button", { name: "Open navigation" })
+    expect(menu).toHaveAttribute("aria-expanded", "false")
+    expect(menu).toHaveAttribute("aria-controls", "mobile-nav-drawer")
+
+    fireEvent.click(menu)
+    const dialog = await screen.findByRole("dialog", { name: /navigation/i })
+    expect(dialog).toHaveAttribute("aria-modal", "true")
+    // Initial focus must land inside the drawer, not stay on the trigger.
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Escape" })
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: /navigation/i })
+      ).not.toBeInTheDocument()
+    )
+    expect(menu).toHaveAttribute("aria-expanded", "false")
+    expect(document.activeElement).toBe(menu)
+  })
+
+  it("keeps the compare control reachable from the mobile bar after bootstrap hydration", async () => {
+    await login()
+    // Two buttons share the name: the desktop header is display-hidden under
+    // md, so the mobile bar's copy is the one a small-screen user can reach.
+    const compareButtons = screen.getAllByRole("button", {
+      name: "Compare models side-by-side",
+    })
+    fireEvent.click(compareButtons[compareButtons.length - 1])
+    expect(
+      await screen.findByRole("dialog", { name: /Model Comparison/i })
+    ).toBeInTheDocument()
+  })
+
+  it("shows a failed feedback submission and rolls back the optimistic state", async () => {
+    let attempts = 0
+    server.use(
+      http.post(
+        "/api/conversations/:id/messages/:messageId/feedback",
+        () => {
+          attempts += 1
+          return HttpResponse.json({ detail: "feedback unavailable" }, { status: 500 })
+        }
+      )
+    )
+
+    await login()
+    fireEvent.click(screen.getAllByText("Project kickoff")[0])
+    expect(
+      await screen.findByText("RAG grounds answers in your indexed documents.")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Good response" }))
+
+    // The optimistic state is visible immediately, but it is not durable.
+    expect(toastMock.loading).toHaveBeenCalled()
+    expect(screen.getByText("Saving feedback: Good response…")).toBeInTheDocument()
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalled())
+    expect(toastMock.success).not.toHaveBeenCalled()
+    expect(screen.queryByText("Saving feedback: Good response…")).not.toBeInTheDocument()
+    expect(screen.queryByText("Feedback saved: Good response")).not.toBeInTheDocument()
+    expect(attempts).toBe(1)
   })
 })

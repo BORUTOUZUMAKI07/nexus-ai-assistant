@@ -19,6 +19,7 @@ import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { TOKEN_COOKIE } from "@/lib/auth";
+import { TERMINAL_ANNOTATION_TYPE } from "@/lib/chatStream";
 
 // Server-only backend address (see lib/proxy.ts — never a NEXT_PUBLIC_ var).
 const BACKEND_URL =
@@ -70,6 +71,12 @@ function backendRunStreamUrl(conversationId: string, runId: string): string {
   return `${BACKEND_URL}/api/v1/conversations/${conversationId}/runs/${runId}/stream`;
 }
 
+/** Identity the headers supplied for this run, forwarded into the terminal frame. */
+interface StreamIdentity {
+  runId: string | null;
+  messageId: string | null;
+}
+
 /**
  * Wrap an upstream SSE body in the data-stream translation.
  *
@@ -84,7 +91,8 @@ function backendRunStreamUrl(conversationId: string, runId: string): string {
  */
 function streamTranslation(
   body: ReadableStream<Uint8Array>,
-  conversationId: unknown
+  conversationId: unknown,
+  identity: StreamIdentity = { runId: null, messageId: null }
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
 
@@ -100,6 +108,21 @@ function streamTranslation(
       // An empty line is ignored by chatStream.ts (`if (!line) return`) and
       // filtered by the tests' frames() helpers, so it carries no semantics.
       controller.enqueue(new TextEncoder().encode("\n"));
+
+      // Set only when the upstream stream reaches its own end — `[DONE]` or a
+      // normal EOF. A read that throws is a transport failure, not a
+      // completion; emitting a terminal frame there would tell the browser the
+      // run finished cleanly and suppress the rejoin that still matters.
+      let completed = false;
+      // The terminal frame's identity. Run/message ids come from the upstream
+      // headers; thread_id and the optional marker come from the backend's
+      // `done` event. Nothing here is inferred from the answer text.
+      const terminal: Record<string, string> = {
+        type: TERMINAL_ANNOTATION_TYPE,
+      };
+      if (identity.runId) terminal.run_id = identity.runId;
+      if (identity.messageId) terminal.message_id = identity.messageId;
+
       try {
         const reader = body.getReader();
         const textDecoder = new TextDecoder();
@@ -126,10 +149,22 @@ function streamTranslation(
             }
 
             try {
-              const frame = translateFrame(
-                JSON.parse(data) as Record<string, unknown>,
-                conversationId
-              );
+              const parsed = JSON.parse(data) as Record<string, unknown>;
+              if (parsed.type === "done") {
+                if (typeof parsed.thread_id === "string" && parsed.thread_id) {
+                  terminal.thread_id = parsed.thread_id;
+                }
+                // The backend owns the marker. Passing an explicit field
+                // through is safe; deriving one from `content` would invent an
+                // identity for text the backend never certified as final.
+                if (
+                  typeof parsed.final_text_marker === "string" &&
+                  parsed.final_text_marker
+                ) {
+                  terminal.final_text_marker = parsed.final_text_marker;
+                }
+              }
+              const frame = translateFrame(parsed, conversationId);
               if (frame !== null) controller.enqueue(encoder.encode(frame));
             } catch {
               // Non-JSON SSE lines are skipped
@@ -137,10 +172,17 @@ function streamTranslation(
           }
           if (doneReceived) break;
         }
+        completed = true;
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Stream error";
         controller.enqueue(encoder.encode(`3:${JSON.stringify(msg)}\n`));
       } finally {
+        if (completed) {
+          // Flush before the close. EOF alone is ambiguous to the browser: it
+          // is also what a dropped connection looks like, and that distinction
+          // is exactly what the rejoin recovery depends on.
+          controller.enqueue(encoder.encode(`8:${JSON.stringify([terminal])}\n`));
+        }
         controller.close();
       }
     },
@@ -446,9 +488,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ detail: "backend_stream_empty" }, { status: 502 });
   }
 
+  const runId = backendRes.headers.get(RUN_ID_HEADER);
+  const messageId = backendRes.headers.get(MESSAGE_ID_HEADER);
   return new NextResponse(
-    streamTranslation(backendRes.body, conversationId),
-    { headers: streamHeaders(backendRes.headers.get(RUN_ID_HEADER)) }
+    streamTranslation(backendRes.body, conversationId, { runId, messageId }),
+    { headers: streamHeaders(runId) }
   );
 }
 
@@ -523,10 +567,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ detail: "backend_stream_empty" }, { status: 502 });
   }
 
-  return new NextResponse(streamTranslation(backendRes.body, conversationId), {
-    headers: streamHeaders(
-      backendRes.headers.get(RUN_ID_HEADER) ?? runId,
-      backendRes.headers.get(MESSAGE_ID_HEADER)
-    ),
-  });
+  const responseRunId = backendRes.headers.get(RUN_ID_HEADER) ?? runId;
+  const responseMessageId = backendRes.headers.get(MESSAGE_ID_HEADER);
+  return new NextResponse(
+    streamTranslation(backendRes.body, conversationId, {
+      runId: responseRunId,
+      messageId: responseMessageId,
+    }),
+    { headers: streamHeaders(responseRunId, responseMessageId) }
+  );
 }

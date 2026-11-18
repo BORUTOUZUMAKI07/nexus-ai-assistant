@@ -22,6 +22,15 @@ vi.mock("next/headers", () => ({
 
 type Handler = (req: unknown, ctx: unknown) => Promise<Response>
 
+const TERMINAL_RUN = "55555555-5555-4555-8555-555555555555"
+const TERMINAL_MSG = "66666666-6666-4666-8666-666666666666"
+
+/** Every `8:` annotation in a translated response, flattened to objects. */
+async function annotations(res: Response): Promise<Array<{ type?: string; [key: string]: unknown }>> {
+  const found = (await frames(res)).filter((l) => l.startsWith("8:"))
+  return found.flatMap((l) => JSON.parse(l.slice(2)) as Array<{ type?: string; [key: string]: unknown }>)
+}
+
 /** Load the route fresh so the `server-only` import guard does not trip. */
 async function chatRoute(): Promise<Handler> {
   vi.resetModules()
@@ -66,9 +75,18 @@ async function frames(res: Response): Promise<string[]> {
   return body.split("\n").filter((l) => l.length > 0)
 }
 
+/** Frames excluding the terminal one, for tests written before it existed. */
+function withoutTerminal(lines: string[]): string[] {
+  return lines.filter((l) => {
+    if (!l.startsWith("8:")) return true
+    const ann = JSON.parse(l.slice(2))[0] as { type?: string }
+    return ann.type !== "done"
+  })
+}
+
 /** The decoded payload of the single `8:` annotation frame in a response. */
 async function annotation(res: Response): Promise<{ type: string; data: unknown }> {
-  const found = (await frames(res)).filter((l) => l.startsWith("8:"))
+  const found = withoutTerminal(await frames(res)).filter((l) => l.startsWith("8:"))
   expect(found.length).toBe(1)
   return JSON.parse(found[0].slice(2))[0]
 }
@@ -227,7 +245,7 @@ describe("/api/chat SSE translation", () => {
     try {
       const POST = await chatRoute()
       const res = await POST(request(), {})
-      expect(await frames(res)).toEqual([])
+      expect(withoutTerminal(await frames(res))).toEqual([])
     } finally {
       restore()
     }
@@ -274,7 +292,7 @@ describe("/api/chat SSE translation", () => {
         .map((l) => JSON.parse(l.slice(2)))
         .join("")
       expect(text).toBe("Here it is.")
-      expect(all.filter((l) => l.startsWith("8:")).length).toBe(2)
+      expect(withoutTerminal(all).filter((l) => l.startsWith("8:")).length).toBe(2)
     } finally {
       restore()
     }
@@ -321,6 +339,82 @@ describe("/api/chat SSE translation", () => {
       )
     } finally {
       restore()
+    }
+  })
+
+  it("emits an explicit terminal frame for a done event without a thread_id", async () => {
+    // S1: `done` used to be translated only when it carried a thread_id, so a
+    // completed run with no new conversation emitted *nothing*. The browser
+    // could not tell that completion from a stalled socket, which is the
+    // difference between a finished answer and a spinner that never clears.
+    const restore = stubBackend('data: {"type":"done","content":"hi"}\n\n')
+    try {
+      const POST = await chatRoute()
+      const all = await annotations(await POST(request(), {}))
+      const terminal = all.filter((a) => a.type === "done")
+      expect(terminal).toHaveLength(1)
+      expect(terminal[0].thread_id).toBeUndefined()
+    } finally {
+      restore()
+    }
+  })
+
+  it("carries the upstream run and message ids on the terminal frame, alongside the legacy annotation", async () => {
+    // The ids ride on headers (S7). They belong in the terminal frame too, so a
+    // consumer reading only the stream never has to go back to header-land to
+    // identify the finished turn. The legacy `conversation_created` frame must
+    // still be emitted for consumers that already understand it.
+    const original = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response('data: {"type":"done","content":"hi","thread_id":"t-1"}\n\n', {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream",
+          "X-Nexus-Run-Id": TERMINAL_RUN,
+          "X-Nexus-Message-Id": TERMINAL_MSG,
+        },
+      })) as unknown as typeof fetch
+    try {
+      const POST = await chatRoute()
+      const all = await annotations(await POST(request(), {}))
+      expect(all.find((a) => a.type === "done")).toEqual({
+        type: "done",
+        run_id: TERMINAL_RUN,
+        message_id: TERMINAL_MSG,
+        thread_id: "t-1",
+      })
+      expect(all.some((a) => a.type === "conversation_created")).toBe(true)
+    } finally {
+      globalThis.fetch = original
+    }
+  })
+
+  it("does not emit a terminal frame when the upstream transport fails", async () => {
+    // A genuine transport failure is not a completion. The 3: error frame is
+    // the honest signal there; a terminal frame would tell the client the run
+    // finished cleanly and suppress the recovery path that still matters.
+    const original = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                'data: {"type":"text_delta","content":"partial"}\n\n'
+              )
+            )
+            controller.error(new Error("upstream connection lost"))
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      )) as unknown as typeof fetch
+    try {
+      const POST = await chatRoute()
+      const all = await frames(await POST(request(), {}))
+      expect(all.some((l) => l.startsWith("3:"))).toBe(true)
+      expect(all.some((l) => l.includes('"done"'))).toBe(false)
+    } finally {
+      globalThis.fetch = original
     }
   })
 

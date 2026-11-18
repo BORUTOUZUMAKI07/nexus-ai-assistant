@@ -157,12 +157,52 @@ export interface ChatStreamSink {
   onStatus?: (label: string) => void;
 }
 
+/**
+ * The annotation type of the BFF's additive terminal frame.
+ *
+ * `done` is not a `NexusAnnotation` and is never stored on a message: it is the
+ * stream-level answer to "did this run actually finish?", which the old
+ * protocol could only guess from EOF. Kept as a shared constant so the writer
+ * (the BFF) and this reader cannot drift apart silently — a renamed type would
+ * be dropped here with no error anywhere, exactly like an untranslated backend
+ * event.
+ */
+export const TERMINAL_ANNOTATION_TYPE = "done";
+
+export interface ChatTerminal {
+  type: typeof TERMINAL_ANNOTATION_TYPE;
+  /** The run this stream was attached to, when the BFF knew it. */
+  run_id?: string;
+  /** The message row the run persisted, when it had one. */
+  message_id?: string;
+  /** The resolved conversation id, when the backend reported one. */
+  thread_id?: string;
+  /**
+   * An identity for the final text supplied by the backend, never derived here.
+   * Absent when the backend did not provide one; inventing one from the answer
+   * text would make a snapshot look authoritative when it is not.
+   */
+  final_text_marker?: string;
+}
+
 export interface ChatStreamResult {
   /** Everything the stream said, including what arrived before an error. */
   content: string;
   annotations: NexusAnnotation[];
   /** The decoded `3:` error, or null for a clean stream. */
   error: string | null;
+  /** The explicit terminal frame, or null when the stream ended without one. */
+  terminal: ChatTerminal | null;
+}
+
+export interface ConsumeChatStreamOptions {
+  /**
+   * Bounded inactivity window. The timer starts when the reader opens and is
+   * re-armed on every byte; on expiry the reader is cancelled and the stream
+   * resolves with a clear error. Omitted for callers that manage their own
+   * deadlines.
+   */
+  inactivityMs?: number;
 }
 
 /**
@@ -180,7 +220,8 @@ export interface ChatStreamResult {
  */
 export async function consumeChatStream(
   body: ReadableStream<Uint8Array>,
-  sink: ChatStreamSink
+  sink: ChatStreamSink,
+  options: ConsumeChatStreamOptions = {}
 ): Promise<ChatStreamResult> {
   const annotations: NexusAnnotation[] = [];
   const citations: CitationAnnotation["data"][] = [];
@@ -195,6 +236,7 @@ export async function consumeChatStream(
   let verdictGate: boolean | null = null;
   let streamContent = "";
   let streamError: string | null = null;
+  let streamTerminal: ChatTerminal | null = null;
 
   const publishVerdict = () => {
     if (verdictCritique === undefined && verdictScore === undefined) return;
@@ -248,6 +290,27 @@ export async function consumeChatStream(
         // not stored on the message. Casting them in would put a member in the
         // union that no code path ever pushes, which is a type that lies.
         const verdict = ann as { type?: string; data?: Record<string, unknown> };
+        if (verdict.type === TERMINAL_ANNOTATION_TYPE) {
+          // The explicit completion signal. It is metadata about the run, not
+          // about the message: it never enters `annotations` and never reaches
+          // `patch`, so a text delta arriving after it cannot be mistaken for a
+          // new answer and a replay cannot smuggle it into a stored message.
+          // Only string fields the frame actually carries are copied — a marker
+          // that was not sent is never synthesised from the answer text.
+          const fields = ann as Record<string, unknown>;
+          const terminal: ChatTerminal = { type: TERMINAL_ANNOTATION_TYPE };
+          for (const key of [
+            "run_id",
+            "message_id",
+            "thread_id",
+            "final_text_marker",
+          ] as const) {
+            const value = fields[key];
+            if (typeof value === "string" && value) terminal[key] = value;
+          }
+          streamTerminal = terminal;
+          continue;
+        }
         if (verdict.type === "critique") {
           const d = verdict.data ?? {};
           if (typeof d.critique === "string") verdictCritique = d.critique;
@@ -344,24 +407,59 @@ export async function consumeChatStream(
 
   const reader = body.getReader();
   const decoder = new TextDecoder();
+  const inactivityMs = options.inactivityMs;
+  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  const clearInactivityTimer = () => {
+    if (inactivityTimer !== null) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+  };
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
+  /**
+   * Bound a stream that stops producing without closing.
+   *
+   * Armed before the first read as well as on every byte: "no bytes arrive at
+   * all" is the stall most likely to leave a spinner stuck, and a timer that
+   * only starts after the first chunk would never see it. `reader.cancel()` is
+   * the lever that actually ends the pending `read()` — throwing here would
+   * reject the caller and lose the partial answer already streamed.
+   */
+  const armInactivityTimer = () => {
+    if (!inactivityMs || inactivityMs <= 0) return;
+    clearInactivityTimer();
+    inactivityTimer = setTimeout(() => {
+      inactivityTimer = null;
+      streamError = `Chat stream stalled — no data received within ${inactivityMs}ms.`;
+      void reader.cancel().catch(() => {});
+    }, inactivityMs);
+  };
 
-    for (const line of lines) {
-      processLine(line);
+  armInactivityTimer();
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      armInactivityTimer();
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        processLine(line);
+        if (streamError) break;
+      }
       if (streamError) break;
     }
-    if (streamError) break;
-  }
 
-  // Flush a final line that arrived without a trailing newline.
-  if (buffer && !streamError) processLine(buffer);
+    // Flush a final line that arrived without a trailing newline.
+    if (buffer && !streamError) processLine(buffer);
+  } finally {
+    clearInactivityTimer();
+  }
 
   const finalAnnotations: NexusAnnotation[] = [
     ...(reasoningBuffer
@@ -389,6 +487,7 @@ export async function consumeChatStream(
     content: streamContent,
     annotations: finalAnnotations,
     error: streamError,
+    terminal: streamTerminal,
   };
 }
 

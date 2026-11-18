@@ -23,6 +23,8 @@ import {
   consumeChatStream,
   readMessageId,
   readRunId,
+  type ChatStreamResult,
+  type ChatStreamSink,
 } from "@/lib/chatStream";
 import { hasAnswer, messagesFromHistory } from "@/lib/conversationHistory";
 
@@ -146,6 +148,13 @@ export interface UseNexusChatOptions {
    * the page re-fetches it from the artifacts API.
    */
   onArtifactSaved?: (artifact: ArtifactAnnotation["data"]) => void;
+  /**
+   * Maximum silence on a live stream before it is treated as stalled. The
+   * timer starts at open and resets on every byte, so a backend that never
+   * writes anything is bounded too. Defaults to {@link STREAM_INACTIVITY_MS};
+   * shorter values are useful in tests.
+   */
+  streamInactivityMs?: number;
 }
 
 export interface SendMessageOptions {
@@ -194,6 +203,19 @@ export interface QueuedMessage {
 // truth for it, stale the moment the backend appends another frame.
 
 const RUN_STORAGE_PREFIX = "nexus-active-run:";
+
+/**
+ * Bounded silence on a live stream. Generous enough that a research-mode turn
+ * (which can legitimately spend a minute before its first token) is never cut
+ * short, but finite so a backend that accepts a request and then stalls cannot
+ * hold the spinner and the Stop button open indefinitely.
+ */
+const STREAM_INACTIVITY_MS = 75 * 1000;
+
+/** Completion polls are bounded: a stuck run must not become a background loop. */
+const COMPLETION_POLL_ATTEMPTS = 6;
+const COMPLETION_POLL_BASE_MS = 250;
+const COMPLETION_POLL_INACTIVITY_MS = 5 * 1000;
 
 /** A run id is a UUID; anything else in storage is not one of ours. */
 const UUID_RE =
@@ -330,6 +352,11 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
   const transcriptEpochRef = useRef(0);
   const loadingRef = useRef(isLoading);
   const abortRef = useRef<AbortController | null>(null);
+  // A stream that closed without a terminal frame leaves the run's completion
+  // ambiguous. Polling owns a separate controller so Stop (which aborts the
+  // *stream*) cannot also cancel the observation of a run that is still going
+  // server-side. Replaced on every new turn, cleared on completion and unmount.
+  const completionPollRef = useRef<AbortController | null>(null);
   // Stable ref for the conversation-created callback — avoids re-binding sendMessage.
   const onConversationCreatedRef = useRef(options.onConversationCreated);
   // Same reason: read inside the stream loop, which is created long before the
@@ -504,6 +531,80 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     );
   }, [updateMessages]);
 
+  /**
+   * Observe the completion of a run whose live stream closed without a
+   * terminal frame.
+   *
+   * Reuses the existing rejoin GET rather than inventing a status endpoint: a
+   * completed run's replay now ends with a terminal frame, so the same request
+   * the page uses after a reload is also a completion oracle here. Each poll
+   * patches the answer still on screen (snapshots, not deltas, so a replay
+   * cannot duplicate text) but deliberately fires no artifact/HITL/verdict
+   * callbacks — those belong to the turn that produced them and would fire
+   * again on every replay.
+   *
+   * A 404 means the backend retired the run; an unreadable response is a
+   * transient and gets another attempt. Both bounds matter: an unbounded
+   * poller would keep a dead run alive in the background forever.
+   */
+  const pollRunCompletion = useCallback(
+    async (
+      conversationId: string,
+      runId: string,
+      patch: ChatStreamSink["patch"],
+      signal: AbortSignal
+    ): Promise<boolean> => {
+      for (let attempt = 0; attempt < COMPLETION_POLL_ATTEMPTS; attempt += 1) {
+        if (signal.aborted) return false;
+        try {
+          const probe = await fetchWithSessionRecovery(
+            `/api/chat?conversationId=${encodeURIComponent(
+              conversationId
+            )}&runId=${encodeURIComponent(runId)}`,
+            { method: "GET", signal, headers: { Accept: "text/plain" } }
+          );
+          if (probe.status === 404) {
+            forgetRun(conversationId);
+            return true;
+          }
+          if (probe.ok && probe.body) {
+            const replay = await consumeChatStream(
+              probe.body,
+              { patch },
+              { inactivityMs: COMPLETION_POLL_INACTIVITY_MS }
+            );
+            if (replay.terminal) {
+              forgetRun(conversationId);
+              return true;
+            }
+          }
+        } catch (err) {
+          if (
+            signal.aborted ||
+            (err instanceof Error && err.name === "AbortError")
+          ) {
+            return false;
+          }
+          // A transient probe failure is not completion: keep the run id and
+          // try again after the backoff below.
+        }
+        if (attempt < COMPLETION_POLL_ATTEMPTS - 1) {
+          const delay = COMPLETION_POLL_BASE_MS * 2 ** attempt;
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, delay);
+            const onAbort = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+            signal.addEventListener("abort", onAbort, { once: true });
+          });
+        }
+      }
+      return false;
+    },
+    []
+  );
+
   const sendMessage = useCallback(
     async (content: string, sendOptions?: SendMessageOptions) => {
       const trimmed = content.trim();
@@ -518,6 +619,11 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         enqueue(trimmed, sendOptions);
         return;
       }
+      // A new turn owns the stream slot, so any background completion watcher
+      // from the previous run must stop: its replay could otherwise patch this
+      // turn's brand-new assistant bubble with the old run's text.
+      completionPollRef.current?.abort();
+      completionPollRef.current = null;
       // Claim the in-flight slot synchronously. `loadingRef` is normally synced
       // from `isLoading` by an effect, which runs *after* commit -- so between
       // this guard and that effect two `sendMessage` calls in the same tick both
@@ -593,6 +699,13 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
        * that silently loses the ability to recover.
        */
       let rememberedUnder: string | null = null;
+      // The run id from the response headers (S7). Hoisted so both the success
+      // and failure paths can start a completion watcher for a stream that
+      // ended without saying so.
+      let liveRunId: string | null = null;
+      // Hoisted for the same reason: the presence or absence of a terminal
+      // frame decides whether the stored run id can be retired yet.
+      let streamResult: ChatStreamResult | null = null;
       // Set when the backend answered 409: a run it still owns is streaming, and
       // this turn never started. Read by `finally` to choose re-attachment over
       // draining the queue.
@@ -642,6 +755,25 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         patchMessage(assistantMsgId, content, annos)
       , { immediate: true });
       const patchAssistant = assistantPatcher.patch;
+
+      /**
+       * Start a bounded watcher for a run whose live stream did not say it
+       * finished. Fire-and-forget on purpose: the turn is already over from the
+       * user's point of view, and holding `isLoading` (and the queue behind it)
+       * hostage to network retries would turn a recovery aid into a hang.
+       */
+      const watchCompletion = (target: string, runId: string) => {
+        completionPollRef.current?.abort();
+        const controller = new AbortController();
+        completionPollRef.current = controller;
+        void pollRunCompletion(target, runId, patchAssistant, controller.signal).finally(
+          () => {
+            if (completionPollRef.current === controller) {
+              completionPollRef.current = null;
+            }
+          }
+        );
+      };
 
       try {
         // Build multimodal message list — user message may carry an image.
@@ -714,12 +846,13 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         }
 
         const runId = readRunId(response);
+        liveRunId = runId;
         if (runId && conversationId) {
           rememberRun(conversationId, runId);
           rememberedUnder = conversationId;
         }
 
-        const streamResult = await consumeChatStream(response.body, {
+        streamResult = await consumeChatStream(response.body, {
           patch: patchAssistant,
           onError: (message) => setError(new Error(message)),
           onHitlRequest: (data) => {
@@ -756,15 +889,15 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
             }
             onConversationCreatedRef.current?.(id);
           },
+        }, {
+          inactivityMs:
+            optionsRef.current.streamInactivityMs ?? STREAM_INACTIVITY_MS,
         }).finally(assistantPatcher.flush);
 
-        // Reaching this line means the stream closed at the backend's end, so the
-        // run is over and there is nothing left to re-attach to. Every failure
-        // path -- a dropped connection, a rejected fetch, an abort -- jumps past
-        // it and deliberately leaves the stored id in place, because a run the
-        // browser stopped watching for its own reasons is still going, and
-        // forgetting its id is precisely the case rejoin exists to cover.
-        forgetRun(rememberedUnder);
+        // Terminal bookkeeping lives in `finally`. A stream that throws before
+        // returning a result is exactly the interrupted case a bounded watcher
+        // has to cover, so the success path must not be the only one that can
+        // retire the id or start observing it.
 
         // Adopt the row ids this run just persisted (see adoptPersistedIds).
         // Gated three ways, each for a case where the history read would not
@@ -780,7 +913,7 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         // `finally` below that releases any queued follow-up — hostage to a
         // history read deadlocks whenever that endpoint is slow or parked,
         // which is exactly the situation the one-writer tests stage.
-        if (!streamResult.error && !hitlRequested && !imageDataUrl) {
+        if (streamResult && !streamResult.error && !hitlRequested && !imageDataUrl) {
           const targetId = conversationId || rememberedUnder;
           if (targetId && optionsRef.current.conversationId === targetId) {
             void (async () => {
@@ -801,6 +934,11 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         setError(err instanceof Error ? err : new Error("Chat stream failed"));
       } finally {
         setIsLoading(false);
+        // A stage label describes work that has stopped, whether the stream
+        // finished, errored or was interrupted. Leaving it set was the visible
+        // half of the stuck-spinner bug: the answer stopped but "Writing the
+        // answer" stayed on screen for the rest of the session.
+        setStatusLabel(null);
         loadingRef.current = false;
         abortRef.current = null;
         if (conflicted) {
@@ -814,13 +952,34 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
           if (target) void hydrateThenRejoinRef.current?.(target);
           return;
         }
+
+        // EOF alone is no longer proof of completion: an interrupted socket,
+        // an inactivity cancellation and a finished run all end the reader.
+        // Only the explicit terminal frame retires the stored run id. Without
+        // one, a bounded watcher uses the existing rejoin GET to observe the
+        // completion instead of asking the user to reload — the id stays filed
+        // until that happens (or until the watcher gives up, in which case a
+        // later reload still has the handle).
+        if (streamResult?.terminal) {
+          forgetRun(rememberedUnder);
+        } else {
+          const targetId = conversationId || rememberedUnder;
+          if (liveRunId && targetId) watchCompletion(targetId, liveRunId);
+        }
+
         // Advance the queue, if any. This is the single place a run releases the
         // slot, so it is the single place the next turn may start; releasing it
         // in `stop()` instead would race an aborted run's own teardown.
         drainQueue();
       }
     },
-    [updateMessages, enqueue, drainQueue, adoptPersistedIds]
+    [
+      updateMessages,
+      enqueue,
+      drainQueue,
+      adoptPersistedIds,
+      pollRunCompletion,
+    ]
   );
 
   // The drain calls back into `sendMessage`; publish the stable instance so it
@@ -1535,11 +1694,15 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
     [updateMessages]
   );
 
-  // Abort any in-flight SSE stream on unmount so we don't leak the connection
-  // or call state setters on an unmounted component.
+  // Abort any in-flight SSE stream or completion watcher on unmount so we don't
+  // leak a connection (or a poll loop) or call state setters on an unmounted
+  // component. The watcher has its own controller because `stop()` deliberately
+  // leaves it running: a user who stops *watching* has not stopped the server's
+  // run, and the id must remain recoverable.
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      completionPollRef.current?.abort();
     };
   }, []);
 

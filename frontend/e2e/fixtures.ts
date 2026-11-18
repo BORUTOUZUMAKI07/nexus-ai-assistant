@@ -22,6 +22,19 @@ export function buildChatStream(body: string): { status: number; contentType: st
 
 type Handler = { pattern: RegExp | string; handler: (route: Route) => void }
 
+type Fulfill = {
+  status?: number
+  contentType?: string
+  headers?: Record<string, string>
+  body?: string
+}
+
+const NOT_MOCKED: Fulfill = {
+  status: 404,
+  contentType: "application/json",
+  body: JSON.stringify({ detail: "unmocked" }),
+}
+
 // One shared registry of handlers per page so independent mock groups compose
 // instead of each registering competing catch-all routes.
 const registries = new WeakMap<
@@ -38,6 +51,49 @@ function registryFor(page: Page) {
   return entry
 }
 
+function firstMatch(handlers: Handler[], url: string): Handler | undefined {
+  return handlers.find((h) =>
+    typeof h.pattern === "string" ? url.includes(h.pattern) : h.pattern.test(url)
+  )
+}
+
+/**
+ * Replay one registered handler against a synthetic URL and capture what it
+ * fulfils with. `/api/bootstrap` aggregates the same three payloads the real
+ * BFF does, so it reuses each spec's existing `/auth/me`, `/conversations` and
+ * `/settings` handlers instead of asking every spec to register a fourth mock.
+ */
+function replay(
+  handler: Handler,
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  postData: Record<string, unknown> = {}
+): Fulfill {
+  let result: Fulfill = NOT_MOCKED
+  const request = {
+    url: () => url,
+    method: () => method,
+    headers: () => headers,
+    postDataJSON: () => postData,
+  }
+  handler.handler({
+    request: () => request,
+    fulfill: (value: Fulfill) => {
+      result = value
+    },
+  } as unknown as Route)
+  return result
+}
+
+function jsonBody(result: Fulfill): unknown {
+  try {
+    return JSON.parse(result.body ?? "")
+  } catch {
+    return undefined
+  }
+}
+
 export function mockApi(page: Page) {
   const entry = registryFor(page)
 
@@ -45,77 +101,134 @@ export function mockApi(page: Page) {
     entry.handlers.push({ pattern, handler })
   }
 
+  function authMe(url: string, headers: Record<string, string>): Fulfill {
+    const cookieStr = headers["cookie"] ?? ""
+    const hasToken = cookieStr
+      .split(";")
+      .some((c) => c.trim().startsWith(`${AUTH_COOKIE}=`))
+    const tokenMatch = cookieStr
+      .split(";")
+      .map((c) => c.trim())
+      .find((c) => c.startsWith(`${AUTH_COOKIE}=`))
+    const token = tokenMatch ? decodeURIComponent(tokenMatch.slice(AUTH_COOKIE.length + 1)) : ""
+    const admin = token === ADMIN_TOKEN
+    return {
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        hasToken
+          ? {
+              authenticated: true,
+              user: { id: "user-1", email: "test@nexus.ai", role: admin ? "admin" : "user" },
+            }
+          : { authenticated: false }
+      ),
+    }
+  }
+
+  function respond(
+    url: string,
+    method: string,
+    headers: Record<string, string>,
+    postData: Record<string, unknown>
+  ): Fulfill {
+    // The app gates on /api/auth/me since the httpOnly access cookie is not
+    // readable from page scripts. Authenticated exactly when the access token
+    // cookie is present; the Admin nav is derived from the role in the probe.
+    if (url.includes("/api/auth/me")) return authMe(url, headers)
+    // Sign-out clears the access cookie the same way the real route does.
+    if (url.includes("/api/auth/logout")) {
+      return {
+        status: 200,
+        contentType: "application/json",
+        headers: { "Set-Cookie": `${AUTH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax` },
+        body: JSON.stringify({ message: "Logged out successfully" }),
+      }
+    }
+    const match = firstMatch(entry.handlers, url)
+    if (match) return replay(match, url, method, headers, postData)
+    if (url.includes("/api/chat")) return buildChatStream(CHAT_STREAM)
+    // Loading the active conversation's history is part of the app shell, not
+    // of what an individual spec asserts — every hydrate fetches it. Answering
+    // 404 here made specs that never cared about history print a misleading
+    // console error that trains readers to ignore genuine failures. Anchored to
+    // the exact detail path so nested resources still fall through to 404.
+    if (method === "GET" && /\/api\/conversations\/[^/?#]+$/.test(new URL(url).pathname)) {
+      return { status: 200, contentType: "application/json", body: "{}" }
+    }
+    return NOT_MOCKED
+  }
+
+  /** The aggregate the /app shell now boots from, built from the same fixtures. */
+  function bootstrap(url: string, headers: Record<string, string>): Fulfill {
+    const origin = new URL(url).origin
+    const auth = jsonBody(authMe(`${origin}/api/auth/me`, headers)) as
+      | { authenticated: boolean; user?: unknown }
+      | undefined
+    if (!auth?.authenticated) {
+      return { status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: false }) }
+    }
+
+    const conversationsUrl = `${origin}/api/conversations?limit=50&offset=0&archived=false`
+    const conversationMatch = firstMatch(entry.handlers, conversationsUrl)
+    const conversationResult = conversationMatch
+      ? replay(conversationMatch, conversationsUrl, "GET", headers)
+      : NOT_MOCKED
+    const conversationBody = jsonBody(conversationResult)
+    const items = Array.isArray(conversationBody)
+      ? conversationBody
+      : conversationBody && typeof conversationBody === "object" && Array.isArray((conversationBody as { items?: unknown }).items)
+        ? (conversationBody as { items: unknown[] }).items
+        : [TEST_CONVERSATION]
+
+    const settingsUrl = `${origin}/api/settings`
+    const settingsMatch = firstMatch(entry.handlers, settingsUrl)
+    const settingsBody = settingsMatch
+      ? jsonBody(replay(settingsMatch, settingsUrl, "GET", headers))
+      : undefined
+
+    return {
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        authenticated: true,
+        user: auth.user,
+        conversations: {
+          items,
+          total: items.length,
+          page: 1,
+          size: 50,
+          next_cursor: null,
+          has_more: false,
+        },
+        settings: settingsBody ?? {
+          system_prompt_override: null,
+          default_model: "llama-3.3-70b-versatile",
+          enable_memory: true,
+          enable_tools: true,
+          temperature: 0.7,
+          max_tokens: 4096,
+        },
+      }),
+    }
+  }
+
   async function setup() {
     await page.route("**/api/**", (route) => {
       const url = route.request().url()
-      const cookieStr = route.request().headers()["cookie"] ?? ""
-      const hasToken = cookieStr
-        .split(";")
-        .some((c) => c.trim().startsWith(`${AUTH_COOKIE}=`))
-
-      // The app gates on /api/auth/me since the httpOnly access cookie is not
-      // readable from page scripts. Authenticated exactly when the access token
-      // cookie is present; the Admin nav is derived from the role in the probe.
-      if (url.includes("/api/auth/me")) {
-        const tokenMatch = cookieStr
-          .split(";")
-          .map((c) => c.trim())
-          .find((c) => c.startsWith(`${AUTH_COOKIE}=`))
-        const token = tokenMatch ? decodeURIComponent(tokenMatch.slice(AUTH_COOKIE.length + 1)) : ""
-        const admin = token === ADMIN_TOKEN
-        return route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify(
-            hasToken
-              ? {
-                  authenticated: true,
-                  user: { id: "user-1", email: "test@nexus.ai", role: admin ? "admin" : "user" },
-                }
-              : { authenticated: false }
-          ),
-        })
-      }
-      // Sign-out clears the access cookie the same way the real route does.
-      if (url.includes("/api/auth/logout")) {
-        return route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          headers: {
-            "Set-Cookie": `${AUTH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`,
-          },
-          body: JSON.stringify({ message: "Logged out successfully" }),
-        })
+      const method = route.request().method()
+      const headers = route.request().headers()
+      let postData: Record<string, unknown> = {}
+      if (url.includes("/api/chat") || url.includes("/api/auth/login")) {
+        postData = route.request().postDataJSON?.() ?? {}
       }
       if (url.includes("/api/chat")) {
-        const body = route.request().postDataJSON?.() ?? {}
-        entry.capturedChatRequests.push(body)
+        entry.capturedChatRequests.push(postData)
       }
-      for (const h of entry.handlers) {
-        if (typeof h.pattern === "string" ? url.includes(h.pattern) : h.pattern.test(url)) {
-          return h.handler(route)
-        }
-      }
-      if (url.includes("/api/chat")) {
-        return route.fulfill(buildChatStream(CHAT_STREAM))
-      }
-      // Loading the active conversation's history is part of the app shell, not
-      // of what an individual spec asserts — every hydrate fetches it. Falling
-      // through to the 404 below made specs that never cared about history print
-      // "Failed to load conversation history: 404" in the console. That noise is
-      // worse than silence: it trains a reader to ignore the console, which is
-      // precisely where a genuine 404 would then be missed.
-      // Anchored to the exact detail path: a prefix match also swallows nested
-      // resources (`/plans`, `/messages`), and answering `{}` where the app expects
-      // an array breaks rendering in a way that looks like a broken sidebar.
-      if (route.request().method() === "GET" && /\/api\/conversations\/[^/?#]+$/.test(new URL(url).pathname)) {
-        return route.fulfill({ status: 200, contentType: "application/json", body: "{}" })
-      }
-      route.fulfill({
-        status: 404,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "unmocked" }),
-      })
+      const result = url.includes("/api/bootstrap")
+        ? bootstrap(url, headers)
+        : respond(url, method, headers, postData)
+      route.fulfill(result)
     })
   }
 

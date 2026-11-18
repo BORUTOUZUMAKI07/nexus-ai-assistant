@@ -18,7 +18,7 @@ import PlanHistory from "@/features/workspace/PlanHistory";
 import SavedArtifacts from "@/features/workspace/SavedArtifacts";
 import { CitationInspector } from "@/features/chat/CitationInspector";
 import { AuthModal } from "@/features/auth/AuthModal";
-import { Menu, Moon, Sun, Sliders } from "lucide-react";
+import { Menu, Moon, Sun, Sliders, PanelLeftClose, PanelLeftOpen, PanelRight } from "lucide-react";
 import { toast } from "sonner";
 import { CommandPalette } from "@/components/layout/CommandPalette";
 import { KeyboardShortcutsGuide } from "@/components/layout/KeyboardShortcuts";
@@ -42,10 +42,16 @@ import {
   PlanItem as APIPlanItem,
   Conversation,
   CurrentUser,
-  fetchCurrentUser,
+  UserSettings,
   fetchArchivedConversations,
 } from "@/lib/api";
 import { clearSession, SESSION_EXPIRED_EVENT } from "@/lib/auth";
+import {
+  bootstrapKeys,
+  bootstrapQueryOptions,
+  fetchBootstrap,
+} from "@/lib/bootstrap-query";
+import type { BootstrapResponse } from "@/lib/bootstrap-types";
 import { useTheme } from "@/lib/theme";
 import { createQueryClient } from "@/lib/query-client";
 import {
@@ -54,13 +60,43 @@ import {
   usePlans,
   useSettingsQuery,
   conversationKeys,
+  settingsKeys,
   artifactKeys,
   planKeys,
   type CachedArtifact,
 } from "@/lib/queries";
 import { useNexusChat, NexusMessage } from "@/hooks/useNexusChat";
+import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
+import { useSidebarLayout } from "@/lib/sidebar-layout";
 import { DEFAULT_MODEL_ID, MODELS, canonicalModelId } from "@/lib/models";
 import { resolveConversationMode } from "@/lib/chatMode";
+
+const SIDEBAR_DRAWER_ID = "mobile-nav-drawer";
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
+const BOOTSTRAP_BACKOFF_MS = [400, 1200, 3000, 6000, 10000];
+
+type FeedbackValue = "thumbs_up" | "thumbs_down";
+type FeedbackView = { feedback: FeedbackValue; status: "pending" | "committed" };
+
+const FEEDBACK_LABEL: Record<FeedbackValue, string> = {
+  thumbs_up: "Good response",
+  thumbs_down: "Bad response",
+};
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isUnavailableBootstrap(data: BootstrapResponse): boolean {
+  return "unavailable" in data && data.unavailable === true;
+}
 
 /**
  * The five secondary tabs are code-split.
@@ -186,7 +222,24 @@ function AppPageInner() {
   // One boolean drives both: the wrapper is always rendered (so the desktop
   // layout is unchanged) and only translates off-canvas under `md`.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarDrawerRef = useRef<HTMLDivElement>(null);
+  const sidebarTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const sidebarWasOpenRef = useRef(false);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  const openSidebar = useCallback(() => {
+    // The Menu button owns this ref directly. `document.activeElement` is not
+    // reliable here: a programmatic click (or a touch device) need not focus the
+    // trigger first, but focus must still return there when the drawer closes.
+    setSidebarOpen(true);
+  }, []);
+  // Feedback state is owned here because ChatArea deliberately owns no server
+  // writes. A click is optimistic for the duration of the POST, but the
+  // committed map is only touched on success — a failed request restores the
+  // previous entry instead of leaving a like/dislike that never reached the API.
+  const [feedbackViews, setFeedbackViews] = useState<Record<string, FeedbackView>>({});
+  const [failedFeedbackIds, setFailedFeedbackIds] = useState<Record<string, true>>({});
+  const committedFeedbackRef = useRef<Record<string, FeedbackValue>>({});
+  const feedbackRequestSeqRef = useRef<Record<string, number>>({});
   // The model the user (or the command palette) picked in this session, or null
   // while they have not picked one. `currentModel` below is *derived* from this
   // plus the saved default: it used to be a second piece of state written from
@@ -255,11 +308,55 @@ function AppPageInner() {
   const [activeCitation, setActiveCitation] = useState<CitationItem | null>(null);
 
   // ── Server state ──────────────────────────────────────────────────────────
-  // The conversation list, the active conversation's saved artifacts and its
-  // plan history are server state, so they live on the query client rather than
-  // in hand-rolled `useState` + fetch-on-mount effects. The chat stream is
-  // deliberately *not* here: `useNexusChat` remains the transcript's only writer.
-  const conversationsQuery = useConversations(mounted && !isAuthOpen);
+  // One aggregate request proves the session and hydrates the two caches the
+  // shell needs before it renders anything. The old /auth/me probe plus separate
+  // conversations/settings fetches stayed as routes for other callers, but the
+  // shell no longer uses them on mount: three round trips with three resolution
+  // times made "signed out" flash during a backend cold start.
+  const bootstrapQuery = useQuery({
+    ...bootstrapQueryOptions(),
+    enabled: mounted && !isAuthOpen,
+    queryFn: async (): Promise<BootstrapResponse> => {
+      for (let attempt = 0; attempt <= BOOTSTRAP_BACKOFF_MS.length; attempt += 1) {
+        const data = await fetchBootstrap();
+        if (!isUnavailableBootstrap(data)) {
+          if (data.authenticated) {
+            // Seed inside the queryFn: the domain caches are warm in the same
+            // tick the verdict resolves, before any gated query can mount.
+            if (!data.conversations.unavailable) {
+              queryClient.setQueryData<Conversation[]>(
+                conversationKeys.all,
+                data.conversations.items,
+              );
+            }
+            if (!data.settings.unavailable) {
+              queryClient.setQueryData<UserSettings>(
+                settingsKeys.settings,
+                data.settings,
+              );
+            }
+          }
+          return data;
+        }
+        if (attempt < BOOTSTRAP_BACKOFF_MS.length) {
+          await wait(BOOTSTRAP_BACKOFF_MS[attempt]);
+        }
+      }
+      // After the last backoff, keep the workspace up rather than reading an
+      // unreachable auth backend as a signed-out user.
+      return {
+        authenticated: false,
+        unavailable: true,
+        detail: "auth_unavailable",
+        upstream_status: 503,
+      };
+    },
+  });
+
+  const shellHydrated =
+    mounted && !isAuthOpen && bootstrapQuery.data?.authenticated === true;
+
+  const conversationsQuery = useConversations(shellHydrated);
   const conversations = useMemo(() => conversationsQuery.data ?? [], [conversationsQuery.data]);
 
   // Archived conversations are a second, opt-in read: the sidebar list only ever
@@ -270,11 +367,11 @@ function AppPageInner() {
   const archivedConversationsQuery = useQuery({
     queryKey: [...conversationKeys.all, "archived"],
     queryFn: fetchArchivedConversations,
-    enabled: mounted && !isAuthOpen && showArchivedList,
+    enabled: shellHydrated && showArchivedList,
   });
   const archivedConversations = archivedConversationsQuery.data ?? [];
 
-  const artifactsQuery = useArtifacts(activeConversationId, mounted && !isAuthOpen);
+  const artifactsQuery = useArtifacts(activeConversationId, shellHydrated);
   // Wrapped so the `?? []` fallback is referentially stable while data is
   // undefined; a fresh array each render would invalidate `allArtifacts` and
   // (more visibly) churn every consumer of it on no actual change.
@@ -293,14 +390,24 @@ function AppPageInner() {
     ...sessionArtifacts.filter((a) => !savedArtifactIds.has(a.id)),
   ];
 
-  const plansQuery = usePlans(activeConversationId, mounted && !isAuthOpen);
+  const plansQuery = usePlans(activeConversationId, shellHydrated);
   const planHistory = plansQuery.data ?? [];
 
   // The settings page saves a "Default model", and nothing read it: the picker
   // always started at DEFAULT_MODEL_ID, so changing the default changed nothing.
   // Apply it once, on hydration, and only while the user has not picked a model
   // themselves. A legacy stored slug is canonicalised to its router group.
-  const settingsQuery = useSettingsQuery(mounted && !isAuthOpen);
+  const settingsQuery = useSettingsQuery(shellHydrated);
+  // Dock side and collapsed state are a user preference, not server data. The
+  // key is scoped to the signed-in user so switching accounts cannot inherit
+  // another person's layout; see lib/sidebar-layout.ts for why this is local.
+  // Settings carries `user_id`, so it also covers a session whose /auth/me
+  // probe has not resolved yet.
+  const {
+    layout: sidebarLayout,
+    setDock: setSidebarDock,
+    toggleCollapsed: toggleSidebarCollapsed,
+  } = useSidebarLayout(settingsQuery.data?.user_id ?? currentUser?.id ?? null);
   // A deliberate choice this session always wins over the saved default, and the
   // default only exists once the settings query resolves — both are properties
   // of the current render, so this is a derivation. A legacy stored slug is
@@ -360,60 +467,46 @@ function AppPageInner() {
 
   const { clearMessages } = chat;
 
-  // Set mounted flag and detect real auth state on the client only.
-  // This prevents the SSR/client mismatch (hydration error) caused by
-  // reading cookies / localStorage during server-side rendering. The access
-  // cookie is httpOnly, so auth state is verified against the backend via
-  // /api/auth/me rather than read from document.cookie.
+  // Flip the hydration guard on the client only. Reading cookies or localStorage
+  // during the server render produced a hydration mismatch, so the first render
+  // is always the skeleton and the bootstrap query starts on the next tick.
   useEffect(() => {
-    // setState here runs on the first microtask after mount (inside the async
-    // body, matching the react-hooks/set-state-in-effect rule) and flips the
-    // hydration guard off once we know the real auth state.
     let cancelled = false;
     void (async () => {
-      setMounted(true);
-      // A probe that could not reach the backend is `unavailable`, not
-      // "signed out": treating it as the latter replaced a live session with
-      // the sign-in modal during a backend cold start (measured: /api/auth/me
-      // answered `authenticated: false` while the cookie was still valid, and
-      // the app stayed signed out until a manual reload). Retry instead, and
-      // if the backend never answers, keep the workspace rather than a login
-      // form the user cannot use anyway.
-      const backoffMs = [400, 1200, 3000, 6000, 10000];
-      for (let attempt = 0; !cancelled; attempt += 1) {
-        const probe = await fetchCurrentUser();
-        if (cancelled) return;
-        if (!probe.unavailable) {
-          setIsAuthOpen(!probe.authenticated);
-          setCurrentUser(probe.user ?? null);
-          return;
-        }
-        if (attempt >= backoffMs.length) {
-          setIsAuthOpen(false);
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, backoffMs[attempt]));
-      }
+      if (!cancelled) setMounted(true);
     })();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // `?` toggles the keyboard shortcuts guide. Esc closes it.
+  // The auth UI is a projection of the bootstrap verdict. `unavailable` is not
+  // a verdict at all — it is a backend cold start — so it deliberately leaves
+  // the current modal/window state alone while the query retries.
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "?") {
-        e.preventDefault();
-        setShowShortcuts((s) => !s);
+    const data = bootstrapQuery.data;
+    if (!data || isUnavailableBootstrap(data)) return;
+    // Defer to a microtask: React's compiler rule rejects synchronous setState
+    // in an effect body, and the verdict is already known here — no data has to
+    // be read after the deferral.
+    void (async () => {
+      if (data.authenticated) {
+        setCurrentUser(data.user ?? null);
+        setIsAuthOpen(false);
+        return;
       }
-      if (e.key === "Escape" && showShortcuts) {
-        setShowShortcuts(false);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showShortcuts]);
+      setCurrentUser(null);
+      setIsAuthOpen(true);
+    })();
+  }, [bootstrapQuery.data]);
+
+  // A cached `authenticated: true` is a liability the moment a refresh token is
+  // rejected: the next render would otherwise re-open the workspace over the
+  // sign-in gate. Remove it explicitly on every auth boundary; `queryClient.clear()`
+  // covers the domain caches in the same call sites.
+  const clearBootstrap = useCallback(() => {
+    queryClient.removeQueries({ queryKey: bootstrapKeys.all });
+  }, [queryClient]);
 
   // Listen for session expiry from api.ts. This is the only path into the auth
   // modal that happens mid-session (the mount path opens it with an empty
@@ -421,13 +514,15 @@ function AppPageInner() {
   useEffect(() => {
     const onSessionExpired = () => {
       queryClient.clear();
+      clearBootstrap();
+      setCurrentUser(null);
       setSessionArtifacts([]);
       setActiveArtifact(null);
       setIsAuthOpen(true);
     };
     window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
-  }, [queryClient]);
+  }, [clearBootstrap, queryClient]);
 
   // Conversation history is loaded by the chat hook, deliberately, and this loader
   // was removed rather than kept alongside it.
@@ -520,6 +615,7 @@ function AppPageInner() {
     // One clear drops the conversation, artifact and plan caches together; the
     // session list is separate state and is emptied explicitly.
     queryClient.clear();
+    clearBootstrap();
     setSessionArtifacts([]);
     setActiveConversationId("");
     chat.clearMessages();
@@ -740,9 +836,33 @@ function AppPageInner() {
     }
   };
 
-  const handleStop = () => {
+  const handleStop = useCallback(() => {
     chat.stop();
-  };
+  }, [chat]);
+
+  const toggleTheme = useCallback(() => {
+    setMode(mode === "light" ? "dark" : "light");
+  }, [mode, setMode]);
+  const toggleShortcuts = useCallback(() => setShowShortcuts((open) => !open), []);
+  const closeShortcuts = useCallback(() => setShowShortcuts(false), []);
+  // Escape has one owner at a time: an open dialog owns it, otherwise an
+  // in-flight generation does. The composer's Cmd/Ctrl+Enter stays local to the
+  // draft, so it is deliberately not part of this window-level hook.
+  useGlobalShortcuts({
+    onToggleHelp: toggleShortcuts,
+    onCloseHelp: closeShortcuts,
+    onToggleTheme: toggleTheme,
+    onStopGeneration: handleStop,
+    isGenerating: chat.isLoading,
+    helpOpen: showShortcuts,
+    overlaysOpen:
+      isAuthOpen ||
+      paletteOpen ||
+      comparisonOpen ||
+      activeArtifact !== null ||
+      activeCitation !== null ||
+      pendingPlan !== null,
+  });
 
   /**
    * Branch from a specific message.
@@ -1059,6 +1179,10 @@ function AppPageInner() {
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
       created_at: typeof m.createdAt === "string" ? m.createdAt : undefined,
       imageDataUrl: m.imageDataUrl,
+      // The history mapper already preserves these. Without the last hop here,
+      // a reload silently hid the cost pill and token chip on every old reply.
+      cost_usd: m.cost_usd,
+      total_tokens: m.total_tokens,
     };
   });
 
@@ -1069,14 +1193,117 @@ function AppPageInner() {
   // effect round-trip needed. The backend /api/v1/admin/* check is the real gate.
   const effectiveTab = activeTab === "admin" && !isAdmin ? "chat" : activeTab;
 
-  const handleFeedback = async (messageId: string, feedback: "thumbs_up" | "thumbs_down") => {
+  // The drawer slides in from whichever edge the sidebar is docked to, while
+  // `order` swaps the two desktop columns so the transcript stays on the
+  // reading side. Width follows the compact rail when the sidebar is collapsed.
+  const sidebarEdge = sidebarLayout.dock === "right" ? "right-0" : "left-0";
+  const sidebarOrder = sidebarLayout.dock === "right" ? "md:order-2" : "md:order-1";
+  const sidebarWidth = sidebarLayout.collapsed ? "w-16" : "w-72";
+  const sidebarClosedTransform = sidebarLayout.dock === "right" ? "translate-x-full" : "-translate-x-full";
+  const mainOrder = sidebarLayout.dock === "right" ? "md:order-1" : "md:order-2";
+
+  const handleFeedback = async (messageId: string, feedback: FeedbackValue) => {
     if (!activeConversationId) return;
+    const requestSeq = (feedbackRequestSeqRef.current[messageId] ?? 0) + 1;
+    feedbackRequestSeqRef.current[messageId] = requestSeq;
+    const toastId = toast.loading("Saving feedback…");
+    setFailedFeedbackIds((prev) => {
+      if (!prev[messageId]) return prev;
+      const next = { ...prev };
+      delete next[messageId];
+      return next;
+    });
+    setFeedbackViews((prev) => ({
+      ...prev,
+      [messageId]: { feedback, status: "pending" },
+    }));
+
     try {
       await sendMessageFeedback(activeConversationId, messageId, feedback);
-    } catch (err) {
-      console.warn("Feedback submission failed:", err);
+      if (feedbackRequestSeqRef.current[messageId] !== requestSeq) return;
+      committedFeedbackRef.current[messageId] = feedback;
+      setFeedbackViews((prev) => ({
+        ...prev,
+        [messageId]: { feedback, status: "committed" },
+      }));
+      toast.success("Feedback saved", { id: toastId });
+    } catch {
+      if (feedbackRequestSeqRef.current[messageId] !== requestSeq) return;
+      // Roll back to the last value that actually reached the server. A failed
+      // click must never leave a like/dislike that looks committed.
+      const committed = committedFeedbackRef.current[messageId];
+      setFeedbackViews((prev) => {
+        const next = { ...prev };
+        if (committed) {
+          next[messageId] = { feedback: committed, status: "committed" };
+        } else {
+          delete next[messageId];
+        }
+        return next;
+      });
+      setFailedFeedbackIds((prev) => ({ ...prev, [messageId]: true }));
+      toast.error("Could not save feedback. Please try again.", { id: toastId });
     }
   };
+
+  // Both header variants open the same panel, seeded with the turn the user is
+  // looking at. The mobile bar previously had no compare handle at all.
+  const openComparison = useCallback(() => {
+    const lastUser = [...chat.messages].reverse().find((m) => m.role === "user");
+    setComparisonQuestion(lastUser?.content ?? "");
+    setComparisonOpen(true);
+  }, [chat.messages]);
+
+  // The mobile drawer is the only modal on this page that cannot be portalled:
+  // the same node is a static desktop column, so moving it would duplicate the
+  // sidebar tree. It therefore gets manual focus management instead.
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const drawer = sidebarDrawerRef.current;
+    const focusable = drawer
+      ? Array.from(drawer.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+      : [];
+    (focusable[0] ?? drawer)?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSidebar();
+        return;
+      }
+      if (event.key !== "Tab" || !drawer) return;
+      const items = Array.from(
+        drawer.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
+      );
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!drawer.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [closeSidebar, sidebarOpen]);
+
+  useEffect(() => {
+    if (sidebarOpen) {
+      sidebarWasOpenRef.current = true;
+      return;
+    }
+    if (!sidebarWasOpenRef.current) return;
+    sidebarWasOpenRef.current = false;
+    const trigger = sidebarTriggerRef.current;
+    if (trigger?.isConnected) trigger.focus();
+  }, [sidebarOpen]);
 
   // The skeleton is part of the page rather than the route's `loading.tsx`:
   // a route-level boundary made Next serve a prerendered shell whose real UI
@@ -1085,25 +1312,31 @@ function AppPageInner() {
   if (!mounted) return <WorkspaceSkeleton />;
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-main)] text-[var(--text-primary)]">
+    <div className="flex h-dvh min-h-dvh w-full overflow-hidden bg-[var(--bg-main)] text-[var(--text-primary)]">
       {/* Mobile backdrop: only exists under `md`, and closes the drawer. */}
       {sidebarOpen && (
         <button
           type="button"
           aria-label="Close navigation"
           onClick={closeSidebar}
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          className="fixed inset-0 z-30 bg-[var(--overlay-scrim)] md:hidden"
         />
       )}
 
       {/* Sidebar Navigation. Fixed off-canvas below `md`, static column above it. */}
       <div
-        // `w-72` is load-bearing, not decorative: `-translate-x-full` resolves
-        // against this element's own width, and a fixed box with only `left-0`
+        id={SIDEBAR_DRAWER_ID}
+        ref={sidebarDrawerRef}
+        tabIndex={-1}
+        role={sidebarOpen ? "dialog" : undefined}
+        aria-modal={sidebarOpen ? "true" : undefined}
+        aria-label={sidebarOpen ? "Navigation" : undefined}
+        // The width is load-bearing, not decorative: `translate-x-full` resolves
+        // against this element's own width, and a fixed box with no edge or width
         // shrinks to zero — which makes 100% a translation of nothing and leaves
         // the drawer permanently on screen. The width matches the aside inside.
-        className={`fixed inset-y-0 left-0 z-40 w-72 transition-transform duration-200 ease-out md:static md:z-auto md:w-auto md:translate-x-0 ${
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        className={`fixed inset-y-0 z-40 ${sidebarEdge} ${sidebarWidth} ${sidebarOrder} transition-transform duration-200 ease-out md:static md:z-auto md:w-auto md:translate-x-0 ${
+          sidebarOpen ? "translate-x-0" : sidebarClosedTransform
         }`}
       >
       <Sidebar
@@ -1139,6 +1372,8 @@ function AppPageInner() {
         onSignOut={handleSignOut}
         showAdmin={isAdmin}
         onOpenCommandPalette={() => setPaletteOpen(true)}
+        dock={sidebarLayout.dock}
+        collapsed={sidebarLayout.collapsed}
       />
       </div>
 
@@ -1161,11 +1396,17 @@ function AppPageInner() {
           clearSession();
           setIsAuthOpen(false);
         }}
-        onSuccess={() => setIsAuthOpen(false)}
+        onSuccess={() => {
+          // The cached `authenticated: false` must not survive a successful
+          // in-app login; closing the gate re-enables the bootstrap query with
+          // no data, which forces a fresh verdict and fresh domain caches.
+          clearBootstrap();
+          setIsAuthOpen(false);
+        }}
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <main className={`flex-1 flex flex-col h-full overflow-hidden relative ${mainOrder}`}>
         {/* Desktop header: theme toggle + app title, hidden below md. */}
         <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-2.5 bg-[var(--bg-surface)] md:flex hidden">
           <div className="flex items-center gap-2">
@@ -1175,8 +1416,39 @@ function AppPageInner() {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={toggleSidebarCollapsed}
+              aria-label={sidebarLayout.collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-pressed={sidebarLayout.collapsed}
+              title={sidebarLayout.collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            >
+              {sidebarLayout.collapsed ? (
+                <PanelLeftOpen className="h-5 w-5" aria-hidden="true" />
+              ) : (
+                <PanelLeftClose className="h-5 w-5" aria-hidden="true" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSidebarDock(sidebarLayout.dock === "left" ? "right" : "left")}
+              aria-label={
+                sidebarLayout.dock === "left"
+                  ? "Dock sidebar on the right"
+                  : "Dock sidebar on the left"
+              }
+              title={
+                sidebarLayout.dock === "left"
+                  ? "Dock sidebar on the right"
+                  : "Dock sidebar on the left"
+              }
+              className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            >
+              <PanelRight className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
               aria-label="Toggle theme"
-              onClick={() => setMode(mode === "light" ? "dark" : "light")}
+              onClick={toggleTheme}
               className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors"
               title={mode === "light" ? "Switch to dark mode" : "Switch to light mode"}
             >
@@ -1192,17 +1464,7 @@ function AppPageInner() {
             <button
               type="button"
               aria-label="Compare models side-by-side"
-              onClick={() => {
-                // Seed the panel with the turn being discussed. Only the
-                // *open* flag used to be set, so `comparisonQuestion` stayed ""
-                // and both models were asked nothing -- they replied "what do
-                // you need?" to a panel whose question strip was blank.
-                const lastUser = [...chat.messages]
-                  .reverse()
-                  .find((m) => m.role === "user");
-                setComparisonQuestion(lastUser?.content ?? "");
-                setComparisonOpen(true);
-              }}
+              onClick={openComparison}
               className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors hidden sm:flex"
               title="Compare two models side-by-side"
             >
@@ -1214,19 +1476,31 @@ function AppPageInner() {
         {/* Mobile-only bar: without it the drawer has no handle on small screens. */}
         <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 md:hidden">
           <button
+            ref={sidebarTriggerRef}
             type="button"
             aria-label="Open navigation"
-            onClick={() => setSidebarOpen(true)}
+            aria-expanded={sidebarOpen}
+            aria-controls={SIDEBAR_DRAWER_ID}
+            onClick={openSidebar}
             className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)]"
           >
             <Menu className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Compare models side-by-side"
+            onClick={openComparison}
+            title="Compare two models side-by-side"
+            className="ml-auto rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors"
+          >
+            <Sliders className="h-5 w-5" aria-hidden="true" />
           </button>
           {/* Theme toggle on mobile bar */}
           <button
             type="button"
             aria-label="Toggle theme"
-            onClick={() => setMode(mode === "light" ? "dark" : "light")}
-            className="ml-auto rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors"
+            onClick={toggleTheme}
+            className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors"
             title={mode === "light" ? "Switch to dark mode" : "Switch to light mode"}
           >
             {mode === "light" ? (
@@ -1290,6 +1564,30 @@ function AppPageInner() {
                   planBusy={planBusy}
                 />
               )}
+              {/* Feedback is a page-owned server write. These notices make the
+                  optimistic state visible and give a failed POST a durable
+                  error after the optimistic entry has been rolled back. */}
+              {Object.entries(feedbackViews).map(([messageId, view]) => (
+                <div
+                  key={`${messageId}-feedback`}
+                  role="status"
+                  aria-live="polite"
+                  className="px-4 py-1 text-xs text-[var(--text-muted)]"
+                >
+                  {view.status === "pending"
+                    ? `Saving feedback: ${FEEDBACK_LABEL[view.feedback]}…`
+                    : `Feedback saved: ${FEEDBACK_LABEL[view.feedback]}`}
+                </div>
+              ))}
+              {Object.keys(failedFeedbackIds).map((messageId) => (
+                <div
+                  key={`${messageId}-feedback-error`}
+                  role="alert"
+                  className="px-4 py-1 text-xs text-[var(--status-danger)]"
+                >
+                  Feedback could not be saved. Please try again.
+                </div>
+              ))}
               <SavedArtifacts artifacts={allArtifacts} onOpen={handleOpenArtifact} />
               <PlanHistory plans={planHistory} />
               {/* Mobile bottom composer: fixed at bottom on small screens so

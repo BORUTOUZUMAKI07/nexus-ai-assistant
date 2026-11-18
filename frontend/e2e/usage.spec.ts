@@ -33,9 +33,9 @@ test.describe("Usage panel", () => {
 
     await expect(page.getByText("Token consumption and cost across your sessions.")).toBeVisible()
     await expect(page.getByText("Total tokens")).toBeVisible()
-    await expect(page.getByText("250,000")).toBeVisible()
+    await expect(page.getByText("250,000").first()).toBeVisible()
     await expect(page.getByText("Estimated cost")).toBeVisible()
-    await expect(page.getByText("$1.2500")).toBeVisible()
+    await expect(page.getByText("$1.2500").first()).toBeVisible()
     await expect(page.getByText("Avg latency")).toBeVisible()
     await expect(page.getByText("320ms")).toBeVisible()
     await expect(page.getByText("Requests")).toBeVisible()
@@ -57,9 +57,9 @@ test.describe("Usage panel", () => {
     await page.getByRole("button", { name: "Usage", exact: true }).click()
 
     await expect(page.getByText("Input tokens")).toBeVisible()
-    await expect(page.getByText("190,000")).toBeVisible()
+    await expect(page.getByText("190,000").first()).toBeVisible()
     await expect(page.getByText("Output tokens")).toBeVisible()
-    await expect(page.getByText("60,000")).toBeVisible()
+    await expect(page.getByText("60,000").first()).toBeVisible()
     await expect(page.getByText("Cached tokens")).toBeVisible()
   })
 
@@ -87,7 +87,7 @@ test.describe("Usage panel", () => {
     await page.getByRole("button", { name: "Usage", exact: true }).click()
 
     await expect(page.getByText("42", { exact: true })).toBeVisible()
-    await expect(page.getByText("$0.0000")).toBeVisible()
+    await expect(page.getByText("$0.0000").first()).toBeVisible()
     await expect(page.getByText("118ms")).toBeVisible()
   })
 })

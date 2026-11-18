@@ -156,7 +156,11 @@ test.describe("Knowledge & RAG", () => {
       buffer: Buffer.alloc(5 * 1024 * 1024, "a"),
     })
 
-    await expect(page.getByText(/big-report\.pdf" is 5\.0MB\. The limit is 4MB/)).toBeVisible()
+    // The message is intentionally shown both inline (role=alert) and in a
+    // toast; assert the inline copy specifically rather than a strict match.
+    await expect(
+      page.getByRole("alert").getByText(/big-report\.pdf" is 5\.0MB\. The limit is 4MB/)
+    ).toBeVisible()
     expect(uploads).toBe(0)
   })
 

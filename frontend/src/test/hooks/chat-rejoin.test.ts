@@ -31,6 +31,9 @@ const encoder = new TextEncoder()
 const REPLAY = '0:"the rest of "\n0:"the answer"\n'
   + `8:${JSON.stringify([{ type: "citation", data: { source: "docs", snippet: "s" } }])}\n`
 
+/** The terminal frame a completed BFF stream now adds after its last delta. */
+const TERMINAL = `8:${JSON.stringify([{ type: "done", run_id: RUN }])}\n`
+
 function seedStoredRun(runId: string = RUN) {
   window.localStorage.setItem(STORAGE_KEY, runId)
 }
@@ -277,7 +280,7 @@ describe("rejoin to a run already in flight", () => {
         new HttpResponse(
           new ReadableStream({
             start(controller) {
-              controller.enqueue(encoder.encode('0:"answer"'))
+              controller.enqueue(encoder.encode('0:"answer"\n' + TERMINAL))
               controller.close()
             },
           }),
@@ -318,8 +321,15 @@ describe("rejoin to a run already in flight", () => {
         new HttpResponse(
           new ReadableStream({
             start(controller) {
-              controller.enqueue(encoder.encode('0:"partial"'))
-              void gate.then(() => controller.close())
+              controller.enqueue(encoder.encode('0:"partial"\n'))
+              void gate.then(() => {
+                try {
+                  controller.enqueue(encoder.encode(TERMINAL))
+                  controller.close()
+                } catch {
+                  // A cancelled controller throws; the test has already moved on.
+                }
+              })
             },
           }),
           {

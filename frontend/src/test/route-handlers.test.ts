@@ -207,8 +207,22 @@ interface BackendCall {
  */
 const EXCEPTIONS: Record<
   string,
-  { backendPath?: string; backendPathByMethod?: Record<string, string>; directFetch?: boolean }
+  {
+    backendPath?: string;
+    /** Aggregate routes legitimately fan one browser call out to N backend calls. */
+    backendPaths?: string[];
+    backendPathByMethod?: Record<string, string>;
+    directFetch?: boolean;
+  }
 > = {
+  // Bootstrap is an aggregate: one `/api/bootstrap` request starts three
+  // backend calls in the same tick. The generic sweep normally assumes one
+  // path per route; here it must accept all three AND require each of them,
+  // so dropping a subsystem still fails. The dedicated bootstrap.test.ts
+  // pins the exact paths, the flat body and the parallel start.
+  "/api/bootstrap": {
+    backendPaths: ["/auth/me", "/conversations", "/settings"],
+  },
   // These need the raw response body (streaming, multipart, binary), so they
   // call fetch() directly instead of going through the proxy helpers.
   "/api/chat": { directFetch: true },
@@ -458,6 +472,12 @@ describe("every route forwards to the backend under the correct path", () => {
         EXCEPTIONS[route]?.backendPath ??
         expectedBackendPath(route)
 
+      // Aggregate routes keep their own expectation: every declared backend
+      // path must be reached, and no undeclared path may be called. This is not
+      // a relaxation of the one-path check -- it is stricter, because missing
+      // a declared path now fails too.
+      const aggregatePaths = EXCEPTIONS[route]?.backendPaths
+
       // Raw-fetch routes derive the backend path from the request body
       // (conversation id, thread id), so only helper-based relays have a
       // mechanically derivable path. Those are the ones that broke before.
@@ -472,12 +492,30 @@ describe("every route forwards to the backend under the correct path", () => {
             routeContext(route),
           ),
         )
-        const expected = expectedFor(method)
-        for (const c of calls) {
-          // Relays may append a query string they built from the request.
-          if (c.path.split("?")[0] !== expected) {
+        // Relays may append a query string they built from the request.
+        const seen = calls.map((c) => c.path.split("?")[0])
+
+        if (aggregatePaths) {
+          const missing = aggregatePaths.filter((path) => !seen.includes(path))
+          if (missing.length > 0) {
             problems.push(
-              `${route}: ${method} forwards to "${c.path}", backend expects "${expected}"`,
+              `${route}: ${method} never forwarded to ${missing.join(", ")}`,
+            )
+          }
+          const unexpected = seen.filter((path) => !aggregatePaths.includes(path))
+          for (const path of unexpected) {
+            problems.push(
+              `${route}: ${method} forwards to "${path}", expected one of ${aggregatePaths.join(", ")}`,
+            )
+          }
+          continue
+        }
+
+        const expected = expectedFor(method)
+        for (const path of seen) {
+          if (path !== expected) {
+            problems.push(
+              `${route}: ${method} forwards to "${path}", backend expects "${expected}"`,
             )
           }
         }

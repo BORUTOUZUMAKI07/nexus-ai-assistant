@@ -119,7 +119,15 @@ describe("GET /api/chat — rejoin to a run already in flight", () => {
         await GET(getReq(), {})
       )
       stub.restore()
-      const stub2 = stubBackend(sse)
+      // The terminal frame carries the ids from the upstream headers, so give
+      // the live stub the same run id the rejoin request supplies; otherwise
+      // the two streams differ for a reason unrelated to translation.
+      const stub2 = stubBackend(sse, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "X-Nexus-Run-Id": RUN,
+        },
+      })
       const live = await frames(
         await POST(
           new NextRequest("http://localhost/api/chat", {

@@ -318,6 +318,24 @@ export const mockPublicShare = {
   ],
 }
 
+/**
+ * MSW cannot see the real httpOnly cookies, so the aggregate bootstrap mock
+ * uses a jsdom-only marker to remember whether this test's login succeeded.
+ * Every page test already clears `document.cookie` before rendering, so the
+ * marker resets with the rest of the session state between tests.
+ */
+function setMockSession(signedIn: boolean) {
+  if (typeof document === "undefined") return
+  document.cookie = signedIn
+    ? "nexus_mock_session=1; path=/"
+    : "nexus_mock_session=; path=/; max-age=0"
+}
+
+function mockSessionSignedIn() {
+  return typeof document !== "undefined" &&
+    document.cookie.includes("nexus_mock_session=1")
+}
+
 export const handlers = [
   // ── Auth ────────────────────────────────────────────────────────────────
   http.post("/api/auth/login", async ({ request }) => {
@@ -341,6 +359,7 @@ export const handlers = [
     }
     // Mirrors the real /api/auth/login route handler, which echoes only a
     // boolean and keeps the tokens in httpOnly cookies server-side.
+    setMockSession(true)
     return HttpResponse.json({ ok: true })
   }),
 
@@ -393,15 +412,43 @@ export const handlers = [
     HttpResponse.json({ authenticated: false })
   ),
 
+  // Aggregate BFF bootstrap. One browser round trip carries the auth verdict,
+  // the first page of conversations and the user's settings. The shape is flat
+  // (not nested under resource names) because the future single-backend call
+  // will return exactly this object. Tests that need the signed-out or
+  // unavailable verdict override this handler with `server.use`.
+  // The literal path is intentional: api-parity.test.ts parses this file
+  // statically and needs a path it can match to the route on disk.
+  http.get("/api/bootstrap", () =>
+    HttpResponse.json(
+      mockSessionSignedIn()
+        ? {
+            authenticated: true as const,
+            user: mockUser,
+            conversations: {
+              items: mockConversations,
+              total: mockConversations.length,
+              page: 1,
+              size: 50,
+              next_cursor: null,
+              has_more: false,
+            },
+            settings: mockSettings,
+          }
+        : { authenticated: false as const }
+    )
+  ),
+
   // Health check: the BFF probes /api/v1/health on the backend. A mock keeps
   // api-parity green and lets the health route be exercised from components.
   http.get("/api/health", () =>
     HttpResponse.json({ status: "ok", service: "nexus-backend" })
   ),
 
-  http.post("/api/auth/logout", () =>
-    HttpResponse.json({ message: "Logged out successfully" })
-  ),
+  http.post("/api/auth/logout", () => {
+    setMockSession(false)
+    return HttpResponse.json({ message: "Logged out successfully" })
+  }),
 
   // ── Conversations ───────────────────────────────────────────────────────
   http.get("/api/conversations", () => HttpResponse.json(mockConversations)),
