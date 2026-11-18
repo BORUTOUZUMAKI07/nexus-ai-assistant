@@ -17,6 +17,12 @@ jobs:
       run:
         working-directory: backend
     steps:
+      - name: Attribution (scheduling attribution, not a gate)
+        # Records which trigger actually started the run: GitHub's scheduler
+        # has shown delayed/missing `schedule` events. Never gate on this value.
+        run: |
+          echo "entry_point: github_actions"
+          echo "trigger_event: ${{ github.event_name }}"
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
@@ -53,6 +59,10 @@ jobs:
       run:
         working-directory: frontend
     steps:
+      - name: Attribution (scheduling attribution, not a gate)
+        run: |
+          echo "entry_point: github_actions"
+          echo "trigger_event: ${{ github.event_name }}"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:

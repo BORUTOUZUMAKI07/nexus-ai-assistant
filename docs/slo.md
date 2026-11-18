@@ -30,6 +30,11 @@ must aggregate across instances in Prometheus (each instance carries a
 indexing freshness percentiles for the async 202 pattern, and per-tenant SLO
 breakdowns. These need the queue/DB exporters listed in §7.
 
+Per-hop (BFF and proposed background outbox) RED families, their bounded label
+budget and the reserved event-name list are specified in
+[observability-per-stage.md](observability-per-stage.md). That document is a
+contract only — no instrumentation is implemented by this slice.
+
 ## 2. Error budget policy
 
 - Each 30d SLO carries an explicit error budget.

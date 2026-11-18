@@ -169,3 +169,25 @@ calling `setup_logging()` sees zero OTLP handlers and concludes the feature is
 broken. `main.py` calls it at import, so the real app is fine. Under pytest,
 `tests/conftest.py` forces `NEW_RELIC_ENABLED=false` **before** the settings
 singleton is built, so the OTel surface is a strict no-op in the suite.
+
+## 6. If the New Relic UI is empty
+
+See the [New Relic empty-dashboard runbook](runbooks/new-relic-empty-dashboard.md).
+The verified position from this repository is narrow: the collector config
+points all three OTLP signals at `https://otlp.nr-data.net:4318` (US only) with
+`api-key: ${env:NEW_RELIC_LICENSE_KEY}`, upserts `service.name:
+nexus-ai-assistant`, and tail-samples 10% of healthy traces. **Exports present in
+collector logs is not proof of UI ingestion.** The reported entity GUID decodes
+to `8594352|EXT|SERVICE|-6144501427358398501` — an OpenTelemetry service entity,
+not an APM entity — so start with NRQL keyed on `service.name` and an entity
+lookup, not an APM view.
+
+Also documented there: `observability_stack_status()`
+(`backend/app/services/observability/viewer.py`) returns `live` from config
+alone (flag + package + endpoint string); it never probes the collector or New
+Relic, so it is not an ingestion check.
+
+For scheduling side effects on this pipeline, see
+[scheduled runs not firing](runbooks/scheduled-runs-not-firing.md): only the
+backend is warmed on cron; the collector is woken on demand, so a first batch
+after idle is expected to be dropped.

@@ -3,15 +3,27 @@ name: Keep Render warm
 on:
   schedule:
     # Render's free instances suspend after ~15 minutes idle. A five-minute
-    # heartbeat keeps both the API and the OTLP collector ready so the first
-    # user request does not pay a 50-60s cold start and telemetry is not lost.
+    # heartbeat keeps the user-facing backend ready so the first request does
+    # not pay ~50-60s of cold start (the BFF times out at ~55s).
+    #
+    # LOCKED DECISION: exactly ONE Free service is warmed on a schedule. Two
+    # always-on Free services need ~1,460 of the workspace's 750 monthly Free
+    # instance hours, after which Render suspends every Free service until the
+    # next month (render.yaml:150-157, docs/deployment-guide.md:293-301). The
+    # collector is therefore reachable only through the manual input below.
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      wake_collector:
+        description: "Incident-only: also wake the OTLP collector (uses extra Free hours)"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: render-keepalive
   # A cold start can outlast one five-minute interval. Cancelling the previous
-  # run exactly when it is about to finish waking Render left both services
+  # run exactly when it is about to finish waking Render left the service
   # asleep, so overlap must be allowed to complete.
   cancel-in-progress: false
 
@@ -25,11 +37,17 @@ jobs:
         # hard failure. Poll long enough for a real cold start instead.
         run: |
           set -uo pipefail
+          # Attribution only. `github.event_name` is recorded (schedule vs
+          # workflow_dispatch) but never used as a gate: the scheduler has been
+          # observed to report zero `schedule` events while manual runs worked.
+          echo "entry_point: github_actions"
+          echo "trigger_event: ${{ github.event_name }}"
           url="https://nexus-backend-owq5.onrender.com/health"
           expected="200"
           code="000"
           for attempt in $(seq 1 12); do
-            code=$(curl --silent --show-error --max-time 20 -o /dev/null -w '%{http_code}' "$url" || true)
+            code=$(curl --silent --show-error --max-time 20 -o /dev/null -w '%{http_code}' \
+              -H "X-Nexus-Keepalive-Probe: github_actions" "$url" || true)
             echo "backend attempt ${attempt}/12: HTTP ${code}"
             if [ "$code" = "$expected" ]; then
               echo "Backend awake (${code} from /health)"
@@ -43,6 +61,9 @@ jobs:
           exit 1
 
   collector:
+    # NOT on the cron. Woken only when an operator dispatches this workflow
+    # with wake_collector=true (e.g. while investigating missing telemetry).
+    if: ${{ inputs.wake_collector }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -51,11 +72,14 @@ jobs:
         # means Render has not finished starting it yet.
         run: |
           set -uo pipefail
+          echo "entry_point: github_actions"
+          echo "trigger_event: ${{ github.event_name }}"
           url="https://nexus-otel-collector.onrender.com/"
           expected="401"
           code="000"
           for attempt in $(seq 1 12); do
-            code=$(curl --silent --show-error --max-time 20 -o /dev/null -w '%{http_code}' "$url" || true)
+            code=$(curl --silent --show-error --max-time 20 -o /dev/null -w '%{http_code}' \
+              -H "X-Nexus-Keepalive-Probe: github_actions" "$url" || true)
             echo "collector attempt ${attempt}/12: HTTP ${code}"
             if [ "$code" = "$expected" ]; then
               echo "Collector awake (${code} Unauthorized from basic auth, as expected)"
