@@ -938,6 +938,9 @@ class LiteLLMService:
 
             # BYOK: use the user's key for this provider when they stored one.
             _stream_kwargs: dict[str, Any] = {"stream": True}
+            # stream_options reports provider-aggregated usage on the final
+            # chunk so astream can record real token counts (not chars/4).
+            _stream_kwargs["stream_options"] = {"include_usage": True}
             _user_key = get_byok_key(resolve_provider(_attempt_group))
             if _user_key:
                 _stream_kwargs["api_key"] = _user_key

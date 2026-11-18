@@ -7,6 +7,10 @@ Prometheus text format (v0.0.4). Guarded by an optional shared bearer token
 ``Authorization: Bearer <METRICS_TOKEN>``; when unset the endpoint is open for
 local/dev scraping (always configure the token in production — see
 docs/slo.md → alerting).
+
+In production the endpoint *always* requires a bearer token: an unset
+``METRICS_TOKEN`` is a hard 401 so internal latency/error histograms are never
+exposed unauthenticated on a public origin.
 """
 import secrets
 
@@ -33,6 +37,12 @@ def _authorized(request: Request) -> bool:
 @router.get("/metrics", include_in_schema=False)
 async def prometheus_metrics(request: Request) -> Response:
     """Expose the in-process metrics in Prometheus text exposition format."""
+    if settings.ENVIRONMENT == "production" and not settings.METRICS_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="METRICS_TOKEN must be configured in production",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     if not _authorized(request):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

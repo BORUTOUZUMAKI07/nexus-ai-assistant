@@ -15,8 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock ./
+# The OTLP exporter lives in the `observability` extra. Without it the app
+# boots but every New Relic trace/metric/log export fails at runtime with
+# `No module named 'opentelemetry.exporter'`.
 RUN pip install --upgrade pip setuptools wheel && \
-    pip install .
+    pip install ".[observability]"
 
 # Production runner stage
 FROM python:3.12-slim AS runner
