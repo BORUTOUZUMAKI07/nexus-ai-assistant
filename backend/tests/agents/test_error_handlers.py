@@ -22,7 +22,11 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from backend.app.agents.orchestrator.graph import _build_workflow, route_after_planner
+from backend.app.agents.orchestrator.graph import (
+    _build_workflow,
+    route_after_planner,
+    route_after_subagent,
+)
 from backend.app.agents.orchestrator.retry_policy import TIMEOUTS
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -35,17 +39,29 @@ class _State(TypedDict):
     mode: str
 
 
-def test_compiled_graph_attaches_a_native_error_handler_to_planner_only() -> None:
-    compiled = _build_workflow().compile()
-    planner = compiled.nodes["planner"]
+class _DispatchState(TypedDict):
+    subagent_outputs: dict
+    pending_tool_calls: list
+    reached: str
 
-    assert planner.error_handler_node, "planner has no native error handler"
-    assert compiled.nodes[planner.error_handler_node].is_error_handler
+
+#: The only nodes whose failure is survivable without inventing new evidence.
+#: Every other node either owns its own fallback or must fail loudly.
+_NATIVE_HANDLER_NODES = {"planner", "subagent_dispatcher"}
+
+
+def test_compiled_graph_attaches_native_error_handlers_only_where_intended() -> None:
+    compiled = _build_workflow().compile()
+
+    for name in _NATIVE_HANDLER_NODES:
+        spec = compiled.nodes[name]
+        assert spec.error_handler_node, f"{name} has no native error handler"
+        assert compiled.nodes[spec.error_handler_node].is_error_handler
 
     for name, spec in compiled.nodes.items():
         if spec.is_error_handler or name == "__start__":
             continue
-        assert name == "planner" or spec.error_handler_node is None, (
+        assert name in _NATIVE_HANDLER_NODES or spec.error_handler_node is None, (
             f"{name} unexpectedly has a node-level error handler"
         )
 
@@ -128,3 +144,74 @@ def test_handler_uses_the_real_route_on_the_updated_state() -> None:
         assert command.goto == expected
         assert command.goto == route_after_planner({**state, **command.update})
         assert command.goto != "tree_of_thoughts"
+
+
+async def test_failing_subagent_dispatcher_recovers_without_losing_pending_work() -> None:
+    from backend.app.agents.orchestrator.error_handlers import (
+        subagent_dispatcher_failure_fallback,
+    )
+
+    def boom(_: _DispatchState) -> dict:
+        raise RuntimeError("researcher provider unavailable")
+
+    def tool_node(state: _DispatchState) -> dict:
+        return {"reached": "tool_node"}
+
+    def synthesizer(state: _DispatchState) -> dict:
+        return {"reached": "synthesizer"}
+
+    workflow = StateGraph(_DispatchState)
+    workflow.add_node(
+        "subagent_dispatcher",
+        boom,
+        error_handler=subagent_dispatcher_failure_fallback,
+    )
+    workflow.add_node("tool_node", tool_node)
+    workflow.add_node("synthesizer", synthesizer)
+    workflow.add_edge(START, "subagent_dispatcher")
+    workflow.add_conditional_edges(
+        "subagent_dispatcher",
+        route_after_subagent,
+        {"tool_node": "tool_node", "synthesizer": "synthesizer"},
+    )
+    workflow.add_edge("tool_node", END)
+    workflow.add_edge("synthesizer", END)
+    graph = workflow.compile(checkpointer=InMemorySaver())
+
+    # A queued call from earlier in the turn must survive the failed dispatch:
+    # dropping it would silently skip work the user already paid for.
+    result = await graph.ainvoke(
+        {
+            "subagent_outputs": {"prior": {"status": "ok"}},
+            "pending_tool_calls": [{"name": "web_search", "arguments": {"query": "q"}}],
+            "reached": "",
+        },
+        config={"configurable": {"thread_id": "dispatcher-recovery"}},
+    )
+    assert result["subagent_outputs"] == {"prior": {"status": "ok"}}
+    assert result["pending_tool_calls"] == [
+        {"name": "web_search", "arguments": {"query": "q"}}
+    ]
+    assert result["reached"] == "tool_node"
+
+
+def test_dispatcher_handler_uses_the_real_route_on_the_updated_state() -> None:
+    from backend.app.agents.orchestrator.error_handlers import (
+        subagent_dispatcher_failure_fallback,
+    )
+    from langgraph.errors import NodeError
+
+    error = NodeError("subagent_dispatcher", RuntimeError("coder unavailable"))
+
+    for pending, expected in (([], "synthesizer"), ([{"name": "web_search"}], "tool_node")):
+        state = {
+            "subagent_outputs": {"prior": {"status": "ok"}},
+            "pending_tool_calls": pending,
+        }
+        command = subagent_dispatcher_failure_fallback(state, error)
+        assert command.update == {
+            "subagent_outputs": {"prior": {"status": "ok"}},
+            "pending_tool_calls": pending,
+        }
+        assert command.goto == expected
+        assert command.goto == route_after_subagent({**state, **command.update})

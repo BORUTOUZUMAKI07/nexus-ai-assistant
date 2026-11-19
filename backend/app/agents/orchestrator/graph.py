@@ -27,7 +27,10 @@ except ImportError:
     AsyncPostgresSaver = None
 
 from backend.app.agents.orchestrator.artifact_node import artifact_node
-from backend.app.agents.orchestrator.error_handlers import planner_failure_fallback
+from backend.app.agents.orchestrator.error_handlers import (
+    planner_failure_fallback,
+    subagent_dispatcher_failure_fallback,
+)
 from backend.app.agents.orchestrator.model_router import (
     EXECUTION_MODE_FULL,
     EXECUTION_MODE_SIMPLE_CHAT,
@@ -331,7 +334,15 @@ def _build_workflow() -> StateGraph:
     )
     _add(workflow, "tree_of_thoughts", tree_of_thoughts_node)
     _add(workflow, "orchestrator", orchestrator_node)
-    _add(workflow, "subagent_dispatcher", subagent_dispatcher_node)
+    # Researcher/coder have no outer exception boundary. A provider or scraper
+    # failure here used to kill the turn; continue with whatever state already
+    # holds instead. See error_handlers.py for the kept-state contract.
+    _add(
+        workflow,
+        "subagent_dispatcher",
+        subagent_dispatcher_node,
+        error_handler=subagent_dispatcher_failure_fallback,
+    )
     _add(workflow, "tool_node", tool_node)
     _add(workflow, "critic_grader", critic_grader_node)
     # NO_RETRY: this node owns the bounded critic loop, so a retry re-runs the
