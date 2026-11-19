@@ -104,6 +104,35 @@ describe("useNexusChat", () => {
     expect(result.current.messages[0].content).toBe("Hello!")
   })
 
+  it("batches token snapshots into painted frames instead of a React write per token", async () => {
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse(chatStreamBody(["Hel", "lo ", "from Nexus."]), {
+          headers: { "content-type": "text/plain" },
+        })
+      )
+    )
+    const raf = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1)
+    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {})
+
+    try {
+      const { result } = renderHook(() => useNexusChat())
+      await act(async () => {
+        await result.current.sendMessage("Hi")
+      })
+
+      // With a per-token write no frame is ever scheduled. With batching the
+      // hot path goes through RAF, and flush still lands the final snapshot
+      // even though the mocked frame callback never fires.
+      expect(raf).toHaveBeenCalled()
+      const assistant = result.current.messages.find((m) => m.role === "assistant")
+      expect(assistant?.content).toBe("Hello from Nexus.")
+    } finally {
+      raf.mockRestore()
+      vi.restoreAllMocks()
+    }
+  })
+
   it("treats a 409 as 'still streaming' instead of a failed turn", async () => {
     server.use(
       http.post("/api/chat", () =>

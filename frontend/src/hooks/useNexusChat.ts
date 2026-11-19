@@ -757,15 +757,15 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       };
 
       // One transcript write per painted frame, not per token frame. See
-      // `coalescePatches`: the patch carries the whole answer, so coalescing
-      // drops nothing, and `flush` below guarantees the last text lands even when
-      // the stream ends without a frame to paint it.
-      // Text deltas paint immediately (no RAF batching) so tokens stream as
-      // fast as the backend emits them. Annotation frames (tool calls,
-      // citations, HITL) are infrequent enough that immediate apply is fine.
+      // `coalescePatches`: every patch carries the whole answer, so dropping
+      // intermediate snapshots loses no text, and `flush` below guarantees the
+      // last one lands even when the stream ends between frames (or the tab is
+      // backgrounded and RAF never fires). Writing per token re-rendered the
+      // whole workspace and re-parsed the growing Markdown tens of times a
+      // second; one write per frame is visually indistinguishable to a reader.
       const assistantPatcher = coalescePatches((content, annos) =>
         patchMessage(assistantMsgId, content, annos)
-      , { immediate: true });
+      );
       const patchAssistant = assistantPatcher.patch;
 
       /**
