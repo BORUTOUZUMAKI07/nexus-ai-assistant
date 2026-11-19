@@ -13,6 +13,7 @@ verdicts come from a seeded registry snapshot (same technique as test_hooks).
 import uuid
 
 import pytest
+from backend.app.services.tools import tool_gateway as gateway_module
 from backend.app.services.tools.hook_registry import hook_registry
 from backend.app.services.tools.tool_gateway import tool_gateway
 
@@ -47,6 +48,22 @@ def _reset_registry():
 def _clean_registry():
     yield
     _reset_registry()
+
+
+@pytest.fixture(autouse=True)
+def _rate_limit_allows(monkeypatch):
+    """Pin the envelope tests to a working rate-limit counter.
+
+    These tests force every other external dependency (dispatch, hooks) with a
+    stub. Redis is not available in the unit environment, and the gateway now
+    denies a tool call when the counter is unreachable, so leaving it real
+    would test rate-limit availability instead of the envelope contract.
+    """
+
+    async def _allow(*_args, **_kwargs):
+        return True, 19
+
+    monkeypatch.setattr(gateway_module.redis_service, "check_rate_limit", _allow)
 
 
 async def _fake_dispatch(tool_name: str, arguments: dict) -> dict:

@@ -746,7 +746,7 @@ class _ArqFlags(BaseModel):
     A typed model, not a dict of raw ``bool()`` coercions: ``bool("false")`` is
     ``True``, so an uncooperative model that answers ``"safety_flag": "false"``
     would flip the guard on. Pydantic parses the string to ``False`` and rejects
-    an unusable value (which fails open, below) instead of guessing.
+    an unusable value (which fails closed, below) instead of guessing.
     """
 
     needs_tool: bool = False
@@ -755,14 +755,21 @@ class _ArqFlags(BaseModel):
     ambiguous: bool = False
 
 
+# ARQ is the guard that decides whether a turn may use tools. If the check
+# itself fails we cannot know whether the request was harmful, so treat it as
+# flagged: the router will answer directly with no tools rather than dispatch
+# an unchecked web/code tool.
+_ARQ_FAIL_CLOSED_FLAGS: dict[str, bool] = {
+    "needs_tool": False,
+    "safety_flag": True,
+    "recency_needed": False,
+    "ambiguous": False,
+}
+
+
 async def _run_arq(query: str) -> dict[str, bool]:
-    """Runs ARQ constraint check. Fails open (all False) on any parse error."""
-    default: dict[str, bool] = {
-        "needs_tool": False,
-        "safety_flag": False,
-        "recency_needed": False,
-        "ambiguous": False,
-    }
+    """Runs ARQ constraint check. Fails closed (safety flag on) on any error."""
+    default: dict[str, bool] = dict(_ARQ_FAIL_CLOSED_FLAGS)
     try:
         raw = await ai_client.completion(
             messages=[{"role": "user", "content": _ARQ_PROMPT_TEMPLATE.format(query=query[:800])}],
@@ -780,7 +787,7 @@ async def _run_arq(query: str) -> dict[str, bool]:
             raise ValueError("ARQ reply was not a valid JSON object")
         return flags.model_dump()
     except Exception as exc:
-        logger.warning("arq_constraint_check_failed_open", error=str(exc))
+        logger.warning("arq_constraint_check_failed_closed", error=str(exc))
         return default
 
 
@@ -853,7 +860,8 @@ async def orchestrator_node(state: AgentState) -> dict[str, Any]:
         # check would leave those un-narrowed -- the following `.get` then runs on
         # a non-dict and the "fail safe to no tools" path becomes a crash.
         if isinstance(arq_flags, BaseException):
-            arq_flags = {"needs_tool": False, "safety_flag": False, "recency_needed": False, "ambiguous": False}
+            logger.warning("arq_check_failed_closed", error=str(arq_flags))
+            arq_flags = dict(_ARQ_FAIL_CLOSED_FLAGS)
 
         logger.info(
             "orchestrator_route",
@@ -866,7 +874,9 @@ async def orchestrator_node(state: AgentState) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("orchestrator_route_failed_defaulting_to_answer", error=str(exc))
         action = "ANSWER"
-        arq_flags = {"needs_tool": False, "safety_flag": False, "recency_needed": False, "ambiguous": False}
+        # No routing decision and no ARQ result: never grant tools we could not vet.
+        logger.warning("arq_check_failed_closed", error=str(exc))
+        arq_flags = dict(_ARQ_FAIL_CLOSED_FLAGS)
 
     # ARQ upgrade: if safety flag raised, short-circuit with an ANSWER path
     # so no external tools are called on potentially harmful requests.

@@ -78,13 +78,22 @@ class ToolGateway:
     def _load_permissions(self) -> dict[str, Any]:
         try:
             with open(self.permissions_config_path, encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
+                config = yaml.safe_load(f) or {}
         except Exception as exc:
-            logger.warning("failed_to_load_permissions_yaml_using_defaults", error_type=type(exc).__name__)
-            return {
-                "automatic": ["web_search", "web_scrape", "calculator"],
-                "approval_required": ["execute_python", "file_write", "terminal_command"],
-            }
+            logger.warning(
+                "permissions_config_load_failed_fail_closed",
+                error_type=type(exc).__name__,
+                path=self.permissions_config_path,
+            )
+            return {}
+        if not isinstance(config, dict):
+            logger.warning(
+                "permissions_config_load_failed_fail_closed",
+                error_type=type(config).__name__,
+                path=self.permissions_config_path,
+            )
+            return {}
+        return config
 
     def validate_poka_yoke(self, tool_name: str, arguments: dict[str, Any]) -> None:
         """
@@ -227,14 +236,22 @@ class ToolGateway:
             logger.info("tool_hook_log", tool_name=tool_name, **entry)
 
         # 3. Rate Limit Check (20 tool calls per minute per user)
-        # Fail-open when Redis is unavailable: rate limiting degrades gracefully
-        # instead of crashing the request, since Redis is not core to execution.
+        # A failed check is NOT permission to run an unlimited number of tools.
+        # The counter is the only thing standing between a caller and unbounded
+        # external side effects, so an outage denies the call (callers turn this
+        # into a tool error / failed tool-call record rather than a 500).
         rate_key = f"tool:{user_id}"
         try:
             allowed, _ = await redis_service.check_rate_limit(rate_key, limit=20, window_seconds=60)
         except Exception as exc:
-            logger.warning("redis_rate_limit_skipped_redis_unavailable", error_type=type(exc).__name__)
-            allowed = True
+            logger.warning(
+                "redis_rate_limit_unavailable_denying_tool",
+                error_type=type(exc).__name__,
+                tool_name=tool_name,
+            )
+            raise ToolExecutionError(
+                "Tool execution is temporarily unavailable: rate limit check failed."
+            ) from exc
         if not allowed:
             raise ToolExecutionError("Tool execution rate limit exceeded. Please wait a minute.")
 
