@@ -181,7 +181,7 @@ def _safety_short_circuited(state: AgentState) -> bool:
 
 def route_after_orchestrator(
     state: AgentState,
-) -> Literal["subagent_dispatcher", "tool_node", "critic_grader", "synthesizer"]:
+) -> Literal["subagent_dispatcher", "tool_node", "critic_grader"]:
     """
     Conditional routing — decides next node after orchestrator.
     Priority: safety short-circuit > subagent dispatch > tool calls > RAG
@@ -355,7 +355,6 @@ def _build_workflow() -> StateGraph:
             "subagent_dispatcher": "subagent_dispatcher",
             "tool_node": "tool_node",
             "critic_grader": "critic_grader",
-            "synthesizer": "synthesizer",
         },
     )
     workflow.add_conditional_edges(
