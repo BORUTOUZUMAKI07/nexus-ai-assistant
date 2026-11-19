@@ -592,6 +592,14 @@ async def iter_graph_frames(
         input=graph_input,
         config=config,
         version="v2",
+        # LangGraph's default is "async": the checkpoint write is started but
+        # not awaited before the next node runs. This app reads checkpoints back
+        # from *other requests* -- HITL resume calls aget_state() to find the
+        # parked interrupt, and a rejoin reads the run a previous request made.
+        # "sync" commits each checkpoint before continuing, which is the mode
+        # the official docs require for crash-safe side effects. The cost is a
+        # synchronous DB write per step; correctness wins here.
+        durability="sync",
         # Custom streams are opt-in and must be requested in STRING form. This
         # is what delivers the synthesizer's progressive `text_delta` frames to
         # the client; without it those writes are silently dropped. The list

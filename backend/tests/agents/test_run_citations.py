@@ -384,9 +384,7 @@ class _StreamingGraph:
         self.fail_after = fail_after
         self.state_reads = 0
 
-    async def astream_events(
-        self, input: Any, config: Any = None, version: Any = None, stream_mode: Any = None
-    ):
+    async def astream_events(self, input: Any, config: Any = None, **kwargs: Any):
         for i, event in enumerate(self.events):
             if self.fail_after is not None and i >= self.fail_after:
                 raise RuntimeError("the model gave up")

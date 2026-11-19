@@ -635,10 +635,8 @@ class FakeGraph:
         self.events = events
         self.seen: list[dict] = []
 
-    async def astream_events(self, input, config=None, version=None, stream_mode=None):
-        self.seen.append(
-            {"input": input, "config": config, "version": version, "stream_mode": stream_mode}
-        )
+    async def astream_events(self, input, config=None, **kwargs):
+        self.seen.append({"input": input, "config": config, **kwargs})
         for event in self.events:
             yield event
 

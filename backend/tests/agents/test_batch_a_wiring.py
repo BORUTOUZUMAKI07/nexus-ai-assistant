@@ -330,7 +330,7 @@ async def test_stream_route_passes_compiled_prompt_and_skills(monkeypatch):
     captured: dict = {}
 
     class FakeGraph:
-        def astream_events(self, input, config=None, version=None, stream_mode=None):
+        def astream_events(self, input, config=None, **kwargs):
             captured.update(input)
             return _aiter([{"event": "on_chain_end", "data": {"output": {"messages": []}}}])
 
@@ -420,7 +420,7 @@ async def test_stream_route_survives_prompt_compile_failure(monkeypatch):
     captured: dict = {}
 
     class FakeGraph:
-        def astream_events(self, input, config=None, version=None, stream_mode=None):
+        def astream_events(self, input, config=None, **kwargs):
             captured.update(input)
             return _aiter([{"event": "on_chain_end", "data": {"output": {"messages": []}}}])
 
@@ -520,7 +520,7 @@ async def test_stream_route_runs_the_executor_through_its_own_session_factory(mo
     from httpx import ASGITransport, AsyncClient
 
     class FakeGraph:
-        def astream_events(self, input, config=None, version=None, stream_mode=None):
+        def astream_events(self, input, config=None, **kwargs):
             return _aiter([{"event": "on_chain_end", "data": {"output": {"messages": []}}}])
 
         async def aget_state(self, config):
@@ -603,7 +603,7 @@ async def test_stream_route_adopts_a_reused_user_turn_instead_of_appending(
     calls: dict[str, list] = {"reused": [], "added": []}
 
     class FakeGraph:
-        def astream_events(self, input, config=None, version=None, stream_mode=None):
+        def astream_events(self, input, config=None, **kwargs):
             return _aiter([{"event": "on_chain_end", "data": {"output": {"messages": []}}}])
 
         async def aget_state(self, config):
@@ -692,7 +692,7 @@ async def test_stream_route_surfaces_a_rejected_reuse_instead_of_appending(
     from httpx import ASGITransport, AsyncClient
 
     class FakeGraph:
-        def astream_events(self, input, config=None, version=None, stream_mode=None):
+        def astream_events(self, input, config=None, **kwargs):
             return _aiter([])
 
         async def aget_state(self, config):
