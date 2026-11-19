@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import structlog
 from backend.app.core.config import settings
+from backend.app.services.observability.fallbacks import count_fallback
 from backend.app.services.rag.base import mark_requires_scraping
 from backend.app.services.tools.content_shape import (
     MIN_USEFUL_CHARS,
@@ -168,6 +169,7 @@ class WebSearchService:
                     return results
             except Exception as exc:
                 logger.warning("tavily_search_failed_falling_back", error_type=type(exc).__name__)
+                count_fallback("web_search:tavily_to_firecrawl")
 
         # 2. Secondary: Firecrawl Native Search API
         if self.firecrawl_key and not self.firecrawl_key.startswith("fc_placeholder"):
@@ -178,6 +180,7 @@ class WebSearchService:
                     return results
             except Exception as exc:
                 logger.warning("firecrawl_search_failed_falling_back_to_ddg", error_type=type(exc).__name__)
+                count_fallback("web_search:firecrawl_to_ddg")
 
         # 3. Resilient Fallback: DuckDuckGo free search
         try:
@@ -187,6 +190,7 @@ class WebSearchService:
                 return results
         except Exception as exc:
             logger.warning("duckduckgo_search_failed", error_type=type(exc).__name__)
+            count_fallback("web_search:ddg_failed")
 
         return []
 

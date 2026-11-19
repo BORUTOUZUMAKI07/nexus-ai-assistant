@@ -21,6 +21,7 @@ from typing import Any
 import structlog
 from backend.app.core.config import settings
 from backend.app.infrastructure.cache.redis_client import redis_service
+from backend.app.services.observability.fallbacks import count_fallback
 
 logger = structlog.get_logger(__name__)
 
@@ -75,6 +76,7 @@ class ResponseCache:
             return payload
         except Exception as exc:
             logger.warning("response_cache_read_failed_fail_open", error=str(exc))
+            count_fallback("response_cache_read")
             return None
 
     async def set(
@@ -111,6 +113,7 @@ class ResponseCache:
             )
         except Exception as exc:
             logger.warning("response_cache_write_failed_fail_open", error=str(exc))
+            count_fallback("response_cache_write")
 
 
 response_cache = ResponseCache()

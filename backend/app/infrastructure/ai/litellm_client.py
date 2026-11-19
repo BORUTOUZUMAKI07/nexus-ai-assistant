@@ -11,6 +11,7 @@ from backend.app.core.spend import charge_tokens, record_provider_usage
 from backend.app.infrastructure.resilience.guards import CircuitBreaker, InFlightLimiter
 from backend.app.services.llm.byok import get_byok_key
 from backend.app.services.llm.text_cleanup import strip_model_artifacts
+from backend.app.services.observability.fallbacks import count_fallback
 from litellm import Router, completion_cost
 
 # Configure litellm global settings
@@ -23,6 +24,18 @@ litellm.set_verbose = False
 # would otherwise spam this print 4x at startup even though registration
 # succeeds. Only gates debug prints — never exceptions.
 litellm.suppress_debug_info = True
+
+
+def _record_provider_fallback(group: str, resolved_name: str, resolved_group: str) -> None:
+    """Log and count an answer that came from a different provider group."""
+    logger.warning(
+        "llm_provider_fallback",
+        model=group,
+        resolved=resolved_name,
+        resolved_group=resolved_group,
+    )
+    count_fallback("llm_provider_fallback")
+
 
 # ── Redis cache for LiteLLM completions/embeddings ──────────────────────────
 # Repeat completions and embeddings hit Redis instead of the provider, saving
@@ -877,12 +890,7 @@ class LiteLLMService:
         _resolved_name = getattr(response, "model", "") or ""
         _resolved_group = resolve_model_group(_resolved_name) if _resolved_name else ""
         if _resolved_group in _GROUP_NAMES and _resolved_group != group:
-            logger.warning(
-                "llm_provider_fallback",
-                model=group,
-                resolved=_resolved_name,
-                resolved_group=_resolved_group,
-            )
+            _record_provider_fallback(group, _resolved_name, _resolved_group)
 
         logger.info(
             "llm_completion_ok",
@@ -1034,12 +1042,7 @@ class LiteLLMService:
                 resolve_model_group(_resolved_name) if _resolved_name else ""
             )
             if _resolved_group in _GROUP_NAMES and _resolved_group != group:
-                logger.warning(
-                    "llm_provider_fallback",
-                    model=group,
-                    resolved=_resolved_name,
-                    resolved_group=_resolved_group,
-                )
+                _record_provider_fallback(group, _resolved_name, _resolved_group)
             _last_resolved_model.set(_resolved_name)
         except Exception as exc:
             await self._breaker.record_failure(group)

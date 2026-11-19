@@ -19,6 +19,7 @@ from uuid import UUID
 
 import structlog
 from backend.app.core.config import settings
+from backend.app.services.observability.fallbacks import count_fallback
 
 try:
     from mem0 import AsyncMemory, AsyncMemoryClient
@@ -162,6 +163,7 @@ class LongTermMemoryService:
             return None
         except Exception as exc:
             logger.warning("mem0_manual_add_failed", user_id=uid, error=str(exc))
+            count_fallback("mem0_manual_add")
             return None
 
     async def add_from_conversation(
@@ -210,6 +212,7 @@ class LongTermMemoryService:
 
         except Exception as exc:
             logger.warning("mem0_add_failed", user_id=uid, error=str(exc))
+            count_fallback("mem0_add")
             return []
 
     async def search(
@@ -246,6 +249,7 @@ class LongTermMemoryService:
 
         except Exception as exc:
             logger.warning("mem0_search_failed", user_id=uid, error=str(exc))
+            count_fallback("mem0_search")
             return []
 
     async def get_all(
@@ -363,6 +367,7 @@ class LongTermMemoryService:
                 ]
         except Exception as exc:
             logger.warning("memory_sql_fallback_failed", user_id=str(user_id), error=str(exc))
+            count_fallback("mem0_sql_fallback")
             return []
 
     async def build_memory_context_block_with_ids(

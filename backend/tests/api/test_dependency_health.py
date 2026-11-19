@@ -159,6 +159,14 @@ async def test_collect_marks_degraded_when_a_probe_fails(monkeypatch):
     assert result["services"]["redis"]["status"] == "ok"
 
 
+def test_existing_redis_fail_open_counter_is_surfaced(monkeypatch):
+    counters = MetricsCollector()
+    counters.increment("redis_fail_open")
+    monkeypatch.setattr(deps, "metrics_collector", counters)
+
+    assert deps._fallback_counters() == {"redis_fail_open": 1}
+
+
 @pytest.mark.asyncio
 async def test_timed_probe_reports_timeout_instead_of_hanging():
     async def slow():

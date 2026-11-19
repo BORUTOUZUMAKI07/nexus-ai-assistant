@@ -154,7 +154,12 @@ def _email_status() -> dict[str, Any]:
 
 def _fallback_counters() -> dict[str, int]:
     counters = metrics_collector.get_summary().get("counters", {})
-    return {key: value for key, value in sorted(counters.items()) if key.startswith("dependency_fallback:")}
+    visible = {"redis_fail_open"}  # canonical counter already emitted by the rate limiter
+    return {
+        key: value
+        for key, value in sorted(counters.items())
+        if key.startswith("dependency_fallback:") or key in visible
+    }
 
 
 async def _collect() -> dict[str, Any]:

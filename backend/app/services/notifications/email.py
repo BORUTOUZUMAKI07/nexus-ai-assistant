@@ -20,6 +20,7 @@ from smtplib import SMTP, SMTP_SSL, SMTPAuthenticationError, SMTPException
 import httpx
 import structlog
 from backend.app.core.config import settings
+from backend.app.services.observability.fallbacks import count_fallback
 
 logger = structlog.get_logger(__name__)
 
@@ -61,6 +62,7 @@ class EmailService:
             channel="dev",
             note="Neither RESEND_API_KEY nor SMTP credentials configured.",
         )
+        count_fallback("email_dev_sink")
         return {
             "sent": False,
             "channel": "dev",
@@ -89,6 +91,7 @@ class EmailService:
             # Never surface the provider body: SMTP/REST error text names hosts
             # and internals. Logged above, generic message returned.
             logger.warning("email_resend_failed", status_code=resp.status_code)
+            count_fallback("email_resend")
             return {
                 "sent": False,
                 "channel": "failed",
@@ -96,6 +99,7 @@ class EmailService:
             }
         except Exception as exc:
             logger.warning("email_resend_error", error=type(exc).__name__)
+            count_fallback("email_resend")
             return {
                 "sent": False,
                 "channel": "failed",
@@ -126,6 +130,7 @@ class EmailService:
             return {"sent": True, "channel": "smtp"}
         except (SMTPAuthenticationError, SMTPException, OSError) as exc:
             logger.warning("email_smtp_failed", error=type(exc).__name__)
+            count_fallback("email_smtp")
             return {
                 "sent": False,
                 "channel": "failed",
