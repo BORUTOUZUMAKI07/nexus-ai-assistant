@@ -34,6 +34,7 @@ from backend.app.infrastructure.ai.litellm_client import (
 )
 from backend.app.services.confidence.action import apply_confidence_action
 from backend.app.services.conversations.context import context_compiler
+from backend.app.services.evaluation.guardrail_service import guardrail_service
 from backend.app.services.evidence.action import apply_evidence_action
 from backend.app.services.llm.structured_output import (
     structured_service,  # noqa: F401  (tests monkeypatch nodes.structured_service)
@@ -1845,16 +1846,12 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
                 "this question."
             )
 
-    # â”€â”€ Guardrail on the final draft (input guardrail parity on output) â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    from backend.app.services.evaluation.guardrail_service import (
-        guardrail_service as gs,
-    )
-
-    try:
-        sanitized_draft, _pii = gs.redact_pii(response_text)
-        response_text = sanitized_draft
-    except Exception as exc:
-        logger.warning("output_guardrail_skipped", error=str(exc))
+    # ── Guardrail on the final draft (input guardrail parity on output) ────────
+    # Every response path shares this primitive -- the synthesizer, the sync
+    # /messages endpoint and its SSE stream. Keeping the redaction inline here
+    # let the alternate endpoints ship raw model text; sanitize_output is
+    # fail-open, so a broken detector still cannot cost the turn its answer.
+    response_text = guardrail_service.sanitize_output(response_text).text
 
     # â”€â”€ Grounding verification via the Evidence Gate against used sources â”€â”€â”€â”€â”€â”€â”€
     evidence_gate_result = {"passed_gate": False, "confidence_score": 0.0, "citations": [], "reason": ""}

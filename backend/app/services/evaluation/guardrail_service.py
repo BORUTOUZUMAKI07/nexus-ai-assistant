@@ -3,8 +3,11 @@ Guardrails and Moderation Service.
 Implements PII redaction, prompt injection detection,
 and input/output content filtering.
 """
+from __future__ import annotations
+
 import re
 import unicodedata
+from dataclasses import dataclass
 
 import structlog
 from backend.app.core.exceptions import ValidationError
@@ -246,6 +249,23 @@ class GuardrailService:
 
         return redacted, stats
 
+    def sanitize_output(self, text: str) -> OutputGuardrailResult:
+        """Redact PII from model text before it is shown, stored or cached.
+
+        Every response path must go through this method -- the main graph
+        synthesizer and the alternate ``/messages`` sync and SSE endpoints
+        previously disagreed about whether output was guardrailed at all. Like
+        every other guardrail in this service it fails open: a broken detector
+        must not take down a turn that already has an answer.
+        """
+        raw = text or ""
+        try:
+            redacted, counts = self.redact_pii(raw)
+            return OutputGuardrailResult(text=redacted, pii_counts=counts)
+        except Exception as exc:
+            logger.warning("output_guardrail_failed_open", error=str(exc))
+            return OutputGuardrailResult(text=raw, pii_counts={})
+
     def validate_input(self, text: str) -> str:
         """
         Complete input guardrail check. Returns sanitized text or raises ValidationError.
@@ -256,6 +276,73 @@ class GuardrailService:
 
         sanitized, _ = self.redact_pii(text)
         return sanitized
+
+
+@dataclass(frozen=True)
+class OutputGuardrailResult:
+    """Sanitised output plus the PII classes that were found in it."""
+
+    text: str
+    pii_counts: dict[str, int]
+
+
+class StreamingOutputSanitizer:
+    """Redact PII across token boundaries without leaking partial matches.
+
+    A token stream cannot be redacted one frame at a time: ``alice@`` and
+    ``example.com`` are harmless in isolation but together are an address that
+    must never reach the client. This keeps a bounded tail of text that could
+    still become part of a match, and redacts each *safe* prefix before it is
+    emitted. ``finish()`` flushes the tail, so the concatenation of emitted
+    frames equals :meth:`GuardrailService.sanitize_output` on the full text.
+
+    The hold is two rules together: at most ``hold`` characters back from the
+    end (covers PII with internal spaces, e.g. US phone numbers and card
+    groups), and back to the last whitespace (covers arbitrarily long emails,
+    which are a single token). A match straddling the cut moves the cut back to
+    its start.
+    """
+
+    def __init__(self, hold: int = 32) -> None:
+        self._hold = hold
+        self._pending = ""
+        self._emitted = ""
+
+    def feed(self, chunk: str) -> str:
+        """Append a provider token; return the portion that is safe to emit."""
+        self._pending += chunk or ""
+        boundary = self._safe_boundary(self._pending)
+        prefix, self._pending = self._pending[:boundary], self._pending[boundary:]
+        redacted = guardrail_service.sanitize_output(prefix).text
+        self._emitted += redacted
+        return redacted
+
+    def finish(self) -> str:
+        """Flush the held tail. Must be called once the provider stream ends."""
+        redacted = guardrail_service.sanitize_output(self._pending).text
+        self._pending = ""
+        self._emitted += redacted
+        return redacted
+
+    @property
+    def text(self) -> str:
+        """Everything sanitised so far, including the still-held tail."""
+        return self._emitted + guardrail_service.sanitize_output(self._pending).text
+
+    def _safe_boundary(self, text: str) -> int:
+        limit = max(0, len(text) - self._hold)
+        # End on a complete token: an email has no whitespace, so its address
+        # cannot be known until whitespace (or the end of the stream) follows.
+        boundaries = list(re.finditer(r"\s+", text[:limit]))
+        boundary = boundaries[-1].end() if boundaries else 0
+
+        # A PII value with internal whitespace can straddle that cut. Never
+        # emit half of one: hold from its start instead.
+        for pattern in PII_PATTERNS.values():
+            for match in re.finditer(pattern, text):
+                if match.start() < boundary < match.end():
+                    boundary = min(boundary, match.start())
+        return boundary
 
 
 guardrail_service = GuardrailService()

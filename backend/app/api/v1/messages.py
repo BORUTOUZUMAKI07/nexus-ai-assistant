@@ -35,7 +35,10 @@ from backend.app.infrastructure.ai.litellm_client import (
 from backend.app.infrastructure.cache.response_cache import response_cache
 from backend.app.services.conversations.context import context_compiler
 from backend.app.services.conversations.service import ConversationService
-from backend.app.services.evaluation.guardrail_service import guardrail_service
+from backend.app.services.evaluation.guardrail_service import (
+    StreamingOutputSanitizer,
+    guardrail_service,
+)
 from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.experiments.service import experiment_service
 from backend.app.services.observability.cost_tracking import cost_tracking_service
@@ -152,7 +155,9 @@ async def send_message_sync(
 
     # 5. Generate Completion
     if cache_hit_payload is not None:
-        response_text = cache_hit_payload["content"]
+        # Cached text was produced by a model too. Apply the same output
+        # guardrail as a fresh completion so a cache hit cannot bypass it.
+        response_text = guardrail_service.sanitize_output(cache_hit_payload["content"]).text
         prompt_tok = int(cache_hit_payload.get("tokens_input", 0))
         comp_tok = int(cache_hit_payload.get("tokens_output", 0))
         duration_ms = 0.0
@@ -165,6 +170,12 @@ async def send_message_sync(
                 model=target_model,
             )
         duration_ms = (time.time() - start_time) * 1000
+
+        # The main graph redacts PII before it streams and persists; this
+        # endpoint must do the same *before* the cache write, the stored row,
+        # the response body, telemetry and the outbound webhook. Redaction is
+        # idempotent, so a cache hit that was sanitised above stays identical.
+        response_text = guardrail_service.sanitize_output(response_text).text
 
         prompt_tok = ai_client.count_tokens(str(formatted_context), target_model)
         comp_tok = ai_client.count_tokens(response_text, target_model)
@@ -312,7 +323,11 @@ async def send_message_stream(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         start_time = time.time()
-        collected_chunks = []
+        # PII can span provider tokens ("alice@" + "example.com"). The
+        # incremental sanitiser holds a bounded tail and only emits frames it
+        # has already redacted, so no frame -- and especially no persisted row
+        # -- ever carries raw model text.
+        sanitizer = StreamingOutputSanitizer()
 
         try:
             yield f"data: {json.dumps({'event': 'start', 'user_message_id': str(user_msg.id), 'model': target_model})}\n\n"
@@ -324,10 +339,16 @@ async def send_message_stream(
                 )
 
                 async for chunk in stream:
-                    collected_chunks.append(chunk)
-                    yield f"data: {json.dumps({'event': 'token', 'token': chunk})}\n\n"
+                    safe = sanitizer.feed(chunk)
+                    if safe:
+                        yield f"data: {json.dumps({'event': 'token', 'token': safe})}\n\n"
 
-            full_response = "".join(collected_chunks)
+            # Flush the held tail before any persistence: the stored answer and
+            # the frames already sent must concatenate to exactly this text.
+            tail = sanitizer.finish()
+            if tail:
+                yield f"data: {json.dumps({'event': 'token', 'token': tail})}\n\n"
+            full_response = sanitizer.text
             duration_ms = (time.time() - start_time) * 1000
             recorded_model = get_last_resolved_model() or group_primary_model(target_model)
 
@@ -380,7 +401,9 @@ async def send_message_stream(
             # collected so the conversation isn't left with an unanswered user
             # turn, then let the generator finalize (upstream provider stream is
             # closed by ai_client.astream's finally block).
-            partial = "".join(collected_chunks)
+            # Already-redacted text from the sanitiser. Never persist the raw
+            # provider chunks: a disconnect is not a guardrail bypass.
+            partial = sanitizer.text
             if partial and partial.strip():
                 try:
                     await conv_svc.add_message(
@@ -399,7 +422,16 @@ async def send_message_stream(
             raise
 
         except Exception as exc:
-            yield f"data: {json.dumps({'event': 'error', 'error': str(exc)})}\n\n"
+            # Provider and DB exceptions routinely contain API keys, DSNs and
+            # request bodies. Keep the detail server-side; give the client a
+            # stable, non-sensitive message on the same SSE contract.
+            logger.error(
+                "stream_completion_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                conversation_id=str(conversation_id),
+            )
+            yield f"data: {json.dumps({'event': 'error', 'error': 'An error occurred while generating the response.'})}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -507,7 +539,18 @@ async def regenerate_message(
     except ResourceNotFoundError:
         raise HTTPException(status_code=404, detail="Message not found")
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        # Only the two user-facing service errors are echoed. An unexpected
+        # ValueError may carry connection strings or provider details, so it is
+        # logged here and replaced with a generic 400 on the wire.
+        detail = str(exc)
+        allowed = {
+            "Only an assistant message can be regenerated",
+            "No preceding user message to regenerate from",
+        }
+        if detail not in allowed:
+            logger.warning("regenerate_error_redacted", error=detail)
+            detail = "Cannot regenerate this message"
+        raise HTTPException(status_code=400, detail=detail)
     return {
         "status": "success",
         "message_id": message_id,

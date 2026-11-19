@@ -698,7 +698,13 @@ async def test_synthesizer_handles_list_shaped_web_results(monkeypatch):
     state["user_id"] = str(uuid.uuid4())
 
     update = await nodes.synthesizer_node(state)
-    assert update["messages"][0].content == "Answer referencing [1]."
+    answer = update["messages"][0].content
+    assert "Answer referencing [1]." in answer
+    # This fixture's web snippets score only 55% grounding, so the evidence
+    # gate now qualifies the answer rather than leaving the badge decorative.
+    # The point of the regression test is that the list-shaped results were
+    # formatted and answered at all, not that the gate stayed silent.
+    assert "low evidence" in answer.lower()
 
 
 async def async_noop(*args, **kwargs):
