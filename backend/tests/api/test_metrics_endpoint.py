@@ -59,6 +59,9 @@ async def test_metrics_endpoint_open_when_no_token_configured(monkeypatch):
     from httpx import ASGITransport, AsyncClient
 
     monkeypatch.setattr(settings, "METRICS_TOKEN", None)
+    # An open /metrics is only valid outside production (production requires a
+    # token). Keep the test hermetic against a developer's local .env.
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

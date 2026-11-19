@@ -20,11 +20,25 @@ from backend.app.domain.hook.models import HookPolicy
 from backend.app.domain.org.models import OrganizationMember
 from backend.app.main import app
 from backend.app.services.hooks.service import HookService
+from backend.app.services.tools import tool_gateway as gateway_module
 from backend.app.services.tools.hook_registry import hook_registry
 from backend.app.services.tools.service import ToolService
 from backend.app.services.tools.tool_gateway import tool_gateway
 from backend.tests.fakes import FakeSession
 from httpx import ASGITransport, AsyncClient
+
+
+@pytest.fixture(autouse=True)
+def _rate_limit_allows(monkeypatch):
+    """These tests pin hook verdicts, not Redis availability.
+
+    The gateway now denies a tool call when the rate-limit counter is
+    unreachable, so the one test that reaches dispatch needs a working counter.
+    """
+    async def _allow(*_args, **_kwargs):
+        return True, 19
+
+    monkeypatch.setattr(gateway_module.redis_service, "check_rate_limit", _allow)
 
 
 def _hook_dict(**overrides) -> dict:

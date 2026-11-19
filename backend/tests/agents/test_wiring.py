@@ -169,7 +169,19 @@ async def test_orchestrator_structured_route_uses_structured_service(monkeypatch
     async def fake_completion(messages, model, temperature, max_tokens):
         return "CODE"
 
+    async def _arq_clean(_query):
+        # The routing stub returns plain text, which a real ARQ guard cannot
+        # parse and would (correctly) fail closed. Stub the guard so this test
+        # isolates the routing decision.
+        return {
+            "needs_tool": False,
+            "safety_flag": False,
+            "recency_needed": False,
+            "ambiguous": False,
+        }
+
     monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
+    monkeypatch.setattr(nodes, "_run_arq", _arq_clean)
     update = await nodes.orchestrator_node(_router_state())
     assert update["subagent_dispatches"] == ["coder"]
     assert update["task_type"] == "code"

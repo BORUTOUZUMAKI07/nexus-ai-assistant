@@ -1521,6 +1521,37 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         thread_id=str(state.get("conversation_id") or ""),
     )
 
+    def _evidence_backed_answer() -> str:
+        """Best answer the pipeline already holds, without another model call.
+
+        A synthesis provider outage is not a reason to lose a turn the researcher
+        or the document retriever already answered. This mirrors the refusal
+        fallback below but is unconditional: on an outage there is no refusal to
+        detect, only evidence to relay. With no evidence it returns "" and the
+        existing empty-response fallback produces an honest "try again" answer.
+        """
+        if _research_synthesis:
+            return _research_synthesis
+        if citations:
+            usable = [
+                c for c in citations
+                if isinstance(c, dict) and c.get("content_snippet")
+            ]
+            best = max(usable, key=lambda c: float(c.get("score") or 0.0), default=None)
+            if best is not None:
+                try:
+                    score = float(best.get("score") or 0.0)
+                except (TypeError, ValueError):
+                    score = 0.0
+                return (
+                    f"From **{best.get('filename') or 'your documents'}** "
+                    f"({score:.0%} match):\n\n"
+                    f"> {str(best['content_snippet']).strip()}\n\n"
+                    "That is the most relevant passage retrieved from your files for "
+                    "this question."
+                )
+        return ""
+
     last_user_raw = _latest_user_content(messages)
     is_vision = _has_image_content(last_user_raw) or state.get("task_type") == "vision"
     last_user_content = _extract_text_content(last_user_raw)
@@ -1577,13 +1608,24 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             augmented_content = augmented_prompt
 
         vision_messages = final_messages + [{"role": "user", "content": augmented_content}]
-        draft = await ai_client.completion(
-            messages=vision_messages,
-            model="vision_analysis",
-            temperature=0.2,
-            max_tokens=2048,
-        )
-        response_text = draft
+        try:
+            draft = await ai_client.completion(
+                messages=vision_messages,
+                model="vision_analysis",
+                temperature=0.2,
+                max_tokens=2048,
+            )
+            response_text = draft
+        except Exception as exc:
+            # All model groups failed. The turn is still answerable from the
+            # evidence already gathered (or, failing that, with an honest
+            # "try again") -- never abort the whole run at its last node.
+            logger.warning(
+                "synthesis_vision_provider_failure",
+                error=str(exc)[:200],
+                has_evidence=bool(_evidence_backed_answer()),
+            )
+            response_text = _evidence_backed_answer()
         answer_model = get_last_resolved_model() or group_primary_model("vision_analysis")
     else:
         final_messages.append({"role": "user", "content": augmented_prompt})
@@ -1630,12 +1672,28 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
                 response_text = last_draft
                 break
             _charge_step(state)
-            draft = await ai_client.completion(
-                messages=final_messages[:-1] + [{"role": "user", "content": draft_prompt}],
-                model=synthesis_group,
-                temperature=0.7,
-                max_tokens=1200,
-            )
+            try:
+                draft = await ai_client.completion(
+                    messages=final_messages[:-1] + [{"role": "user", "content": draft_prompt}],
+                    model=synthesis_group,
+                    temperature=0.7,
+                    max_tokens=1200,
+                )
+            except Exception as exc:
+                # Synthesis is NO_RETRY by policy (a full re-synthesis is
+                # expensive), and the client's own fallback chain has already
+                # been exhausted by the time this raises. Cost the user a
+                # revision, never the answer: keep the last real draft if we
+                # have one, otherwise relay the evidence the pipeline already
+                # holds. An empty answer here becomes the existing "try again"
+                # fallback below rather than a crashed run with no message.
+                logger.warning(
+                    "synthesis_provider_failure",
+                    attempt=attempt,
+                    error=str(exc)[:200],
+                )
+                response_text = last_draft or _evidence_backed_answer()
+                break
             last_draft = draft
             # Captured immediately after the call: `get_last_resolved_model`
             # reads the model of the most recent completion in this task, so
@@ -1685,12 +1743,24 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
                         "already in this message. Any sentence about being unable to access "
                         "the user's documents, files, or knowledge base will be rejected."
                     )
-                draft = await ai_client.completion(
-                    messages=final_messages[:-1] + [{"role": "user", "content": correction}],
-                    model=synthesis_group,
-                    temperature=0.0,
-                    max_tokens=1200,
-                )
+                try:
+                    draft = await ai_client.completion(
+                        messages=final_messages[:-1] + [{"role": "user", "content": correction}],
+                        model=synthesis_group,
+                        temperature=0.0,
+                        max_tokens=1200,
+                    )
+                except Exception as exc:
+                    # The corrective re-ask is a best-effort second chance, not a
+                    # second dependency that may take down the turn. Relay the
+                    # evidence we already hold; with none, the empty-response
+                    # fallback gives an honest answer instead of a lost run.
+                    logger.warning(
+                        "synthesis_refusal_reask_provider_failure",
+                        error=str(exc)[:200],
+                    )
+                    response_text = _evidence_backed_answer()
+                    break
                 last_draft = draft
                 answer_model = get_last_resolved_model() or group_primary_model(synthesis_group)
 

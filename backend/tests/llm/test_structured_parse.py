@@ -154,7 +154,7 @@ async def test_arq_parses_a_prose_wrapped_fenced_reply(monkeypatch):
     assert captured.get("response_format") == {"type": "json_object"}
 
 
-async def test_arq_fails_open_on_an_unparseable_reply(monkeypatch):
+async def test_arq_fails_closed_on_an_unparseable_reply(monkeypatch):
     from backend.app.agents.orchestrator import nodes as nodes_mod
 
     async def fake(messages, **kwargs):
@@ -162,15 +162,17 @@ async def test_arq_fails_open_on_an_unparseable_reply(monkeypatch):
 
     monkeypatch.setattr(nodes_mod.ai_client, "completion", fake)
 
+    # An unreadable safety check cannot be treated as "safe": the router must
+    # answer directly with no tools until the guard can actually vet the turn.
     assert await nodes_mod._run_arq("anything") == {
         "needs_tool": False,
-        "safety_flag": False,
+        "safety_flag": True,
         "recency_needed": False,
         "ambiguous": False,
     }
 
 
-async def test_arq_fails_open_on_an_invalid_boolean(monkeypatch):
+async def test_arq_fails_closed_on_an_invalid_boolean(monkeypatch):
     """A value the model cannot answer with a boolean must not be coerced."""
     from backend.app.agents.orchestrator import nodes as nodes_mod
 
@@ -179,4 +181,4 @@ async def test_arq_fails_open_on_an_invalid_boolean(monkeypatch):
 
     monkeypatch.setattr(nodes_mod.ai_client, "completion", fake)
 
-    assert (await nodes_mod._run_arq("x"))["safety_flag"] is False
+    assert (await nodes_mod._run_arq("x"))["safety_flag"] is True

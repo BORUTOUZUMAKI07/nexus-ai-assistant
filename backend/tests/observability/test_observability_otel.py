@@ -466,10 +466,15 @@ def test_http_request_metrics_count_errors(monkeypatch):
 async def test_the_http_middleware_records_request_metrics(monkeypatch):
     """Every request through the app feeds the collector, wired or not."""
     import backend.app.main as main_mod
+    from backend.app.core.config import settings
     from backend.app.main import app
     from httpx import ASGITransport, AsyncClient
 
     collector = metrics_mod.MetricsCollector()
+    # This test is about middleware recording, not the /metrics auth gate. Keep
+    # it hermetic against a local .env that configures a production token.
+    monkeypatch.setattr(settings, "METRICS_TOKEN", None)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
     # get_tracer() returns None under tests/conftest.py, so the middleware takes
     # the no-OTel branch — the one that must still record request metrics.
     monkeypatch.setattr(main_mod, "metrics_collector", collector)

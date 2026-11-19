@@ -211,10 +211,26 @@ async def _completion_research(*args, **kwargs):
     return "RESEARCH"
 
 
+async def _arq_clean(_query):
+    """A healthy safety guard, so these tests isolate the *routing* decision.
+
+    The generic completion stub above returns plain text, which the ARQ guard
+    correctly treats as a failed check and fails closed (no tools). That is the
+    intended production behaviour, so the guard is stubbed rather than weakened.
+    """
+    return {
+        "needs_tool": False,
+        "safety_flag": False,
+        "recency_needed": False,
+        "ambiguous": False,
+    }
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_routes_via_raw_fallback_when_structured_output_fails(monkeypatch):
     monkeypatch.setattr(nodes.structured_service, "generate_structured", _structured_raises)
     monkeypatch.setattr(nodes.ai_client, "completion", _completion_research)
+    monkeypatch.setattr(nodes, "_run_arq", _arq_clean)
 
     state = {"messages": [HumanMessage(content="find current news")], "mode": "normal"}
 
@@ -234,6 +250,7 @@ async def test_orchestrator_uses_structured_routing_when_available(monkeypatch):
 
     monkeypatch.setattr(nodes.structured_service, "generate_structured", _structured_answer)
     monkeypatch.setattr(nodes.ai_client, "completion", _completion_answer)
+    monkeypatch.setattr(nodes, "_run_arq", _arq_clean)
 
     state = {"messages": [HumanMessage(content="what is 2+2")], "mode": "normal"}
 
