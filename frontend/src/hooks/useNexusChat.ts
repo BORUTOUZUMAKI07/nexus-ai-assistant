@@ -780,6 +780,12 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         completionPollRef.current = controller;
         void pollRunCompletion(target, runId, patchAssistant, controller.signal).finally(
           () => {
+            // The replay's patches go through the same RAF coalescer as the
+            // live stream. Its own stream has already settled by the time the
+            // poll starts, so only this flush can land the replay's last text
+            // when the frame never fires (background tab, or a poll that ends
+            // between frames).
+            assistantPatcher.flush();
             if (completionPollRef.current === controller) {
               completionPollRef.current = null;
             }

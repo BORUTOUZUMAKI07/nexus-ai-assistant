@@ -11,7 +11,7 @@
  *   - a clean close without a terminal frame triggers bounded rejoin polling
  *     that observes the completion without the user doing anything.
  */
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { renderHook, act, waitFor } from "@/test/test-utils"
 import { useNexusChat } from "@/hooks/useNexusChat"
 import { server } from "@/test/mocks/server"
@@ -164,6 +164,54 @@ describe("chat terminal state in useNexusChat", () => {
       "final answer"
     )
     expect(result.current.isLoading).toBe(false)
+  })
+
+  it("lands the rejoin's final text even when no animation frame ever fires", async () => {
+    // The replay's patches share the live turn's RAF coalescer. A background
+    // tab (or a poll that ends between frames) never invokes the callback, so
+    // the poll must flush its own last snapshot. Without that flush the
+    // transcript silently kept the earlier "partial" answer -- a CI-only flake
+    // until jsdom happened to fire the frame before the assertion.
+    const raf = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1)
+    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {})
+    try {
+      server.use(
+        http.post("/api/chat", () =>
+          new HttpResponse('0:"partial"\n', {
+            headers: {
+              "Content-Type": "text/plain; charset=utf-8",
+              "X-Nexus-Run-Id": RUN,
+            },
+          })
+        ),
+        http.get("/api/chat", () =>
+          new HttpResponse(
+            `0:"final answer"\n${terminalFrame({ message_id: MSG, thread_id: CONV })}`,
+            {
+              headers: {
+                "Content-Type": "text/plain; charset=utf-8",
+                "X-Nexus-Run-Id": RUN,
+                "X-Nexus-Message-Id": MSG,
+              },
+            }
+          )
+        )
+      )
+
+      const { result } = renderHook(() => useNexusChat({ conversationId: CONV }))
+      await act(async () => {
+        await result.current.sendMessage("hello")
+      })
+
+      await waitFor(() =>
+        expect(
+          result.current.messages.find((m) => m.role === "assistant")?.content
+        ).toBe("final answer")
+      )
+      expect(raf).toHaveBeenCalled()
+    } finally {
+      vi.restoreAllMocks()
+    }
   })
 
   it("clears the streaming UI at the terminal frame, before the stream closes", async () => {
