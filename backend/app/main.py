@@ -223,39 +223,55 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             ),
         )
 
+    # Schema init stays first: on a fresh database the hook registry query
+    # needs the tables to exist. The three probes after it are independent
+    # network waits against different services, and all fail open, so running
+    # them concurrently removes their round trips from every cold start. Each
+    # owns its own try/except to keep a failure local (and legible in the log)
+    # instead of letting gather cancel the other two.
     try:
         await init_db()
         logger.info("database_tables_initialized")
     except Exception as exc:
         logger.warning("database_init_failed_or_offline", error_type=type(exc).__name__)
 
-    # 2. Ping Redis
-    try:
-        pong = await redis_client.ping()
-        logger.info("redis_connection_verified", pong=pong)
-    except Exception as exc:
-        logger.warning("redis_offline_continuing_in_degraded_mode", error_type=type(exc).__name__)
-
-    # 3. Ensure Qdrant Vector Collection exists
-    try:
-        await vector_db.ensure_collection()
-        logger.info("qdrant_collection_verified")
-    except Exception as exc:
-        logger.warning("qdrant_init_failed_or_offline", error_type=type(exc).__name__)
-
-    # 4. Open LangGraph AsyncPostgresSaver connection pool (durable short-term memory)
-    async with lifespan_graph():
-        # 4b. Load lifecycle hook policies into the gateway registry (fail-open:
-        #     an empty registry simply means no hooks are active).
+    async def _ping_redis() -> None:
         try:
-            from backend.app.infrastructure.database.session import async_session_factory
+            pong = await redis_client.ping()
+            logger.info("redis_connection_verified", pong=pong)
+        except Exception as exc:
+            logger.warning(
+                "redis_offline_continuing_in_degraded_mode", error_type=type(exc).__name__
+            )
+
+    async def _ensure_qdrant_collection() -> None:
+        try:
+            await vector_db.ensure_collection()
+            logger.info("qdrant_collection_verified")
+        except Exception as exc:
+            logger.warning("qdrant_init_failed_or_offline", error_type=type(exc).__name__)
+
+    from backend.app.infrastructure.database.session import async_session_factory
+
+    async def _load_hook_registry() -> None:
+        # Fail-open: an empty registry simply means no hooks are active.
+        try:
             from backend.app.services.hooks.service import HookService
+
             async with async_session_factory() as session:
                 await HookService(session).reload_registry()
             logger.info("hook_registry_loaded_at_startup")
         except Exception as exc:
             logger.warning("hook_registry_startup_load_failed", error=str(exc))
 
+    await asyncio.gather(
+        _ping_redis(),
+        _ensure_qdrant_collection(),
+        _load_hook_registry(),
+    )
+
+    # 4. Open LangGraph AsyncPostgresSaver connection pool (durable short-term memory)
+    async with lifespan_graph():
         logger.info("langgraph_postgres_checkpointer_ready")
 
         # 4d. Background maintenance task for memory lifecycle decay

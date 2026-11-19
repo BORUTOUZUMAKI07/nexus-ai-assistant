@@ -1464,6 +1464,75 @@ async def test_credential_check_does_not_stop_startup(monkeypatch):
     assert "nexus_ai_shutting_down" in recorder.names()
 
 
+async def test_startup_probes_run_concurrently(monkeypatch):
+    """The three post-schema startup network waits must overlap.
+
+    The Redis ping, the Qdrant collection check and the hook registry reload
+    talk to three different services and all fail open. Schema init stays
+    first: on a fresh database the hook query needs the tables to exist. After
+    that, running the three sequentially adds their round trips to every cold
+    start -- on a hosted backend that is latency the user actually feels. The
+    barrier below only releases once all three have entered, so a sequential
+    startup times out its first probe instead of passing on timing luck.
+    """
+    from backend.app import main as main_mod
+
+    started: list[str] = []
+    completed: list[str] = []
+    release = asyncio.Event()
+
+    async def _probe(name: str):
+        started.append(name)
+        if len(started) == 3:
+            release.set()
+        # A sequential startup lets the first probe time out before the third
+        # has even begun, so it never observes the release and is never added
+        # to `completed`. Only overlapping waits satisfy the assertion below.
+        await asyncio.wait_for(release.wait(), timeout=2.0)
+        completed.append(name)
+        if name == "redis":
+            return True
+        return None
+
+    @asynccontextmanager
+    async def _fake_graph():
+        yield None
+
+    class _FakeSessionFactory:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    async def _init_db() -> None:
+        return None
+
+    monkeypatch.setattr(main_mod, "init_db", _init_db)
+    monkeypatch.setattr(main_mod.redis_client, "ping", lambda: _probe("redis"))
+    monkeypatch.setattr(main_mod.vector_db, "ensure_collection", lambda: _probe("qdrant"))
+    monkeypatch.setattr(main_mod, "lifespan_graph", _fake_graph)
+
+    from backend.app.services.hooks.service import HookService
+
+    monkeypatch.setattr(
+        HookService, "reload_registry", lambda self: _probe("hooks")
+    )
+    monkeypatch.setattr(
+        "backend.app.infrastructure.database.session.async_session_factory",
+        _FakeSessionFactory(),
+    )
+
+    await _drive_lifespan(main_mod)
+
+    assert sorted(completed) == ["hooks", "qdrant", "redis"], (
+        f"startup probes did not overlap (started={started}, completed={completed})"
+    )
+
+
 async def _drive_lifespan(main_mod):
     """Enter and exit the real lifespan without a live app object."""
     cm = main_mod.lifespan(None)
