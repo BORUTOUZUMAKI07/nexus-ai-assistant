@@ -722,7 +722,12 @@ def test_every_node_has_a_policy_entry():
     """
     workflow = _build_workflow()
     registered = set(workflow.nodes)
-    assert set(TIMEOUTS) == registered
+    # LangGraph materialises a node-level error_handler as an internal
+    # `__error_handler__<node>` node in the builder's node map. It is framework
+    # plumbing, not a graph step, so it has no TIMEOUTS entry by design. Filter
+    # by the documented prefix rather than weakening the two-way assertion.
+    real_nodes = {n for n in registered if not n.startswith("__error_handler__")}
+    assert set(TIMEOUTS) == real_nodes
 
 
 def test_the_compiled_graph_really_carries_the_policies():

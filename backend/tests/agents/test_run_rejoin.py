@@ -770,7 +770,12 @@ async def test_every_graph_node_has_a_status_label():
     from backend.app.services.runs.executor import _NODE_STATUS_LABELS
 
     registered = set(_build_workflow().nodes)
-    assert set(_NODE_STATUS_LABELS) == registered
+    # LangGraph's native error handlers show up as internal
+    # `__error_handler__<node>` nodes. They are plumbing with no edges: the
+    # executor's label lookup deliberately ignores them, so the user never sees
+    # a progress line for a recovery step. Every real node still needs a label.
+    real_nodes = {n for n in registered if not n.startswith("__error_handler__")}
+    assert set(_NODE_STATUS_LABELS) == real_nodes
 
 
 async def test_a_custom_text_delta_event_is_marked_as_text():

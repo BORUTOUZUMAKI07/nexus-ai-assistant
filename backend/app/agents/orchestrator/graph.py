@@ -27,6 +27,7 @@ except ImportError:
     AsyncPostgresSaver = None
 
 from backend.app.agents.orchestrator.artifact_node import artifact_node
+from backend.app.agents.orchestrator.error_handlers import planner_failure_fallback
 from backend.app.agents.orchestrator.model_router import (
     EXECUTION_MODE_FULL,
     EXECUTION_MODE_SIMPLE_CHAT,
@@ -254,7 +255,13 @@ def route_after_subagent(state: AgentState) -> Literal["tool_node", "synthesizer
     return "synthesizer"
 
 
-def _add(workflow: StateGraph, name: str, node: Any) -> None:
+def _add(
+    workflow: StateGraph,
+    name: str,
+    node: Any,
+    *,
+    error_handler: Any | None = None,
+) -> None:
     """Register `node` under `name` with its policy resolved from `name`.
 
     Exists so the node name is written once. Stating it twice -- once in
@@ -264,13 +271,18 @@ def _add(workflow: StateGraph, name: str, node: Any) -> None:
 
     `timeout_for` raises `KeyError` for a name it does not know, so adding a
     node without a ceiling fails here rather than shipping an unbounded one.
+
+    `error_handler` is opt-in and passed through to LangGraph's native node-level
+    handler. It is never inferred from `name`: a handler must be chosen for a
+    node whose failure is survivable, not applied because a name looked familiar.
     """
-    workflow.add_node(
-        name,
-        node,
-        retry_policy=policy_for(name),
-        timeout=timeout_for(name),
-    )
+    kwargs: dict[str, Any] = {
+        "retry_policy": policy_for(name),
+        "timeout": timeout_for(name),
+    }
+    if error_handler is not None:
+        kwargs["error_handler"] = error_handler
+    workflow.add_node(name, node, **kwargs)
 
 
 def _build_workflow() -> StateGraph:
@@ -307,7 +319,16 @@ def _build_workflow() -> StateGraph:
     # tests/agents/test_node_policies.py enforces the second.
     _add(workflow, "bootstrap", bootstrap_node)
     _add(workflow, "model_router", model_router_node)
-    _add(workflow, "planner", planner_node)
+    # Planner is optional reasoning, but it makes a live LLM call. If that call
+    # fails after retries/timeout, continue as an unplanned turn instead of
+    # losing the whole answer. See error_handlers.py for why this is a state
+    # delta rather than a fixed `Command(goto=...)`.
+    _add(
+        workflow,
+        "planner",
+        planner_node,
+        error_handler=planner_failure_fallback,
+    )
     _add(workflow, "tree_of_thoughts", tree_of_thoughts_node)
     _add(workflow, "orchestrator", orchestrator_node)
     _add(workflow, "subagent_dispatcher", subagent_dispatcher_node)
@@ -383,10 +404,14 @@ def _build_workflow() -> StateGraph:
     # node that no longer exists, which is how a ceiling silently stops applying
     # after a rename.
     registered = set(workflow.nodes)
-    missing = registered - set(TIMEOUTS)
+    # LangGraph adds `__error_handler__<node>` to the builder's node map for
+    # every native error handler. It is framework plumbing with no edges and no
+    # application timeout, so exclude it from this application-node contract.
+    real_nodes = {n for n in registered if not n.startswith("__error_handler__")}
+    missing = real_nodes - set(TIMEOUTS)
     if missing:  # pragma: no cover - unreachable while _add resolves names
         raise RuntimeError(f"nodes without a timeout policy: {sorted(missing)}")
-    stale = set(TIMEOUTS) - registered
+    stale = set(TIMEOUTS) - real_nodes
     if stale:
         logger.warning(
             "langgraph_node_timeout_policy_without_a_node",
