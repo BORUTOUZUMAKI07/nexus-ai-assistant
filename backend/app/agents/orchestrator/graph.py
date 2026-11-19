@@ -143,7 +143,12 @@ async def _maybe_compact(messages: list) -> dict | None:
             model=settings.FAST_MODEL,
             temperature=0.1,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "context_compaction_failed",
+            error=str(exc),
+            message_count=len(messages),
+        )
         return None
 
     summary_msg = (

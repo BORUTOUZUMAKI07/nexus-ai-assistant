@@ -408,7 +408,8 @@ def _budget_stop(state: AgentState, estimated_tokens: int) -> str:
     """
     try:
         blocked, reason = budget_exhausted(estimated_tokens)
-    except Exception:
+    except Exception as exc:
+        logger.warning("budget_check_failed", error=str(exc))
         return ""
     if not blocked:
         return ""
