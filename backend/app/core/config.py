@@ -1045,6 +1045,8 @@ class Settings(BaseSettings):
     # timeout and the whole snapshot is reused for the TTL window.
     HEALTH_DEPENDENCIES_CACHE_TTL_SECONDS: float = Field(default=30.0, gt=0)
     HEALTH_DEPENDENCIES_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
+    # One bounded startup probe per telemetry backend, run in the background.
+    STARTUP_TELEMETRY_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

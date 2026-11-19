@@ -37,6 +37,7 @@ from backend.app.mcp.server import mcp
 from backend.app.services.health.dependencies import get_dependency_health
 from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.otel import get_tracer, shutdown_otel
+from backend.app.services.observability.startup_verification import verify_startup_telemetry
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -271,6 +272,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _load_hook_registry(),
     )
 
+    # Verify telemetry delivery in the background: a LangSmith round trip must
+    # never hold the first request hostage. Results appear in the cached
+    # /health/dependencies snapshot once the probe finishes.
+    telemetry_task = asyncio.create_task(verify_startup_telemetry())
+
     # 4. Open LangGraph AsyncPostgresSaver connection pool (durable short-term memory)
     async with lifespan_graph():
         logger.info("langgraph_postgres_checkpointer_ready")
@@ -383,6 +389,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         if outbox_worker is not None:
                             await outbox_worker.stop()
                         decay_task.cancel()
+                        telemetry_task.cancel()
                         if app is not None and hasattr(app, "state"):
                             try:
                                 app.state.mcp_transport_started = False
@@ -400,6 +407,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     if outbox_worker is not None:
                         await outbox_worker.stop()
                     decay_task.cancel()
+                    telemetry_task.cancel()
 
     # Graceful Shutdown (outside lifespan_graph context — pool already closed)
     logger.info("nexus_ai_shutting_down")

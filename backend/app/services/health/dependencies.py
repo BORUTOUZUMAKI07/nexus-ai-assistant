@@ -26,6 +26,7 @@ from backend.app.infrastructure.vector.qdrant_client import vector_db
 from backend.app.services.memory.long_term import long_term_memory
 from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.otel import collector_endpoint_resolvable
+from backend.app.services.observability.startup_verification import get_startup_telemetry_status
 
 logger = get_logger("nexus.health")
 
@@ -186,6 +187,7 @@ async def _collect() -> dict[str, Any]:
         "checked_at_ms": int(time.time() * 1000),
         "cache_ttl_seconds": settings.HEALTH_DEPENDENCIES_CACHE_TTL_SECONDS,
         "services": services,
+        "startup_telemetry": get_startup_telemetry_status(),
         "fallback_counters": _fallback_counters(),
     }
 

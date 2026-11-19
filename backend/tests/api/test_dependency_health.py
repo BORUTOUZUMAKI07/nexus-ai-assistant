@@ -128,6 +128,7 @@ async def test_collect_reports_every_service_without_credentials(monkeypatch):
 
     assert result["status"] == "ok"
     assert set(result["services"]) == EXPECTED_SERVICES
+    assert set(result["startup_telemetry"]) == {"new_relic", "langsmith"}
     assert result["fallback_counters"] == {"dependency_fallback:mem0_add": 1}
     assert not [marker for marker in SECRET_MARKERS if marker in body], "response leaked a credential"
 

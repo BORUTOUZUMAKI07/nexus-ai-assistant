@@ -485,6 +485,23 @@ def get_meter(name: str) -> Any | None:
     return _meter_provider.get_meter(name)
 
 
+def force_flush_traces(timeout_millis: int = 3000) -> bool:
+    """Hand the current trace batch to the exporter; never raise.
+
+    Used by the startup delivery probe. A successful flush proves the SDK
+    handed the span to the OTLP exporter; it is not a claim that the far end
+    stored it (that would need a New Relic query API credential).
+    """
+    provider = _tracer_provider
+    if provider is None:
+        return False
+    try:
+        return bool(provider.force_flush(timeout_millis=timeout_millis))
+    except Exception as exc:  # noqa: BLE001 - telemetry must never raise
+        logger.warning("otlp_trace_flush_failed", error_type=type(exc).__name__)
+        return False
+
+
 def shutdown_otel() -> None:
     """Flush and shut down both providers.
 
