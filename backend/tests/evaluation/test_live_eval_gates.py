@@ -5,15 +5,18 @@ CI gates" gap for the arena and multi-turn conversational evaluators.
 With RUN_LLM_EVAL_GATES=1 this runs the app's evaluation report contract as a
 release gate alongside the prompt-regression gate
 (test_prompt_regression_gate.py). The arena/conversational/RAG evaluators are
-free-tier deterministic heuristics (no external judge dependency — see
-pyproject.toml), so no judge key is required: OPENROUTER_API_KEY only feeds the prompt-regression
-gate's genuine LLM judge via the app's own client (every model in
-litellm_client.py's Router is an OpenRouter deployment). These gates turn a
-release red only on broken wiring or contract violations (missing metrics,
-out-of-range scores, unparseable reports) — never on credential absence.
+deterministic heuristics (no external judge dependency — see pyproject.toml),
+so no key is needed for them. OPENROUTER_API_KEY is supplied to the
+prompt-regression gate's genuine LLM judge through the app's own client; the
+CI job sets only that key, so the Router's OpenRouter deployments answer the
+probes. The heuristic gates turn a release red only on broken wiring or
+contract violations (missing metrics, out-of-range scores, unparseable
+reports); the prompt-regression gate also fails closed when no judge reply is
+available.
 
-Deliberately skipped by default; the heuristics are unit-tested in
-test_eval_upgrades.py.
+Skipped locally unless RUN_LLM_EVAL_GATES=1 is set explicitly; the CI job
+`live-llm-eval-gates` sets it so these gates always run on push/PR. The same
+heuristics are unit-tested in test_eval_upgrades.py.
 """
 import os
 

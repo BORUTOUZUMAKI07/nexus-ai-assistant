@@ -5,9 +5,9 @@ The "CI stopped" equivalent for prompt changes (industry Annex exercise):
 with RUN_LLM_EVAL_GATES=1, validates that the *currently compiled* system
 prompt still passes the guardrail golden set before a release proceeds.
 
-Deliberately skipped by default: the offline heuristic gate is covered in
-test_eval_upgrades.py; this test is the live-judge variant meant for CI with
-real model credentials.
+Skipped locally unless RUN_LLM_EVAL_GATES=1 is set explicitly; the CI job
+`live-llm-eval-gates` sets it so this gate always runs on push/PR. The offline
+heuristic gate is covered separately in test_eval_upgrades.py.
 """
 import os
 

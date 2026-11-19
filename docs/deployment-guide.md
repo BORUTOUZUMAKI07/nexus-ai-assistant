@@ -29,7 +29,8 @@ CI/CD artifacts:
   creates a GitHub Release with a changelog.
 - `.github/workflows/ci.yml` — unit+regression, security (bandit, pip-audit,
   npm audit, mypy allowlist), frontend (typegen, tsc, eslint, vitest, build),
-  and optionally the live LLM-judge gates (`vars.RUN_LLM_EVAL_GATES=1`).
+  and the live LLM-judge gates (always on; the job sets
+  `RUN_LLM_EVAL_GATES=1`).
 - `.github/workflows/nightly.yml` — nightly security scans (bandit + pip-audit),
   full backend suite (unit + integration + e2e), npm audit, frontend vitest.
 
@@ -238,8 +239,8 @@ comments):
   assignment (`EXPERIMENTS_CONFIG_PATH` YAML; unset = default variant).
 - ε-greedy **bandits** reward the empirically best prompt/model variants.
 - **Prompt regression gate** blocks prompt changes that regress guardrail
-  behaviors (headless in CI; live LLM-judge variant behind
-  `vars.RUN_LLM_EVAL_GATES`).
+  behaviors (headless locally; the live LLM-judge variant runs in CI on every
+  push/PR).
 
 ## 11. Reference production topology (Render + Vercel)
 

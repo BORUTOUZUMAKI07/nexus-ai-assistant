@@ -8,8 +8,9 @@ name: CI
 #   3. Frontend typecheck, lint, vitest suite and next build
 #   4. Security scans (bandit + pip-audit + npm audit) + secret scan
 #
-# The live LLM-judge gates are credential-gated and only run when
-# RUN_LLM_EVAL_GATES == '1'.
+# The live LLM-judge gates run on every push/PR: the job itself sets
+# RUN_LLM_EVAL_GATES=1 for its test step. Previously a repository variable
+# skipped the job entirely, so a quality regression could never turn CI red.
 
 on:
   push:
@@ -257,7 +258,6 @@ jobs:
     name: Live LLM-judge gates (prompt-regression + arena + conversational + RAG)
     runs-on: ubuntu-latest
     needs: [backend-test]
-    if: vars.RUN_LLM_EVAL_GATES != '0'
     defaults:
       run:
         working-directory: backend
