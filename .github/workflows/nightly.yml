@@ -45,6 +45,40 @@ jobs:
           uv run pytest tests/e2e -q -p no:cacheprovider -m e2e 2>&1 | tee -a /tmp/nightly_output.log
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
+      - name: Smoke check deployed dependency health
+        # Three attempts: a cold Render start can answer 503 once before the
+        # process is warm. A degraded dependency fails the nightly run so this
+        # is an actual alarm, not a log nobody reads. Only statuses are printed;
+        # no credentials are interpolated into the step.
+        shell: bash
+        env:
+          SMOKE_BASE_URL: ${{ vars.SMOKE_BASE_URL || 'https://nexus-backend-owq5.onrender.com' }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl -fsS --max-time 15 "$SMOKE_BASE_URL/health" >/dev/null \
+              && curl -fsS --max-time 15 "$SMOKE_BASE_URL/health/ready" >/dev/null \
+              && curl -fsS --max-time 15 "$SMOKE_BASE_URL/health/dependencies" > /tmp/nightly_dependencies.json; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "deployed health probe failed after 3 attempts"
+              exit 1
+            fi
+            sleep 10
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("/tmp/nightly_dependencies.json").read_text())
+          degraded = sorted(k for k, v in data["services"].items() if v["status"] == "degraded")
+          print(f"dependency_status={data['status']}")
+          print(f"degraded={','.join(degraded) or 'none'}")
+          print(f"fallback_counters={data['fallback_counters']}")
+          if data["status"] != "ok":
+              raise SystemExit(1)
+          PY
       - name: Upload test log on failure
         if: failure()
         uses: actions/upload-artifact@v4
