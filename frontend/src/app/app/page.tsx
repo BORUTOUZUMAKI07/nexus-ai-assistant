@@ -9,7 +9,6 @@ import {
   ChatArea,
   MessageItem,
   CitationItem,
-  ToolCallItem,
   PlanReviewItem,
 } from "@/features/chat/ChatArea";
 import { ChatInput, SendMessageOptions } from "@/features/chat/ChatInput";
@@ -65,7 +64,12 @@ import {
   planKeys,
   type CachedArtifact,
 } from "@/lib/queries";
-import { useNexusChat, NexusMessage } from "@/hooks/useNexusChat";
+import { useNexusChat } from "@/hooks/useNexusChat";
+import {
+  createMessageItemCache,
+  deriveMessageItems,
+  type MessageItemCache,
+} from "@/lib/message-items";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { useSidebarLayout } from "@/lib/sidebar-layout";
 import { DEFAULT_MODEL_ID, MODELS, canonicalModelId } from "@/lib/models";
@@ -1207,36 +1211,21 @@ function AppPageInner() {
     void chat.sendMessage(content, { mode, imageDataUrl: options.imageDataUrl });
   };
 
-  const messages: MessageItem[] = chat.messages.map((m: NexusMessage) => {
-    const thoughts = chat.getReasoningBlocks(m).map((a) => a.data.content).join("\n");
-    const citations: CitationItem[] = chat.getCitations(m).map((a) => ({
-      filename: a.data.filename ?? a.data.source ?? a.data.url ?? "source",
-      chunk_index: (a.data as { chunk_index?: number }).chunk_index ?? 0,
-      score: a.data.score ?? 0,
-      content_snippet: a.data.content_snippet ?? a.data.snippet ?? "",
-    }));
-    const toolCalls: ToolCallItem[] = chat.getToolCalls(m).map((a) => ({
-      name: a.data.tool_name,
-      args: a.data.tool_input,
-      result: a.data.result,
-      status: a.data.status ?? "running",
-    }));
-    return {
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      model: m.model,
-      thought_process: thoughts || undefined,
-      citations: citations.length > 0 ? citations : undefined,
-      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-      created_at: typeof m.createdAt === "string" ? m.createdAt : undefined,
-      imageDataUrl: m.imageDataUrl,
-      // The history mapper already preserves these. Without the last hop here,
-      // a reload silently hid the cost pill and token chip on every old reply.
-      cost_usd: m.cost_usd,
-      total_tokens: m.total_tokens,
-    };
-  });
+  // The patcher keeps untouched message objects by reference, so this cache
+  // lets each painted frame re-derive only the live turn instead of rebuilding
+  // the annotation arrays for the whole transcript. See `deriveMessageItems`.
+  // A lazy state initializer keeps one WeakMap for the component's lifetime
+  // without a ref write during render (and collects it on unmount).
+  const [messageItemCache] = useState<MessageItemCache>(createMessageItemCache);
+  const messages: MessageItem[] = deriveMessageItems(
+    chat.messages,
+    {
+      getReasoningBlocks: chat.getReasoningBlocks,
+      getCitations: chat.getCitations,
+      getToolCalls: chat.getToolCalls,
+    },
+    messageItemCache
+  );
 
   const feedbackStateById = useMemo<Record<string, FeedbackValue>>(
     () =>
