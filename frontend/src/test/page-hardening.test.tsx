@@ -48,6 +48,24 @@ describe("App shell hardening", () => {
     expect(shell.className).not.toContain("w-screen")
   })
 
+  it("shows the real logo in the desktop chat header, not a coloured square", async () => {
+    // The desktop header used a bare `<div className="bg-[var(--accent)]" />`
+    // as its brand mark, which renders as a solid yellow rectangle next to the
+    // "Nexus AI" label. The sidebar, sign-in and share pages all use the actual
+    // logo asset; the header must be the same glyph, not a placeholder.
+    await login()
+    const headerLabel = screen
+      .getAllByText("Nexus AI")
+      .find((el) => el.className.includes("text-sm font-semibold"))
+    expect(headerLabel).toBeDefined()
+
+    const logo = headerLabel!.parentElement!.querySelector("img")
+    expect(logo).not.toBeNull()
+    expect(logo!.getAttribute("alt")).toBe("Nexus")
+    expect(logo!.getAttribute("src")).toContain("nexus-logo.svg")
+    expect(headerLabel!.parentElement!.querySelector("div.bg-\\[var\\(--accent\\)\\]")).toBeNull()
+  })
+
   it("makes model comparison reachable from the small-screen header", async () => {
     await login()
     const compareButtons = screen.getAllByRole("button", {
