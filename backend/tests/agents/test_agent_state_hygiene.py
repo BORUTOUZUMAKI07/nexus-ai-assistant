@@ -76,6 +76,8 @@ STALE_TURN: dict[str, Any] = {
 
     "artifact_created": True,
 
+    "arq_flags": {"needs_tool": False, "safety_flag": True, "recency_needed": False, "ambiguous": False},
+
 }
 
 
@@ -120,6 +122,42 @@ async def test_a_new_user_turn_does_not_inherit_the_previous_turn(_runnable):
 
 
 
+
+
+async def test_a_new_user_turn_does_not_inherit_stale_arq_flags(_runnable):
+    """`arq_flags` is read by `model_router` before this turn's ARQ runs.
+
+    Without a reset, a safety flag from the previous turn survives the
+    checkpoint and silently forces this turn off the fast path -- worse, its
+    all-false/true pattern governs which safety route the turn takes.
+    """
+    from backend.app.agents.orchestrator import nodes
+
+    state = {**STALE_TURN, "messages": [HumanMessage(content="hello there")]}
+    out = await nodes.bootstrap_node(state)
+
+    assert out["arq_flags"] is None
+
+
+async def test_a_hitl_resume_keeps_its_arq_flags(_runnable):
+    """A resume must keep the interrupted turn's safety routing decision."""
+    from backend.app.agents.orchestrator import nodes
+
+    state = {**STALE_TURN, "messages": [AIMessage(content="paused")]}
+    out = await nodes.bootstrap_node(state)
+
+    assert out["arq_flags"] == state["arq_flags"]
+
+
+async def test_a_fresh_turn_can_take_the_fast_path_after_a_flagged_turn(_runnable):
+    """End-to-end across the two nodes: no stale flag may block a greeting."""
+    from backend.app.agents.orchestrator import model_router, nodes
+
+    flagged = {**STALE_TURN, "messages": [HumanMessage(content="hello there")]}
+    bootstrapped = await nodes.bootstrap_node(flagged)
+    routed = {**flagged, **bootstrapped}
+
+    assert model_router.should_take_simple_chat_fast_path(routed) is True
 
 
 async def test_a_hitl_resume_keeps_the_turn_it_is_resuming(_runnable):

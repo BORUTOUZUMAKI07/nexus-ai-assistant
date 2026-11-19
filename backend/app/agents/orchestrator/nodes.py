@@ -551,6 +551,11 @@ def per_turn_reset() -> dict[str, Any]:
         "artifact_created": False,
         "artifact_reason": "",
         "prompt_snapshot": None,
+        # `model_router` reads these BEFORE this turn's ARQ runs (bootstrap ->
+        # model_router -> planner -> orchestrator, where ARQ finally executes).
+        # Without a reset the previous turn's safety flag silently governs this
+        # turn's fast-path/safety routing.
+        "arq_flags": None,
     }
 
 
@@ -610,6 +615,10 @@ async def bootstrap_node(state: AgentState) -> dict[str, Any]:
         "needs_web_search": bool(state.get("needs_web_search", False)),
         "retry_count": state.get("retry_count", 0),
         "error": state.get("error"),
+        # A resume re-enters here mid-turn and needs the interrupted turn's
+        # routing flags. `per_turn_reset()` below overwrites this with None for
+        # a genuine new user turn.
+        "arq_flags": state.get("arq_flags"),
         # Per-turn findings do NOT carry over, and that is a measured bug, not
         # tidiness. The checkpoint is per conversation, so every field the last
         # turn set was still in state when the next one started: the synthesizer
