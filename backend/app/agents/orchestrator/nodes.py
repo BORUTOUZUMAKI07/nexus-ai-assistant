@@ -34,6 +34,7 @@ from backend.app.infrastructure.ai.litellm_client import (
 )
 from backend.app.services.confidence.action import apply_confidence_action
 from backend.app.services.conversations.context import context_compiler
+from backend.app.services.evidence.action import apply_evidence_action
 from backend.app.services.llm.structured_output import (
     structured_service,  # noqa: F401  (tests monkeypatch nodes.structured_service)
 )
@@ -1857,6 +1858,9 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
 
     # â”€â”€ Grounding verification via the Evidence Gate against used sources â”€â”€â”€â”€â”€â”€â”€
     evidence_gate_result = {"passed_gate": False, "confidence_score": 0.0, "citations": [], "reason": ""}
+    # Distinguish "the gate evaluated and failed" from "the gate could not run".
+    # Only the former may change the answer; a failed check is not a verdict.
+    evidence_gate_evaluated = False
     raw_citations = state.get("citations", [])
     evidence_contexts: list[str] = []
     if raw_citations:
@@ -1875,6 +1879,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
 
     try:
         evidence_gate_result = evidence_gate.verify_evidence_support(response_text, evidence_contexts)
+        evidence_gate_evaluated = True
         logger.info(
             "evidence_gate_evaluated_on_synthesis",
             confidence=evidence_gate_result["confidence_score"],
@@ -1939,6 +1944,26 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             )
         except Exception as exc:
             logger.warning("confidence_action_failed_open", error=str(exc))
+
+    # Act on the evidence gate too. Until now its verdict was computed, logged,
+    # returned in state and rendered as a "Low evidence" pill, while the answer
+    # itself shipped unchanged -- a gate that only produces a badge. A real,
+    # evaluated failure now qualifies the answer so an unsupported claim is not
+    # presented as verified. Applied AFTER the confidence action so at most one
+    # caveat is added; fail-open on every error path.
+    if settings.EVIDENCE_ACTION_ENABLED and evidence_gate_evaluated:
+        try:
+            _evidence_action = apply_evidence_action(response_text, evidence_gate_result)
+            if _evidence_action.acted:
+                response_text = _evidence_action.text
+            logger.info(
+                "evidence_action_applied",
+                acted=_evidence_action.acted,
+                reason=_evidence_action.reason,
+                confidence=_evidence_action.confidence,
+            )
+        except Exception as exc:
+            logger.warning("evidence_action_failed_open", error=str(exc))
 
     # â”€â”€ Save new memories from this exchange via mem0 (background, non-blocking) â”€â”€
     # ── Reinforce recalled memories in background (confidence reinforcement) ──

@@ -879,6 +879,14 @@ class Settings(BaseSettings):
             "refusal, 'none' records only"
         ),
     )
+    EVIDENCE_ACTION_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Act on the evidence gate's verdict. When False the gate is "
+            "record-only (computed, logged and shown as a badge, but the "
+            "answer is delivered as-is)"
+        ),
+    )
     BANDIT_EPSILON: float = Field(
         default=0.1,
         description="ε-greedy exploration rate for bandit-selected experiment variants",
