@@ -1689,6 +1689,15 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             critique = await critic_subagent.evaluate(
                 user_request=last_user_content, candidate_response=draft
             )
+            if critique.get("error"):
+                # An unreviewed draft is better than a lost turn. Never feed the
+                # outage text into the revision loop as if it were feedback.
+                logger.warning(
+                    "critic_unavailable_accepting_draft",
+                    error=str(critique["error"])[:200],
+                )
+                response_text = draft
+                break
             if critique.get("approved"):
                 response_text = draft
                 break

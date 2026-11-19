@@ -3,6 +3,7 @@ Critic Subagent.
 Evaluates agent outputs against task contracts, criteria rubrics,
 and checks for factual inconsistencies or logical errors.
 """
+import re
 from typing import Any
 
 import structlog
@@ -10,6 +11,11 @@ from backend.app.core.config import settings
 from backend.app.infrastructure.ai.litellm_client import ai_client
 
 logger = structlog.get_logger(__name__)
+
+# Anchored to a line start: a substring search accepted a NEEDS_REVISION verdict
+# whenever the feedback happened to contain the word "APPROVED".
+_STATUS_RE = re.compile(r"^\s*STATUS:\s*(APPROVED|NEEDS_REVISION)\b", re.IGNORECASE | re.MULTILINE)
+_SCORE_RE = re.compile(r"^\s*SCORE:\s*(\d{1,3})\b", re.IGNORECASE | re.MULTILINE)
 
 CRITIC_SYSTEM_PROMPT = """You are the Nexus Quality & Verification Critic. Evaluate an AI draft strictly against the user's original request.
 
@@ -41,21 +47,47 @@ class CriticSubagent:
             "Evaluate this response strictly according to your rubric."
         )
 
-        critique = await ai_client.completion(
-            messages=[
-                {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            model=settings.FAST_MODEL,
-            temperature=0.1,
-            max_tokens=400,
-        )
+        try:
+            critique = await ai_client.completion(
+                messages=[
+                    {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                model=settings.FAST_MODEL,
+                temperature=0.1,
+                max_tokens=400,
+            )
+        except Exception as exc:
+            # The quality critic is not a safety gate. Letting an outage raise
+            # here killed the whole NO_RETRY synthesizer node and lost the
+            # answer; treating it as a revision request fed the exception text
+            # back into the draft prompt as "critic feedback". Accept the
+            # unreviewed draft and record the fact instead.
+            logger.warning("critic_evaluation_failed", error=str(exc))
+            return {
+                "subagent": "critic",
+                "approved": True,
+                "score": None,
+                "critique": "Critic unavailable; draft accepted without review.",
+                "error": str(exc),
+            }
 
-        approved = "STATUS: APPROVED" in critique.upper()
+        status_match = _STATUS_RE.search(critique)
+        approved = bool(status_match and status_match.group(1).upper() == "APPROVED")
+
+        score: int | None = None
+        score_match = _SCORE_RE.search(critique)
+        if score_match:
+            parsed_score = int(score_match.group(1))
+            if 0 <= parsed_score <= 100:
+                score = parsed_score
+
         return {
             "subagent": "critic",
             "approved": approved,
+            "score": score,
             "critique": critique,
+            "error": None,
         }
 
 
