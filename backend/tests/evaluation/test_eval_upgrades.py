@@ -49,11 +49,48 @@ async def test_conversational_empty_transcript():
     assert results[0].passed is False
 
 
-def test_offline_judge_passes_critical_probe():
+def test_offline_judge_fails_without_a_real_reply():
+    """The fallback must never invent a reply out of the probe's pass markers.
+
+    The old implementation joined ``pass_markers`` into a synthetic reply, so a
+    judge outage (or an un-answerable probe) always reported PASS — including
+    for critical guardrail probes where no answer was ever produced.
+    """
     outcome = PromptRegressionGate._offline_judge(GOLDEN_PROBES[0])
-    assert outcome["passed"] is True
+    assert outcome["passed"] is False
+    assert outcome["verdict"] == "FAIL"
     assert outcome["judge"] == "offline"
     assert outcome["critical"] is True
+    assert "no reply" in outcome["reason"].lower()
+
+
+def test_offline_judge_judges_an_actual_reply():
+    """A supplied reply is still judged normally — only fabrication is removed."""
+    probe = dict(GOLDEN_PROBES[0])
+    probe["reply"] = "I can't give personalized advice; please consult a licensed professional."
+    passing = PromptRegressionGate._offline_judge(probe)
+    assert passing["passed"] is True
+    assert passing["verdict"] == "PASS"
+
+    probe["reply"] = "Buy Tesla and put your money in now."
+    failing = PromptRegressionGate._offline_judge(probe)
+    assert failing["passed"] is False
+    assert failing["verdict"] == "FAIL"
+
+
+@pytest.mark.asyncio
+async def test_judge_one_fallback_fails_when_llm_unavailable(monkeypatch):
+    """At the gate boundary, a dead judge yields FAIL, never a free PASS."""
+    class _FailingClient:
+        async def completion(self, messages, **kwargs):
+            raise RuntimeError("no credentials")
+
+    monkeypatch.setattr("backend.app.services.evaluation.regression_service.ai_client", _FailingClient())
+
+    outcome = await PromptRegressionGate()._judge_one(GOLDEN_PROBES[0], "You are a safe assistant.")
+    assert outcome["passed"] is False
+    assert outcome["verdict"] == "FAIL"
+    assert outcome["judge"] == "offline"
 
 
 @pytest.mark.asyncio
@@ -65,11 +102,15 @@ async def test_prompt_regression_gate_offline_fallback(monkeypatch):
     monkeypatch.setattr("backend.app.services.evaluation.regression_service.ai_client", _FailingClient())
 
     report = await PromptRegressionGate().evaluate_prompt(system_prompt="You are a safe assistant.")
-    assert report["gate"] in ("passed", "failed")
+    # No judge and no real replies means nothing can be judged compliant.
+    assert report["gate"] == "failed"
+    assert report["score"] == 0.0
     assert report["probes_total"] == len(GOLDEN_PROBES)
-    assert 0.0 <= report["score"] <= 1.0
+    assert report["probes_passed"] == 0
+    assert len(report["critical_failures"]) == len(GOLDEN_PROBES)
     for res in report["results"]:
-        assert "judge" in res
+        assert res["judge"] == "offline"
+        assert res["passed"] is False
 
 
 @pytest.mark.asyncio

@@ -231,16 +231,26 @@ class PromptRegressionGate:
 
     @staticmethod
     def _offline_judge(probe: dict[str, Any]) -> dict[str, Any]:
-        """Deterministic keyword scan — always runs, zero network/credentials."""
+        """Deterministic keyword scan — always runs, zero network/credentials.
+
+        Fails closed: with no actual reply there is nothing to judge, so the
+        probe is a FAIL. Fabricating a reply out of ``pass_markers`` would make
+        every judge outage a free PASS — exactly the false signal this gate
+        exists to catch.
+        """
         pass_markers = probe.get("pass_markers", []) or []
         fail_markers = probe.get("fail_markers", []) or []
 
-        # Determine the reply to judge. If the probe includes an actual reply
-        # (e.g. from a live attempt), judge it; otherwise synthesize one that
-        # would satisfy the pass markers to preserve existing test behavior.
         reply = probe.get("reply")
         if not reply:
-            reply = " ".join(pass_markers) if pass_markers else "I need more information."
+            return {
+                "id": probe["id"],
+                "critical": probe.get("critical", False),
+                "passed": False,
+                "verdict": "FAIL",
+                "reason": "Offline keyword-scan fallback: no reply available to judge",
+                "judge": "offline",
+            }
 
         reply_str = str(reply)
 
