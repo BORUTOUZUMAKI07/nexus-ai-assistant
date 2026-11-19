@@ -1962,7 +1962,6 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         except Exception as exc:
             logger.warning("evidence_action_failed_open", error=str(exc))
 
-    # â”€â”€ Save new memories from this exchange via mem0 (background, non-blocking) â”€â”€
     # ── Reinforce recalled memories in background (confidence reinforcement) ──
     recalled_memories = state.get("recalled_memories", [])
     if user_id and recalled_memories:
@@ -1971,6 +1970,25 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         except Exception as exc:
             logger.warning("reinforce_memories_task_failed", error=str(exc))
 
+    # Guard: never emit an empty AIMessage â€” LangGraph/litellm raise
+    # "model output must contain either output text or tool calls" when
+    # content is None or empty string.  Provide a safe fallback instead.
+    if not response_text or not response_text.strip():
+        response_text = (
+            "I'm sorry, I wasn't able to generate a response at this moment. "
+            "Please try again or rephrase your request."
+        )
+        logger.warning("synthesizer_empty_response_replaced_with_fallback")
+
+    # Deliver the finished answer progressively. See `_emit_answer_stream` for
+    # why this is the *sanitised* text and not the raw token stream.
+    # Emit before the memory write below so best-effort persistence never
+    # delays the answer the user is waiting to read.
+    await _emit_answer_stream(response_text)
+
+    # Persist new memories from this exchange via mem0. Best-effort and
+    # intentionally AFTER emission: an embedding + vector + DB round trip
+    # must never sit between "answer is ready" and "answer is visible".
     memory_decision = should_persist_memory(last_user_content, response_text)
     if user_id and memory_decision.should_write:
         exchange = [
@@ -2004,20 +2022,6 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
             logger.warning("mem0_save_failed_non_blocking", error=str(exc))
     elif user_id:
         logger.info("memory_write_skipped", reason=memory_decision.reason)
-
-    # Guard: never emit an empty AIMessage â€” LangGraph/litellm raise
-    # "model output must contain either output text or tool calls" when
-    # content is None or empty string.  Provide a safe fallback instead.
-    if not response_text or not response_text.strip():
-        response_text = (
-            "I'm sorry, I wasn't able to generate a response at this moment. "
-            "Please try again or rephrase your request."
-        )
-        logger.warning("synthesizer_empty_response_replaced_with_fallback")
-
-    # Deliver the finished answer progressively. See `_emit_answer_stream` for
-    # why this is the *sanitised* text and not the raw token stream.
-    await _emit_answer_stream(response_text)
 
     ai_message = AIMessage(content=response_text)
     return {
