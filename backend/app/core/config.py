@@ -1039,6 +1039,13 @@ class Settings(BaseSettings):
     # endpoint is open (local/dev scraping) — always set it in production.
     METRICS_TOKEN: str | None = Field(default=None)
 
+    # ── Dependency health probe ────────────────────────────────────────────────
+    # /health/dependencies is cached so a monitor cannot turn into a probe storm
+    # against Qdrant or Supabase Storage. Every network check is bounded by the
+    # timeout and the whole snapshot is reused for the TTL window.
+    HEALTH_DEPENDENCIES_CACHE_TTL_SECONDS: float = Field(default=30.0, gt=0)
+    HEALTH_DEPENDENCIES_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def parse_cors(cls, v: str | list[str]) -> list[str]:

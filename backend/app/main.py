@@ -34,6 +34,7 @@ from backend.app.infrastructure.resilience.rate_limit import (
 )
 from backend.app.infrastructure.vector.qdrant_client import vector_db
 from backend.app.mcp.server import mcp
+from backend.app.services.health.dependencies import get_dependency_health
 from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.otel import get_tracer, shutdown_otel
 from fastapi import FastAPI, HTTPException, Request, status
@@ -720,6 +721,16 @@ async def readiness_check():
         "mcp_transport": mcp_transport,
         "rate_limit_store": rate_limit_store,
     }
+
+
+@app.get("/health/dependencies", tags=["system"])
+async def dependency_health_check():
+    """Cached, read-only status of the services outside this process.
+
+    A degraded service never changes the HTTP status: the app is still up, and
+    the caller (nightly smoke check or an operator) decides what to alert on.
+    """
+    return await get_dependency_health()
 
 
 @app.get("/", tags=["system"])
