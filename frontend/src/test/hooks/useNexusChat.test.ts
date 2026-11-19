@@ -704,6 +704,48 @@ describe("useNexusChat", () => {
     expect(result.current.pendingHITL).toBeNull()
   })
 
+  it("rejoins the resumed run the approval returned, not the parked run", async () => {
+    // The backend no longer answers an approval inline: it starts a run and
+    // returns its id. Rejoining the *old* run would replay an interrupted turn
+    // with no answer, so the id has to be filed under the conversation before
+    // the existing hydrate-and-rejoin path runs.
+    const resumedRunId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    const rejoinedRunIds: (string | null)[] = []
+    window.localStorage.clear()
+    server.use(
+      http.post("/api/chat", () =>
+        new HttpResponse(
+          chatStreamBody([], [
+            { type: "hitl_request", data: { thread_id: "t1", request: "Run tool?" } },
+          ]),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        )
+      ),
+      http.post("/api/hitl", () =>
+        HttpResponse.json({ status: "resumed", action: "approve", run_id: resumedRunId })
+      ),
+      http.get("/api/chat", ({ request }) => {
+        rejoinedRunIds.push(new URL(request.url).searchParams.get("runId"))
+        return new HttpResponse("", {
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        })
+      })
+    )
+
+    const { result } = renderHook(() => useNexusChat({ conversationId: "t1" }))
+    await act(async () => {
+      await result.current.sendMessage("run it")
+    })
+    await waitFor(() => expect(result.current.pendingHITL).not.toBeNull())
+
+    await act(async () => {
+      await result.current.resolveHITL("approve")
+    })
+
+    await waitFor(() => expect(rejoinedRunIds).toContain(resumedRunId))
+    expect(result.current.pendingHITL).toBeNull()
+  })
+
   it("keeps the request pending and rejects when the approval submit fails", async () => {
     // The approval is the one flow that must not be lossy: a failed submit
     // records the error, keeps `pendingHITL` so the card stays actionable, and

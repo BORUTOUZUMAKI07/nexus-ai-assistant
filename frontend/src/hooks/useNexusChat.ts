@@ -1607,11 +1607,20 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
       if (!request) return;
       setError(null);
       try {
-        await sendHITLFeedback({
+        const response = await sendHITLFeedback({
           threadId: request.thread_id,
           action,
           data: data ?? (action === "modify" ? { approved: true } : {}),
         });
+        // The backend no longer resumes the graph inline: it starts a fresh,
+        // durable run and returns its id. Rejoining the *parked* run would replay
+        // an interrupted turn with no answer, so file the new id under this
+        // conversation first -- the hydrate-and-rejoin path below reads it from
+        // storage. This keeps HITL on the same rejoin transport as every other
+        // turn instead of a second bespoke stream.
+        if (response.run_id) {
+          rememberRun(request.thread_id, response.run_id);
+        }
         // Only retire the card once the backend has actually recorded the
         // decision. Clearing it in a `finally` destroyed the Approve/Deny UI on
         // any transient failure (offline, 5xx, timeout), silently dropping a
@@ -1622,13 +1631,11 @@ export function useNexusChat(options: UseNexusChatOptions = {}) {
         // request is outstanding). Update the ref directly because the mirroring
         // effect has not run yet.
         pendingHITLRef.current = null;
-        // The backend resumed the graph inline and persisted the answer, but it
-        // does not stream the resumed turn back to this client. Without a reload
-        // the card cleared and the user saw nothing until a manual refresh --
-        // the approval "succeeded" and produced no visible result. Reload through
-        // the same single-writer path the transcript already uses, and only when
-        // this conversation is the one on screen (otherwise the answer will load
-        // when the user switches back).
+        // The resumed graph runs as a background task, so the approval response
+        // arrives before the answer does. Rejoin through the same single-writer
+        // path the transcript already uses (now with the resumed run's id), and
+        // only when this conversation is on screen -- otherwise the answer loads
+        // when the user switches back.
         if (optionsRef.current.conversationId === request.thread_id) {
           await hydrateThenRejoin(request.thread_id);
         }

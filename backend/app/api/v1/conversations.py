@@ -25,15 +25,11 @@ from backend.app.domain.conversation.schemas import (
 )
 from backend.app.domain.run.service import RunService
 from backend.app.domain.user.models import User
-from backend.app.infrastructure.ai.litellm_client import (
-    get_last_resolved_model,
-    resolve_answer_model,
-)
+from backend.app.infrastructure.ai.litellm_client import resolve_answer_model
 from backend.app.infrastructure.database.session import async_session_factory
 from backend.app.infrastructure.resilience.rate_limit import rate_limit
 from backend.app.services.conversations.service import ConversationService
 from backend.app.services.evaluation.guardrail_service import guardrail_service
-from backend.app.services.llm.byok import bind_byok_keys, load_user_byok_keys, reset_byok_keys
 from backend.app.services.orgs.service import OrganizationService
 from backend.app.services.prompts.compiler import prompt_compiler
 from backend.app.services.prompts.service import load_active_skills
@@ -707,19 +703,6 @@ async def hitl_feedback(
         )
 
     try:
-        # BYOK: the resumed graph makes more model calls (the synthesizer runs
-        # after the approved tool), so the user's stored keys have to be bound
-        # here too -- the resume is off the SSE path and never went through
-        # `execute_run`, where the streaming path binds them. Fail-open.
-        _byok_token = None
-        try:
-            async with async_session_factory() as _byok_session:
-                _byok_token = bind_byok_keys(
-                    await load_user_byok_keys(_byok_session, current_user.id)
-                )
-        except Exception as exc:
-            logger.warning("byok_bind_failed", thread_id=thread_id, error_type=type(exc).__name__)
-
         # Verify the thread is actually parked at an interrupt and that the
         # parked approval has not expired — refuse to resume a stale request.
         snapshot = await orchestrator_graph.aget_state(
@@ -762,43 +745,71 @@ async def hitl_feedback(
                 detail="This approval request has expired. Please start a new request.",
             )
 
-        result = await orchestrator_graph.ainvoke(
-            Command(resume={"action": body.action, "data": body.data}),
-            config={"configurable": {"thread_id": thread_id, "user_id": str(current_user.id)}},
+        # A resume is a turn like any other. Route it through `execute_run`
+        # instead of a blocking `ainvoke`: the approved tool and the synthesis
+        # that follows it get run frames, a `done`, quality/usage/cost rows and
+        # a parented assistant message, and the HTTP request stops holding a
+        # socket open for the whole resumed graph. BYOK keys are bound by the
+        # executor for the lifetime of that task, not by this request.
+        async with async_session_factory() as session:
+            run = await RunService(session).start_run(
+                conversation_id=convo_uuid,
+                user_id=current_user.id,
+                thread_id=thread_id,
+                mode="normal",
+            )
+
+        # The assistant reply this resume produces answers the turn's last user
+        # message. The inline path wrote `parent_message_id=None`, which made
+        # the resumed answer look orphaned in the transcript.
+        history = await conv_svc.get_messages(convo_uuid)
+        last_user = next(
+            (m for m in reversed(history) if getattr(m, "role", None) == "user"),
+            None,
+        )
+        user_messages = (
+            [{"role": "user", "content": getattr(last_user, "content", "")}]
+            if last_user is not None
+            else []
         )
 
-        # Persist the resumed run's final assistant turn so an approved HITL
-        # decision is durably recorded even though this endpoint is not SSE.
-        if result and isinstance(result, dict) and body.action in ("approve", "modify"):
-            msgs = result.get("messages") or []
-            if msgs:
-                last = msgs[-1]
-                content = getattr(last, "content", "") or ""
-                if isinstance(content, list):
-                    content = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
-                if content and str(content).strip():
-                    try:
-                        # The resumed run's own resolution, when the graph
-                        # recorded one; the default group only when the run
-                        # never reached a provider.
-                        await conv_svc.add_message(
-                            conversation_id=convo_uuid,
-                            role="assistant",
-                            content=str(content),
-                            parent_message_id=None,
-                            model=get_last_resolved_model()
-                            or resolve_answer_model(None),
-                        )
-                    except Exception as exc:
-                        logger.warning("agentic_hitl_assistant_message_persist_failed", thread_id=thread_id, error=str(exc))
+        async def _release() -> None:
+            # The resume outlives this response; only the executor may free the
+            # thread slot, or a second turn could start while tools still run.
+            await _release_stream_slot(thread_id)
 
-        return {"status": "resumed", "action": body.action}
+        spawn_run_task(
+            execute_run(
+                run_id=run.id,
+                # Injected rather than imported so this module's test seam keeps
+                # intercepting the graph (project guidelines §9.14).
+                graph=orchestrator_graph,
+                config={
+                    "configurable": {"thread_id": thread_id, "user_id": str(current_user.id)}
+                },
+                graph_input=Command(resume={"action": body.action, "data": body.data}),
+                conversation_id=convo_uuid,
+                user_id=current_user.id,
+                mode="normal",
+                user_messages=user_messages,
+                parent_message_id=getattr(last_user, "id", None),
+                on_finish=_release,
+                session_factory=async_session_factory,
+            ),
+            run_id=run.id,
+        )
     except HTTPException:
+        await _release_stream_slot(thread_id)
         raise
     except Exception as exc:
+        await _release_stream_slot(thread_id)
         logger.exception("hitl_resume_error", thread_id=thread_id, error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        if _byok_token is not None:
-            reset_byok_keys(_byok_token)
+    except BaseException:
         await _release_stream_slot(thread_id)
+        raise
+
+    # The run id is the client's rejoin key. Still JSON: the approval card can
+    # retire immediately, and the resumed answer streams into the transcript
+    # through the same rejoin path a refresh uses.
+    return {"status": "resumed", "action": body.action, "run_id": str(run.id)}

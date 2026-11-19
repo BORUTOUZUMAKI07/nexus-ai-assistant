@@ -1042,7 +1042,7 @@ export async function sendMessageFeedback(
 
 export async function sendHITLFeedback(
   feedback: HITLFeedback
-): Promise<{ status: string }> {
+): Promise<{ status: string; run_id?: string }> {
   // `/api/hitl` is a bespoke BFF route that reads `threadId`/`action`/`data`
   // from the body and forwards them to `POST /api/v1/conversations/{threadId}/hitl`
   // with the session bearer token attached server-side.

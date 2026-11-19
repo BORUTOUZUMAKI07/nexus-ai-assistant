@@ -229,6 +229,20 @@ describe("api client", () => {
     const res = await sendHITLFeedback({ threadId: "t-1", action: "approve" })
     expect(res.status).toBe("received")
   })
+
+  it("returns the resumed run id so the client can rejoin its stream", async () => {
+    server.use(
+      http.post(`${API}/hitl`, () =>
+        HttpResponse.json({
+          status: "resumed",
+          action: "approve",
+          run_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        })
+      )
+    )
+    const res = await sendHITLFeedback({ threadId: "t-1", action: "approve" })
+    expect(res.run_id).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+  })
 })
 
 /**

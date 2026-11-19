@@ -178,7 +178,7 @@ async def execute_run(
     run_id: UUID,
     graph: Any,
     config: dict[str, Any],
-    graph_input: dict[str, Any],
+    graph_input: Any,
     conversation_id: UUID,
     user_id: UUID,
     mode: str,
@@ -532,7 +532,7 @@ def _is_assistant_output(message: Any) -> bool:
 
 
 async def iter_graph_frames(
-    graph: Any, *, config: dict[str, Any], graph_input: dict[str, Any]
+    graph: Any, *, config: dict[str, Any], graph_input: Any
 ) -> AsyncIterator[tuple[dict[str, Any], bool]]:
     """Translate graph events into ``(frame, is_text_delta)`` pairs.
 
