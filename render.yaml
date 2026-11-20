@@ -181,10 +181,11 @@ services:
       # f9a0b1c2d3e4 is applied. Off before the migration exists, on in prod.
       - key: POST_ANSWER_OUTBOX_ENABLED
         value: "true"
-      # User-facing flags, enabled deliberately. The verification link now has
-      # a real /verify-email page in the frontend, and the exact response cache
-      # is scoped per conversation so one thread cannot replay another's answer.
+      # User-facing flags. Verification is off deliberately: sign up and log in
+      # immediately, with no email link required (the original free-tier flow).
+      # The /verify-email page stays in place, harmless if a token is ever used.
+      # Response caching stays on; its key is scoped per conversation.
       - key: EMAIL_VERIFICATION_REQUIRED
-        value: "true"
+        value: "false"
       - key: RESPONSE_CACHE_ENABLED
         value: "true"

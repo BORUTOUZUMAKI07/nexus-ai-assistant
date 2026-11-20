@@ -15,10 +15,11 @@ def _backend_env() -> dict[str, object]:
     return {str(v["key"]): v for v in backend["envVars"]}
 
 
-def test_email_verification_is_enabled_in_the_deployment_blueprint():
+def test_email_verification_is_disabled_in_the_deployment_blueprint():
+    """Old free-tier behaviour: sign up and log in without an email link."""
     entry = _backend_env().get("EMAIL_VERIFICATION_REQUIRED")
     assert entry is not None, "the deployed backend must declare the flag explicitly"
-    assert str(entry.get("value")).lower() == "true"
+    assert str(entry.get("value")).lower() == "false"
     assert entry.get("sync") is not True, "a boolean flag must never be secret-synced"
 
 
