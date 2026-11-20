@@ -7,6 +7,7 @@ import hashlib
 import json
 import time
 from collections.abc import AsyncGenerator
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -26,6 +27,7 @@ from backend.app.domain.conversation.schemas import (
 )
 from backend.app.domain.usage.schemas import UsageLogCreate
 from backend.app.domain.user.models import User
+from backend.app.domain.user.repository import UserRepository
 from backend.app.infrastructure.ai.litellm_client import (
     ai_client,
     get_last_resolved_model,
@@ -42,6 +44,7 @@ from backend.app.services.evaluation.guardrail_service import (
 )
 from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.experiments.service import experiment_service
+from backend.app.services.memory.lifecycle import should_persist_memory
 from backend.app.services.memory.long_term import long_term_memory
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.fallbacks import count_fallback
@@ -87,6 +90,62 @@ def _memory_scoped_variant(variant: str, memory_block: str) -> str:
         return variant
     digest = hashlib.sha256(memory_block.encode("utf-8")).hexdigest()[:12]
     return f"{variant}:mem0-{digest}"
+
+
+async def _persist_memory_from_exchange(
+    *,
+    user_id: UUID,
+    conversation_id: UUID,
+    user_text: str,
+    assistant_text: str,
+    session: Any,
+) -> None:
+    """Write durable facts from a direct /messages turn, like the graph does.
+
+    The write gate is the same one the orchestrator uses, so chatter never pays
+    for an extraction. Mem0 owns extraction/dedupe; the local table owns the
+    user-facing memory API, so extracted facts are mirrored into it. Everything
+    here is best-effort: memory persistence must never fail an answer.
+    """
+    decision = should_persist_memory(user_text, assistant_text)
+    if not decision.should_write:
+        return
+    try:
+        extracted = await long_term_memory.add_from_conversation(
+            messages=[
+                {"role": "user", "content": user_text},
+                {"role": "assistant", "content": assistant_text},
+            ],
+            user_id=user_id,
+            metadata={"conversation_id": str(conversation_id)},
+            agent_id="nexus-assistant",
+        )
+        if not extracted:
+            logger.info(
+                "direct_message_memory_extraction_empty",
+                user_id=str(user_id),
+                reason=decision.reason,
+            )
+            return
+        created, _ = await UserRepository(session).mirror_memories(
+            user_id=user_id,
+            facts=extracted,
+            source_conv_id=conversation_id,
+        )
+        logger.info(
+            "direct_message_memory_saved",
+            user_id=str(user_id),
+            extracted=len(extracted),
+            mirrored=len(created),
+            reason=decision.reason,
+        )
+    except Exception as exc:
+        logger.warning(
+            "direct_message_memory_write_failed",
+            user_id=str(user_id),
+            error=str(exc),
+        )
+        count_fallback("mem0_write_direct_messages")
 
 
 @router.post("", response_model=MessageResponse)
@@ -331,6 +390,15 @@ async def send_message_sync(
     except Exception as exc:
         logger.warning("webhook_dispatch_failed", conversation_id=str(conversation_id), error=str(exc))
 
+    # Best-effort memory write after the answer is already complete.
+    await _persist_memory_from_exchange(
+        user_id=current_user.id,
+        conversation_id=conversation_id,
+        user_text=sanitized_content,
+        assistant_text=response_text,
+        session=usage_svc._repo.session,
+    )
+
     return assistant_msg
 
 
@@ -451,6 +519,15 @@ async def send_message_stream(
             )
 
             yield f"data: {json.dumps({'event': 'done', 'assistant_message_id': str(assistant_msg.id), 'tokens': comp_tok, 'latency_ms': duration_ms})}\n\n"
+
+            # The answer is already on the wire; persist facts only afterwards.
+            await _persist_memory_from_exchange(
+                user_id=current_user.id,
+                conversation_id=conversation_id,
+                user_text=sanitized_content,
+                assistant_text=full_response,
+                session=usage_svc._repo.session,
+            )
 
         except GeneratorExit:
             # Client disconnected mid-stream. Persist whatever text was already

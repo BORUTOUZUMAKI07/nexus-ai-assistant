@@ -119,10 +119,10 @@ def harness(monkeypatch):
     )
 
 
-async def _call_sync(harness):
+async def _call_sync(harness, content="What should I use?"):
     return await messages.send_message_sync(
         conversation_id=harness.conversation_id,
-        message_in=MessageCreate(content="What should I use?"),
+        message_in=MessageCreate(content=content),
         current_user=harness.user,
         org_id=None,
         conv_svc=harness.conv_svc,
@@ -218,3 +218,109 @@ async def test_cache_key_scopes_the_answer_to_the_recalled_memory(monkeypatch, h
     assert first_variant != second_variant, (
         "a change in recalled memories must produce a different response-cache key"
     )
+
+
+PREFERENCE = "I prefer dark mode in all my tools"
+
+
+@pytest.mark.asyncio
+async def test_sync_endpoint_writes_a_stated_preference_to_mem0(monkeypatch, harness):
+    """RED: direct /messages must save new facts, not only read old ones."""
+    writes = []
+
+    async def _add(**kwargs):
+        writes.append(kwargs)
+        return [{"id": "m1", "memory": PREFERENCE}]
+
+    async def _mirror(self, **kwargs):
+        return [], 0
+
+    monkeypatch.setattr(messages.long_term_memory, "add_from_conversation", _add)
+    monkeypatch.setattr(messages.UserRepository, "mirror_memories", _mirror)
+
+    await _call_sync(harness, PREFERENCE)
+
+    assert len(writes) == 1
+    assert writes[0]["user_id"] == harness.user.id
+    assert writes[0]["messages"][0]["content"] == PREFERENCE
+    assert str(harness.conversation_id) in str(writes[0]["metadata"])
+
+
+@pytest.mark.asyncio
+async def test_sync_endpoint_mirrors_the_extracted_fact_locally(monkeypatch, harness):
+    """RED: a mem0-only fact stays invisible to the user's memory API."""
+    mirrors = []
+
+    async def _add(**_kwargs):
+        return [{"id": "m1", "memory": PREFERENCE}]
+
+    async def _mirror(self, **kwargs):
+        mirrors.append(kwargs)
+        return [], 0
+
+    monkeypatch.setattr(messages.long_term_memory, "add_from_conversation", _add)
+    monkeypatch.setattr(messages.UserRepository, "mirror_memories", _mirror)
+
+    await _call_sync(harness, PREFERENCE)
+
+    assert mirrors[0]["facts"] == [{"id": "m1", "memory": PREFERENCE}]
+    assert mirrors[0]["source_conv_id"] == harness.conversation_id
+
+
+@pytest.mark.asyncio
+async def test_chatter_is_not_written_to_mem0(monkeypatch, harness):
+    """The write gate must be shared with the orchestrator chat path."""
+    writes = []
+
+    async def _add(**kwargs):
+        writes.append(kwargs)
+        return []
+
+    monkeypatch.setattr(messages.long_term_memory, "add_from_conversation", _add)
+
+    await _call_sync(harness, "thanks!")
+
+    assert writes == []
+
+
+@pytest.mark.asyncio
+async def test_memory_write_failure_does_not_fail_the_reply(monkeypatch, harness):
+    """Fail-open: an embedding or vector outage must not fail the answer."""
+
+    async def _add(**_kwargs):
+        raise RuntimeError("mem0 write down")
+
+    monkeypatch.setattr(messages.long_term_memory, "add_from_conversation", _add)
+
+    result = await _call_sync(harness, PREFERENCE)
+
+    assert result.content == "Here is your answer."
+
+
+@pytest.mark.asyncio
+async def test_stream_endpoint_writes_a_stated_preference(monkeypatch, harness):
+    """RED: the SSE variant must persist memories like the sync variant."""
+    writes = []
+
+    async def _add(**kwargs):
+        writes.append(kwargs)
+        return [{"id": "m1", "memory": PREFERENCE}]
+
+    async def _mirror(self, **kwargs):
+        return [], 0
+
+    monkeypatch.setattr(messages.long_term_memory, "add_from_conversation", _add)
+    monkeypatch.setattr(messages.UserRepository, "mirror_memories", _mirror)
+
+    response = await messages.send_message_stream(
+        conversation_id=harness.conversation_id,
+        message_in=MessageCreate(content=PREFERENCE),
+        current_user=harness.user,
+        org_id=None,
+        conv_svc=harness.conv_svc,
+        usage_svc=harness.usage_svc,
+    )
+    frames = [frame async for frame in _stream_events(response)]
+
+    assert frames[-1]["event"] == "done"
+    assert len(writes) == 1
