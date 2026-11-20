@@ -57,9 +57,9 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if curl -fsS --max-time 15 "$SMOKE_BASE_URL/health" >/dev/null \
-              && curl -fsS --max-time 15 "$SMOKE_BASE_URL/health/ready" >/dev/null \
-              && curl -fsS --max-time 15 "$SMOKE_BASE_URL/health/dependencies" > /tmp/nightly_dependencies.json; then
+            if curl -fsS --max-time 30 "$SMOKE_BASE_URL/health" >/dev/null \
+              && curl -fsS --max-time 30 "$SMOKE_BASE_URL/health/ready" >/dev/null \
+              && curl -fsS --max-time 30 "$SMOKE_BASE_URL/health/dependencies" > /tmp/nightly_dependencies.json; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then

@@ -25,6 +25,7 @@ def test_nightly_smokes_the_deployed_dependency_endpoint():
     assert "/health/ready" in text
     assert "SMOKE_BASE_URL" in text
     assert "attempt" in text, "a cold start must be retried before failing"
+    assert "--max-time 30" in text, "slow-but-healthy probes must not fail the transport"
 
 
 def test_nightly_smoke_does_not_interpolate_secrets():

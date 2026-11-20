@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import backend.app.services.health.dependencies as deps
 import pytest
+from backend.app.core.config import settings as real_settings
 from backend.app.main import app
 from backend.app.services.observability.metrics import MetricsCollector
 from httpx import ASGITransport, AsyncClient
@@ -183,6 +184,13 @@ async def test_timed_probe_reports_timeout_instead_of_hanging():
 
     assert result["status"] == "degraded"
     assert result["detail"] == "timeout"
+
+
+def test_default_probe_budget_covers_a_slow_but_healthy_database():
+    # Production `SELECT 1` measured ~3.1 s; a 2 s budget reported a false
+    # degradation while /health/ready still called the database available.
+    budget = real_settings.HEALTH_DEPENDENCIES_TIMEOUT_SECONDS
+    assert budget >= 4.0
 
 
 def test_mem0_mode_is_reported_from_the_live_client(monkeypatch):

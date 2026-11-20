@@ -1044,7 +1044,9 @@ class Settings(BaseSettings):
     # against Qdrant or Supabase Storage. Every network check is bounded by the
     # timeout and the whole snapshot is reused for the TTL window.
     HEALTH_DEPENDENCIES_CACHE_TTL_SECONDS: float = Field(default=30.0, gt=0)
-    HEALTH_DEPENDENCIES_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
+    # Production `SELECT 1` measured ~3.1 s while /health/ready still reported
+    # the database available; 2 s produced a permanent false degradation.
+    HEALTH_DEPENDENCIES_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)
     # One bounded startup probe per telemetry backend, run in the background.
     STARTUP_TELEMETRY_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)
 
