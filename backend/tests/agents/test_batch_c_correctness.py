@@ -1533,11 +1533,50 @@ async def test_startup_probes_run_concurrently(monkeypatch):
     )
 
 
+async def test_lifespan_probe_ignores_stale_redis_close(monkeypatch):
+    """A Redis client bound to an earlier test's loop must not break these probes.
+
+    The full suite drives this lifespan after other tests have opened real
+    Redis connections. Closing that process-wide client from the current loop
+    raises "Future attached to a different loop" during teardown, which hid the
+    startup assertion this file actually cares about.
+    """
+    from backend.app import main as main_mod
+
+    called = []
+
+    async def stale_close():
+        called.append("close")
+        raise RuntimeError("got Future attached to a different loop")
+
+    @asynccontextmanager
+    async def fake_lifespan(app):
+        await main_mod.redis_client.aclose()
+        yield
+
+    monkeypatch.setattr(main_mod, "lifespan", fake_lifespan)
+    monkeypatch.setattr(main_mod.redis_client, "aclose", stale_close)
+
+    await _drive_lifespan(main_mod)
+
+    assert called == [], "the lifespan probe must detach the unrelated Redis teardown"
+
+
 async def _drive_lifespan(main_mod):
     """Enter and exit the real lifespan without a live app object."""
-    cm = main_mod.lifespan(None)
-    await cm.__aenter__()
-    await cm.__aexit__(None, None, None)
+    from unittest.mock import patch
+
+    async def _detached_close():
+        return None
+
+    # These probes run after other suite tests have opened Redis transports in
+    # a different event loop. Closing that process-wide client is unrelated to
+    # the startup behaviour asserted here, so detach it for the lifespan under
+    # test rather than letting a stale transport mask the real assertion.
+    with patch.object(main_mod.redis_client, "aclose", _detached_close):
+        cm = main_mod.lifespan(None)
+        await cm.__aenter__()
+        await cm.__aexit__(None, None, None)
 
 
 # -- C4: requires_scraping contract -------------------------------------------
