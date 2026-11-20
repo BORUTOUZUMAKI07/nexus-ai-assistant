@@ -403,6 +403,8 @@ export const handlers = [
 
   http.post("/api/auth/register", () => HttpResponse.json(mockUser)),
 
+  http.post("/api/auth/verify-email", () => HttpResponse.json(mockUser)),
+
   // The browser never sends Authorization headers — tokens live in httpOnly
   // cookies that the Next proxy attaches server-side. Normally these requests
   // are "authenticated", so handlers below don't gate on a header.

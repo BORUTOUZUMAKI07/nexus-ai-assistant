@@ -246,7 +246,15 @@ function sleep(ms: number): Promise<void> {
 // — then retry the request once. Only one refresh may run at a time; if it
 // fails the session is cleared and the app is bounced to /signin.
 
-const NO_AUTO_REFRESH_PATHS = ["/api/auth/login", "/api/auth/register", "/api/auth/refresh"];
+const NO_AUTO_REFRESH_PATHS = [
+  "/api/auth/login",
+  "/api/auth/register",
+  "/api/auth/refresh",
+  // A verification link is followed while signed out. A 401 here means the
+  // token is bad, not that the session expired; refreshing would clear the
+  // session and hide the real error.
+  "/api/auth/verify-email",
+];
 
 function isAuthRoute(url: string): boolean {
   // Exact match on the path, or the path with a query string appended. This
@@ -1179,6 +1187,19 @@ export async function loginUser(payload: {
     );
   }
   return (await res.json()) as { ok: boolean };
+}
+
+/** Redeem the token in an email verification link (no session required). */
+export async function verifyEmailToken(token: string): Promise<CurrentUser> {
+  const res = await nexusFetch(`${API_BASE}/auth/verify-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    throw await parseError(res, "Email verification failed");
+  }
+  return (await res.json()) as CurrentUser;
 }
 
 /** The OAuth identity providers the sign-in page offers. */

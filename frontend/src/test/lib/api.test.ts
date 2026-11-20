@@ -6,6 +6,7 @@ import {
   createConversation,
   deleteConversation,
   loginUser,
+  verifyEmailToken,
   fetchCurrentUser,
   fetchUsage,
   fetchKnowledgeFiles,
@@ -184,6 +185,38 @@ describe("api client", () => {
     await expect(
       loginUser({ email: "test@nexus.ai", password: "wrong" })
     ).rejects.toThrow("Incorrect email or password.")
+  })
+
+  it("verifies an email token without trying to refresh a signed-out session", async () => {
+    let refreshCalls = 0
+    let sentToken: unknown = null
+    server.use(
+      http.post(`${API}/auth/verify-email`, async ({ request }) => {
+        sentToken = (await request.json() as { token?: unknown }).token
+        return HttpResponse.json({ id: "u1", email: "test@nexus.ai" })
+      }),
+      http.post(`${API}/auth/refresh`, () => {
+        refreshCalls += 1
+        return HttpResponse.json({ ok: true })
+      })
+    )
+
+    const user = await verifyEmailToken("verify-token-123")
+
+    expect(sentToken).toBe("verify-token-123")
+    expect(user.email).toBe("test@nexus.ai")
+    expect(refreshCalls).toBe(0)
+  })
+
+  it("throws the backend detail for an invalid verification token", async () => {
+    server.use(
+      http.post(`${API}/auth/verify-email`, () =>
+        HttpResponse.json({ detail: "Invalid or expired verification token." }, { status: 400 })
+      )
+    )
+    await expect(verifyEmailToken("expired")).rejects.toThrow(
+      "Invalid or expired verification token."
+    )
   })
 
   it("renders a 422 validation array as readable text, not [object Object]", async () => {
