@@ -27,6 +27,8 @@ from backend.app.domain.file.schemas import (
 from backend.app.domain.user.models import User
 from backend.app.infrastructure.resilience.rate_limit import rate_limit
 from backend.app.services.files.service import FileService
+from backend.app.services.memory.long_term import long_term_memory
+from backend.app.services.observability.fallbacks import count_fallback
 from backend.app.services.rag.service import RAGService
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi import File as FastAPIFile
@@ -235,10 +237,23 @@ async def query_rag(
     rag_svc: RAGService = Depends(get_rag_service),
 ):
     """Execute a hybrid RAG query with cross-encoder reranking and formatted citations."""
-    return await rag_svc.query(
+    result = await rag_svc.query(
         query=rag_in.query,
         user_id=current_user.id,
         file_ids=rag_in.file_ids,
         top_k=rag_in.top_k,
         score_threshold=rag_in.score_threshold,
     )
+
+    # Mem0 sits beside Qdrant, not inside it: document hits stay pure while the
+    # caller also gets the user's relevant long-term context. Best-effort.
+    try:
+        memory_context = await long_term_memory.build_memory_context_block(
+            query=rag_in.query, user_id=current_user.id, limit=8
+        )
+    except Exception as exc:
+        logger.warning("rag_memory_recall_failed", user_id=str(current_user.id), error=str(exc))
+        count_fallback("mem0_recall_rag")
+        memory_context = ""
+
+    return result.model_copy(update={"memory_context": memory_context})

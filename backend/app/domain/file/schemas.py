@@ -80,3 +80,7 @@ class RAGQueryResult(BaseModel):
     citations: list[RAGCitation]
     total_retrieved: int
     query_variants: list[str] = Field(default_factory=list)
+    # Long-term memories relevant to this query. Separate from citations so a
+    # client that renders only document hits keeps working unchanged, and a
+    # Mem0 outage degrades to an empty string instead of failing the search.
+    memory_context: str = ""
