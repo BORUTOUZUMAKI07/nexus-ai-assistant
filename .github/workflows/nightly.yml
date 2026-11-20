@@ -20,6 +20,7 @@ jobs:
       - name: Attribution (scheduling attribution, not a gate)
         # Records which trigger actually started the run: GitHub's scheduler
         # has shown delayed/missing `schedule` events. Never gate on this value.
+        working-directory: ${{ github.workspace }}
         run: |
           echo "entry_point: github_actions"
           echo "trigger_event: ${{ github.event_name }}"
@@ -94,6 +95,7 @@ jobs:
         working-directory: frontend
     steps:
       - name: Attribution (scheduling attribution, not a gate)
+        working-directory: ${{ github.workspace }}
         run: |
           echo "entry_point: github_actions"
           echo "trigger_event: ${{ github.event_name }}"

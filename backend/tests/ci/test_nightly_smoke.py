@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[3]
 NIGHTLY = ROOT / ".github" / "workflows" / "nightly.yml"
 
@@ -27,3 +29,24 @@ def test_nightly_smokes_the_deployed_dependency_endpoint():
 
 def test_nightly_smoke_does_not_interpolate_secrets():
     assert "${{ secrets." not in _text()
+
+
+def test_no_step_runs_in_the_project_directory_before_checkout():
+    workflow = yaml.safe_load(_text())
+    for name, job in workflow["jobs"].items():
+        default_cwd = job.get("defaults", {}).get("run", {}).get("working-directory")
+        if not default_cwd:
+            continue
+        steps = job["steps"]
+        checkout_index = next(
+            i
+            for i, step in enumerate(steps)
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        )
+        for step in steps[:checkout_index]:
+            if "run" not in step:
+                continue
+            cwd = step.get("working-directory", default_cwd)
+            assert cwd in {".", "${{ github.workspace }}"}, (
+                f"{name}: step {step.get('name')!r} runs in {cwd!r} before checkout"
+            )
