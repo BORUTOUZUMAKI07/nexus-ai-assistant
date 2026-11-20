@@ -26,6 +26,10 @@ EXPECTED_SERVICES = {
 SECRET_MARKERS = ("secret-mem0-value", "secret-ls-value", "secret-sr-value", "secret-smtp-value")
 
 
+class FakeMemoryClient:
+    """A cloud-shaped client so mem0 status does not depend on local env."""
+
+
 class FakeSettings:
     MEM0_API_KEY = "secret-mem0-value"
     E2B_API_KEY = "e2b-secret"
@@ -50,6 +54,7 @@ class FakeSettings:
 @pytest.fixture(autouse=True)
 def _isolated_dependency_cache(monkeypatch):
     monkeypatch.setattr(deps, "settings", FakeSettings())
+    monkeypatch.setattr(deps.long_term_memory, "_client", FakeMemoryClient())
     deps.clear_dependency_health_cache()
     yield
     deps.clear_dependency_health_cache()
@@ -127,6 +132,7 @@ async def test_collect_reports_every_service_without_credentials(monkeypatch):
     body = json.dumps(result)
 
     assert result["status"] == "ok"
+    assert result["services"]["mem0"]["status"] == "ok"
     assert set(result["services"]) == EXPECTED_SERVICES
     assert set(result["startup_telemetry"]) == {"new_relic", "langsmith"}
     assert result["fallback_counters"] == {"dependency_fallback:mem0_add": 1}
