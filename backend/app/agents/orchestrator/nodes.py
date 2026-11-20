@@ -42,6 +42,7 @@ from backend.app.services.llm.structured_output import (
 from backend.app.services.llm.structured_parse import validate_object
 from backend.app.services.memory.lifecycle import should_persist_memory
 from backend.app.services.memory.long_term import long_term_memory
+from backend.app.services.observability.fallbacks import count_fallback
 from backend.app.services.rag.critique import (
     VERDICT_UNRELATED,
     retrieval_critique_service,
@@ -665,11 +666,16 @@ async def planner_node(state: ExecutionState) -> dict[str, Any]:
     memory_block = ""
     recalled_items: list[dict[str, Any]] = []
     if user_id:
-        memory_block = await long_term_memory.build_memory_context_block(
-            query=last_user_msg,
-            user_id=user_id,
-            limit=8,
-        )
+        try:
+            memory_block, recalled_items = await long_term_memory.build_memory_context_block_with_ids(
+                query=last_user_msg,
+                user_id=user_id,
+                limit=8,
+            )
+        except Exception as exc:
+            logger.warning("mem0_recall_failed_for_planner", user_id=user_id, error=str(exc))
+            count_fallback("mem0_recall_planner")
+            memory_block, recalled_items = "", []
         if memory_block:
             logger.info("mem0_memories_loaded_for_planner", user_id=user_id, count=len(recalled_items))
 
