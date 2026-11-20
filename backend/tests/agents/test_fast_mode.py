@@ -134,9 +134,9 @@ async def test_fast_mode_still_loads_long_term_memories(monkeypatch):
     """
 
     async def _memory(*, query, user_id, limit):
-        return "User prefers Python 3.12."
+        return "User prefers Python 3.12.", []
 
-    monkeypatch.setattr(nodes.long_term_memory, "build_memory_context_block", _memory)
+    monkeypatch.setattr(nodes.long_term_memory, "build_memory_context_block_with_ids", _memory)
 
     async def _no_llm(*args, **kwargs):  # pragma: no cover - must never run
         raise AssertionError("fast mode must not call the planner LLM")

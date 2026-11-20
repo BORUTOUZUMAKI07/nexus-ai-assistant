@@ -140,9 +140,9 @@ async def test_a_simple_prompt_never_enters_the_orchestrator_or_critic_grader(mo
 
 async def test_the_planner_skips_its_llm_but_still_loads_long_term_memories(monkeypatch):
     async def _memory(*, query, user_id, limit):
-        return "User prefers concise answers."
+        return "User prefers concise answers.", []
 
-    monkeypatch.setattr(nodes.long_term_memory, "build_memory_context_block", _memory)
+    monkeypatch.setattr(nodes.long_term_memory, "build_memory_context_block_with_ids", _memory)
 
     routed = await _routed("hi", "agent", user_id="u-1")
     result = await nodes.planner_node(routed)
