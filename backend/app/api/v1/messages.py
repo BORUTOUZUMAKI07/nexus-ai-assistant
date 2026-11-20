@@ -3,6 +3,7 @@ Messages API Router with Server-Sent Events (SSE) streaming.
 Pure HTTP transport layer — delegates conversation and usage use cases
 to ConversationService and UsageService (SRP + DIP).
 """
+import hashlib
 import json
 import time
 from collections.abc import AsyncGenerator
@@ -41,7 +42,9 @@ from backend.app.services.evaluation.guardrail_service import (
 )
 from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.experiments.service import experiment_service
+from backend.app.services.memory.long_term import long_term_memory
 from backend.app.services.observability.cost_tracking import cost_tracking_service
+from backend.app.services.observability.fallbacks import count_fallback
 from backend.app.services.observability.metrics import metrics_collector
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.prompts.compiler import prompt_compiler
@@ -52,6 +55,38 @@ from fastapi.responses import StreamingResponse
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/conversations/{conversation_id}/messages", tags=["messages"])
+
+
+async def _recall_memory_block(query: str, user_id: UUID, endpoint: str) -> str:
+    """Load long-term memories for a direct /messages turn.
+
+    The orchestrator chat path already does this; these endpoints were the
+    alternate door that skipped it. Strictly best-effort: a Mem0 outage, a
+    missing key or a malformed response must never fail the user's answer.
+    """
+    try:
+        block = await long_term_memory.build_memory_context_block(
+            query=query, user_id=user_id, limit=8
+        )
+    except Exception as exc:
+        logger.warning("direct_message_memory_recall_failed", endpoint=endpoint, error=str(exc))
+        count_fallback("mem0_recall_direct_messages")
+        return ""
+    if block:
+        logger.info("direct_message_memories_loaded", endpoint=endpoint, user_id=str(user_id))
+    return block
+
+
+def _memory_scoped_variant(variant: str, memory_block: str) -> str:
+    """Scope the exact response cache to the memories used to build the answer.
+
+    The cache is keyed on the question, not the whole prompt. Without this, a
+    newly learned preference would be ignored until the cached answer expired.
+    """
+    if not memory_block:
+        return variant
+    digest = hashlib.sha256(memory_block.encode("utf-8")).hexdigest()[:12]
+    return f"{variant}:mem0-{digest}"
 
 
 @router.post("", response_model=MessageResponse)
@@ -128,6 +163,15 @@ async def send_message_sync(
             f"# Experiment Context\n"
             f"You are running as the '{experiment_variant}' variant of this assistant."
         )
+
+    # Mem0 recall: the same personalisation the orchestrator chat path gets.
+    memory_block = await _recall_memory_block(
+        query=sanitized_content, user_id=current_user.id, endpoint="sync"
+    )
+    if memory_block:
+        system_prompt = f"{system_prompt}\n\n{memory_block}"
+    cache_variant = _memory_scoped_variant(experiment_variant, memory_block)
+
     formatted_context = await context_compiler.compile_context(
         messages=history,
         system_prompt=system_prompt,
@@ -143,7 +187,7 @@ async def send_message_sync(
         str(current_user.id),
         target_model,
         sanitized_content,
-        prompt_variant=experiment_variant,
+        prompt_variant=cache_variant,
         conversation_id=str(conversation_id),
     )
     if cache_hit_payload is None:
@@ -151,7 +195,7 @@ async def send_message_sync(
             from backend.app.services.memory.semantic_cache import semantic_response_cache
 
             sem = await semantic_response_cache.get(
-                str(current_user.id), target_model, sanitized_content, prompt_variant=experiment_variant
+                str(current_user.id), target_model, sanitized_content, prompt_variant=cache_variant
             )
             if sem is not None:
                 cache_hit_payload = sem
@@ -192,7 +236,7 @@ async def send_message_sync(
             tokens_input=prompt_tok,
             tokens_output=comp_tok,
             cost_usd=cost_tracking_service.calculate_cost(target_model, prompt_tok, comp_tok),
-            prompt_variant=experiment_variant,
+            prompt_variant=cache_variant,
             conversation_id=str(conversation_id),
         )
         try:
@@ -206,7 +250,7 @@ async def send_message_sync(
                 tokens_input=prompt_tok,
                 tokens_output=comp_tok,
                 cost_usd=cost_tracking_service.calculate_cost(target_model, prompt_tok, comp_tok),
-                prompt_variant=experiment_variant,
+                prompt_variant=cache_variant,
             )
         except Exception as exc:  # noqa: BLE001 - cache write must not fail the reply
             logger.debug("response_cache_write_failed", error=str(exc))
@@ -321,6 +365,12 @@ async def send_message_stream(
     system_prompt = await prompt_compiler.compile_system_prompt_cached(
         custom_instructions=message_in.system_prompt_override or conv.system_prompt,
     )
+    memory_block = await _recall_memory_block(
+        query=sanitized_content, user_id=current_user.id, endpoint="stream"
+    )
+    if memory_block:
+        system_prompt = f"{system_prompt}\n\n{memory_block}"
+
     formatted_context = await context_compiler.compile_context(
         messages=history,
         system_prompt=system_prompt,
