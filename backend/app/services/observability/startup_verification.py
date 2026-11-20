@@ -9,6 +9,7 @@ checks are bounded, happen once per process, and never block or break startup.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -45,6 +46,21 @@ async def _verify_new_relic() -> dict[str, Any]:
     return {"status": "ok", "span": "app_startup", "detail": "span_flushed"}
 
 
+def _read_run_with_retry(client: Any, run_id: Any, budget_seconds: float) -> Any:
+    """LangSmith ingestion is eventually consistent: a fresh run can 404 once."""
+    deadline = time.monotonic() + budget_seconds
+    delay = 0.25
+    while True:
+        try:
+            return client.read_run(run_id)
+        except Exception:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, 1.0)
+
+
 def _langsmith_roundtrip() -> bool:
     """Synchronous SDK work, run in a worker thread by the caller."""
     client = langsmith.Client(
@@ -64,7 +80,10 @@ def _langsmith_roundtrip() -> bool:
         start_time=now,
         end_time=now,
     )
-    return client.read_run(run_id) is not None
+    read_back = _read_run_with_retry(
+        client, run_id, settings.STARTUP_TELEMETRY_TIMEOUT_SECONDS
+    )
+    return read_back is not None
 
 
 async def _verify_langsmith() -> dict[str, Any]:

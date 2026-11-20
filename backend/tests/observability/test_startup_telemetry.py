@@ -81,6 +81,30 @@ def test_langsmith_run_is_written_and_read_back(monkeypatch):
     assert created["auto_batch_tracing"] is False
 
 
+def test_langsmith_eventual_readback_succeeds_within_budget(monkeypatch):
+    attempts = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def create_run(self, **kwargs):
+            return {"id": kwargs["id"]}
+
+        def read_run(self, run_id):
+            attempts.append(run_id)
+            if len(attempts) < 3:
+                raise LookupError("not ingested yet")
+            return {"id": run_id}
+
+    monkeypatch.setattr(probe.langsmith, "Client", FakeClient)
+    monkeypatch.setattr(probe.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(probe.settings, "STARTUP_TELEMETRY_TIMEOUT_SECONDS", 0.5)
+
+    assert probe._langsmith_roundtrip() is True
+    assert len(attempts) == 3
+
+
 @pytest.mark.asyncio
 async def test_langsmith_missing_run_is_degraded(monkeypatch):
     monkeypatch.setattr(probe, "_langsmith_roundtrip", lambda: False)
