@@ -181,3 +181,10 @@ services:
       # f9a0b1c2d3e4 is applied. Off before the migration exists, on in prod.
       - key: POST_ANSWER_OUTBOX_ENABLED
         value: "true"
+      # User-facing flags, enabled deliberately. The verification link now has
+      # a real /verify-email page in the frontend, and the exact response cache
+      # is scoped per conversation so one thread cannot replay another's answer.
+      - key: EMAIL_VERIFICATION_REQUIRED
+        value: "true"
+      - key: RESPONSE_CACHE_ENABLED
+        value: "true"
