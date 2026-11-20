@@ -79,3 +79,29 @@ async def test_rag_query_fails_open_when_memory_is_unavailable(monkeypatch):
 
     assert result.query == "What do we use?"
     assert result.memory_context == ""
+
+
+@pytest.mark.asyncio
+async def test_rag_query_accepts_a_dict_shaped_service_result(monkeypatch):
+    """A plain-dict RAG result must still get memories, not a 500."""
+    async def _recall(**_kwargs):
+        return MEMORY_BLOCK
+
+    async def _query(**_kwargs):
+        return {
+            "query": "What do we use?",
+            "citations": [],
+            "total_retrieved": 0,
+            "query_variants": ["What do we use?"],
+        }
+
+    monkeypatch.setattr(files.long_term_memory, "build_memory_context_block", _recall)
+
+    result = await files.query_rag(
+        rag_in=RAGQueryRequest(query="What do we use?"),
+        current_user=SimpleNamespace(id=uuid4()),
+        rag_svc=SimpleNamespace(query=_query),
+    )
+
+    assert result.query == "What do we use?"
+    assert result.memory_context == MEMORY_BLOCK

@@ -256,4 +256,9 @@ async def query_rag(
         count_fallback("mem0_recall_rag")
         memory_context = ""
 
+    # The RAG seam is typed as RAGQueryResult, but lightweight/stub services may
+    # return an equivalent plain dict. Normalise before attaching memory so the
+    # endpoint never 500s on a result the response model would have accepted.
+    if isinstance(result, dict):
+        result = RAGQueryResult.model_validate(result)
     return result.model_copy(update={"memory_context": memory_context})
