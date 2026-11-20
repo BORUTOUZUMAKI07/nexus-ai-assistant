@@ -34,6 +34,10 @@ OK = "ok"
 DEGRADED = "degraded"
 NOT_CONFIGURED = "not_configured"
 
+# Mem0 cloud has a single read-only ping endpoint. Kept as a constant so tests
+# can replace it without touching a real account.
+_MEM0_PING_URL = "https://api.mem0.ai/v1/ping/"
+
 _now = time.monotonic
 _CACHE: dict[str, Any] | None = None
 _EXPIRES_AT = 0.0
@@ -108,7 +112,7 @@ def _configured(value: Any) -> dict[str, Any]:
 
 
 def _mem0_status() -> dict[str, Any]:
-    """mem0 has no read-only probe: report the mode the app will actually use."""
+    """Report the mode the app will actually use, before any network call."""
     client = getattr(long_term_memory, "_client", None)
     if client is None:
         if not settings.MEM0_API_KEY:
@@ -118,6 +122,30 @@ def _mem0_status() -> dict[str, Any]:
     if "MemoryClient" in name:
         return {"status": OK, "mode": "cloud"}
     return {"status": OK, "mode": "self_hosted"}
+
+
+async def _probe_mem0(timeout: float) -> dict[str, Any]:
+    """Verify a configured Mem0 cloud client with a bounded read-only ping.
+
+    The SDK pings only at client construction, so an object can exist long
+    after its key was revoked. Self-hosted mode is left at its state check:
+    its backing Qdrant and LLM services are probed elsewhere. No key is ever
+    returned — only status, mode, detail and latency.
+    """
+    base = _mem0_status()
+    if base["status"] != OK or base.get("mode") != "cloud":
+        return base
+
+    async def ping() -> bool:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                _MEM0_PING_URL,
+                headers={"Authorization": f"Token {settings.MEM0_API_KEY}"},
+            )
+            return response.status_code == 200
+
+    probed = await _timed("mem0", ping, timeout, detail_on_fail="ping_failed")
+    return {**base, **probed}
 
 
 def _e2b_status() -> dict[str, Any]:
@@ -172,7 +200,7 @@ async def _collect() -> dict[str, Any]:
         "database": await _probe_database(timeout),
         "redis": await _probe_redis(timeout),
         "qdrant": await _probe_qdrant(timeout),
-        "mem0": _mem0_status(),
+        "mem0": await _probe_mem0(timeout),
         "e2b": _e2b_status(),
         "firecrawl": _configured(settings.FIRECRAWL_API_KEY),
         "tavily": _configured(settings.TAVILY_API_KEY),

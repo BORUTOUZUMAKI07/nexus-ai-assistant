@@ -52,10 +52,30 @@ class FakeSettings:
     HEALTH_DEPENDENCIES_TIMEOUT_SECONDS = 2.0
 
 
+class _FakePingClient:
+    """Read-only Mem0 ping stand-in: no network, no credential on the wire."""
+
+    def __init__(self, **_kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def get(self, *_args, **_kwargs):
+        return SimpleNamespace(status_code=200)
+
+
 @pytest.fixture(autouse=True)
 def _isolated_dependency_cache(monkeypatch):
     monkeypatch.setattr(deps, "settings", FakeSettings())
     monkeypatch.setattr(deps.long_term_memory, "_client", FakeMemoryClient())
+    # The aggregation tests use a fake key; keep the new Mem0 ping from ever
+    # sending it to the real API. _probe_mem0 itself is covered separately in
+    # tests/health/test_mem0_dependency_probe.py.
+    monkeypatch.setattr(deps.httpx, "AsyncClient", _FakePingClient)
     deps.clear_dependency_health_cache()
     yield
     deps.clear_dependency_health_cache()
