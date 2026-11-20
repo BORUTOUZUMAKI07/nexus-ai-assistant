@@ -137,9 +137,14 @@ async def send_message_sync(
     # 4b. Response cache: repeated identical questions skip the LLM
     # round-trip. Fail-open and only active when RESPONSE_CACHE_ENABLED. Keyed
     # per prompt_variant so a bandit/canary variant flip never reuses an answer
-    # generated under a different system prompt.
+    # generated under a different system prompt, and per conversation so another
+    # thread with the same question cannot replay this thread's context.
     cache_hit_payload = await response_cache.get(
-        str(current_user.id), target_model, sanitized_content, prompt_variant=experiment_variant
+        str(current_user.id),
+        target_model,
+        sanitized_content,
+        prompt_variant=experiment_variant,
+        conversation_id=str(conversation_id),
     )
     if cache_hit_payload is None:
         try:
@@ -188,6 +193,7 @@ async def send_message_sync(
             tokens_output=comp_tok,
             cost_usd=cost_tracking_service.calculate_cost(target_model, prompt_tok, comp_tok),
             prompt_variant=experiment_variant,
+            conversation_id=str(conversation_id),
         )
         try:
             from backend.app.services.memory.semantic_cache import semantic_response_cache

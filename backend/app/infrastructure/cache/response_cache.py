@@ -41,12 +41,21 @@ def normalize_query(text: str) -> str:
     return " ".join(tokens)
 
 
-def cache_key(user_id: str, model: str, query: str, prompt_variant: str = "default") -> str:
+def cache_key(
+    user_id: str,
+    model: str,
+    query: str,
+    prompt_variant: str = "default",
+    conversation_id: str = "",
+) -> str:
     # Normalize defensively (idempotent) so raw and pre-normalized queries hash identically.
     digest = hashlib.sha256(normalize_query(query).encode("utf-8")).hexdigest()
     # prompt_variant scopes the key so a bandit/canary variant flip can never
-    # serve an answer generated under a different system prompt.
-    return f"{_PREFIX}{user_id}:{model}:{prompt_variant}:{digest}"
+    # serve an answer generated under a different system prompt. conversation_id
+    # scopes it further: the same question in another thread has different
+    # history and must never replay this thread's answer. Empty keeps direct
+    # callers (and existing unit tests) on the legacy key shape.
+    return f"{_PREFIX}{user_id}:{model}:{prompt_variant}:{conversation_id}:{digest}"
 
 
 class ResponseCache:
@@ -59,6 +68,7 @@ class ResponseCache:
         model: str,
         query: str,
         prompt_variant: str = "default",
+        conversation_id: str = "",
     ) -> dict[str, Any] | None:
         if not settings.RESPONSE_CACHE_ENABLED:
             return None
@@ -66,7 +76,9 @@ class ResponseCache:
         if len(normalized) < settings.RESPONSE_CACHE_MIN_LENGTH:
             return None
         try:
-            raw = await self._cache.get(cache_key(user_id, model, normalized, prompt_variant))
+            raw = await self._cache.get(
+                cache_key(user_id, model, normalized, prompt_variant, conversation_id)
+            )
             if not raw:
                 return None
             payload = json.loads(raw)
@@ -89,6 +101,7 @@ class ResponseCache:
         tokens_output: int,
         cost_usd: float,
         prompt_variant: str = "default",
+        conversation_id: str = "",
     ) -> None:
         if not settings.RESPONSE_CACHE_ENABLED:
             return
@@ -107,7 +120,7 @@ class ResponseCache:
                 }
             )
             await self._cache.set(
-                cache_key(user_id, model, normalized, prompt_variant),
+                cache_key(user_id, model, normalized, prompt_variant, conversation_id),
                 payload,
                 ttl_seconds=settings.RESPONSE_CACHE_TTL_SECONDS,
             )
