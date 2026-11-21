@@ -1206,6 +1206,58 @@ export async function verifyTwoFactor(code: string): Promise<{ ok: boolean }> {
   return (await res.json()) as { ok: boolean };
 }
 
+export interface TwoFactorStatus {
+  enabled: boolean;
+}
+
+export interface TwoFactorSetup {
+  secret: string;
+  otpauth_uri: string;
+}
+
+export async function getTwoFactorStatus(): Promise<TwoFactorStatus> {
+  const res = await nexusFetch(`${API_BASE}/auth/2fa/status`, undefined);
+  if (!res.ok) {
+    throw await parseError(res, "Could not load two-factor status");
+  }
+  return (await res.json()) as TwoFactorStatus;
+}
+
+export async function setupTwoFactor(): Promise<TwoFactorSetup> {
+  const res = await nexusFetch(`${API_BASE}/auth/2fa/setup`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw await parseError(res, "Could not start two-factor enrollment");
+  }
+  return (await res.json()) as TwoFactorSetup;
+}
+
+export async function enableTwoFactor(code: string): Promise<{ status: string }> {
+  const res = await nexusFetch(`${API_BASE}/auth/2fa/enable`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) {
+    throw await parseError(res, "Could not enable two-factor authentication");
+  }
+  return (await res.json()) as { status: string };
+}
+
+export async function disableTwoFactor(code: string): Promise<{ status: string }> {
+  const res = await nexusFetch(`${API_BASE}/auth/2fa/disable`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) {
+    throw await parseError(res, "Could not disable two-factor authentication");
+  }
+  return (await res.json()) as { status: string };
+}
+
 /** Redeem the token in an email verification link (no session required). */
 export async function verifyEmailToken(token: string): Promise<CurrentUser> {
   const res = await nexusFetch(`${API_BASE}/auth/verify-email`, {

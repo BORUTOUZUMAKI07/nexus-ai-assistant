@@ -34,6 +34,7 @@ import {
 import { AppearanceSettings } from "@/features/settings/AppearanceSettings";
 import { IntegrationsSettings } from "@/features/settings/IntegrationsSettings";
 import { AgentCapabilities } from "@/features/settings/AgentCapabilities";
+import { TwoFactorSettings } from "@/features/settings/TwoFactorSettings";
 import { AUTOMATIC_MODEL_TIERS, MODELS, canonicalModelId, modelDisplayName } from "@/lib/models";
 
 export const SettingsView: React.FC = () => {
@@ -491,6 +492,9 @@ export const SettingsView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Account security: TOTP enrollment and revocation */}
+      <TwoFactorSettings />
 
       {/* Organizations + webhooks — the API surface with a UI at last */}
       <IntegrationsSettings />

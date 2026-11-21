@@ -6,6 +6,11 @@ import {
   createConversation,
   deleteConversation,
   loginUser,
+  verifyTwoFactor,
+  getTwoFactorStatus,
+  setupTwoFactor,
+  enableTwoFactor,
+  disableTwoFactor,
   verifyEmailToken,
   fetchCurrentUser,
   fetchUsage,
@@ -185,6 +190,45 @@ describe("api client", () => {
     await expect(
       loginUser({ email: "test@nexus.ai", password: "wrong" })
     ).rejects.toThrow("Incorrect email or password.")
+  })
+
+  it("exposes the 2FA challenge status and sends only the code to verify", async () => {
+    server.use(
+      http.post(`${API}/auth/login`, () =>
+        HttpResponse.json({ ok: false, status: "2fa_required", expires_in: 300 })
+      )
+    )
+    let verificationBody: unknown = null
+    server.use(
+      http.post(`${API}/auth/2fa/verify`, async ({ request }) => {
+        verificationBody = await request.json()
+        return HttpResponse.json({ ok: true })
+      })
+    )
+
+    const login = await loginUser({ email: "totp@nexus.ai", password: "password123" })
+    expect(login.status).toBe("2fa_required")
+    expect(login.expires_in).toBe(300)
+    await expect(verifyTwoFactor("123456")).resolves.toEqual({ ok: true })
+    expect(verificationBody).toEqual({ code: "123456" })
+  })
+
+  it("routes 2FA enrollment and revocation through their BFF endpoints", async () => {
+    const seen: string[] = []
+    for (const path of ["status", "setup", "enable", "disable"]) {
+      server.use(
+        http.all(`${API}/auth/2fa/${path}`, () => {
+          seen.push(path)
+          return HttpResponse.json(path === "status" ? { enabled: false } : { status: path })
+        })
+      )
+    }
+
+    await expect(getTwoFactorStatus()).resolves.toEqual({ enabled: false })
+    await expect(setupTwoFactor()).resolves.toEqual({ status: "setup" })
+    await expect(enableTwoFactor("123456")).resolves.toEqual({ status: "enable" })
+    await expect(disableTwoFactor("654321")).resolves.toEqual({ status: "disable" })
+    expect(seen).toEqual(["status", "setup", "enable", "disable"])
   })
 
   it("verifies an email token without trying to refresh a signed-out session", async () => {
