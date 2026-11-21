@@ -129,3 +129,37 @@ async def test_identical_question_in_a_different_conversation_is_a_cache_miss(ca
         "the exact cache must be scoped to the conversation that produced the answer"
     )
     assert len(cache_harness.completions) == 2
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_does_not_share_paraphrases_across_conversations(monkeypatch):
+    """A paraphrase in another thread must not replay this thread's answer."""
+    monkeypatch.setattr(settings, "RESPONSE_CACHE_ENABLED", True)
+    monkeypatch.setattr(settings, "RESPONSE_CACHE_SEMANTIC_ENABLED", True)
+
+    async def _embed(_text):
+        return [1.0, 0.0]
+
+    sem = semantic_module.SemanticResponseCache(
+        cache=FakeCache(), embedder=SimpleNamespace(generate_embedding=_embed)
+    )
+    await sem.set(
+        "user-1",
+        "model-a",
+        "What is on file?",
+        "answer from conversation A",
+        1,
+        1,
+        0.0,
+        conversation_id="conv-a",
+    )
+
+    other_thread = await sem.get(
+        "user-1", "model-a", "show me the file", conversation_id="conv-b"
+    )
+    same_thread = await sem.get(
+        "user-1", "model-a", "show me the file", conversation_id="conv-a"
+    )
+
+    assert other_thread is None
+    assert same_thread["content"] == "answer from conversation A"

@@ -4,7 +4,7 @@ Semantic Response Cache.
 The exact-match `Infrastructure.ResponseCache` only hits on a byte-identical
 normalized query ("what is the capital of France?" vs "France's capital"). This
 layer catches paraphrases by embedding the query and comparing against recently
-cached queries for the same (user, model, prompt_variant) bucket.
+cached queries for the same (user, model, prompt_variant, conversation_id) bucket.
 
 Off by default (`RESPONSE_CACHE_SEMANTIC_ENABLED`) because it adds one
 embedding call per request on the query path. It is a measured trade-off, not a
@@ -24,10 +24,12 @@ from typing import Any
 import structlog
 from backend.app.core.config import settings
 from backend.app.infrastructure.cache.redis_client import redis_service
+from backend.app.infrastructure.cache.response_cache import response_scope_key
 
 logger = structlog.get_logger(__name__)
 
-_PREFIX = "response_cache:sem:v1:"
+# v2 adds conversation scope; the old cross-conversation buckets are never read.
+_PREFIX = "response_cache:sem:v2:"
 
 
 def _normalize_query(text: str) -> str:
@@ -36,8 +38,13 @@ def _normalize_query(text: str) -> str:
     return normalize_query(text)
 
 
-def _bucket_key(user_id: str, model: str, prompt_variant: str = "default") -> str:
-    return f"{_PREFIX}{user_id}:{model}:{prompt_variant}"
+def _bucket_key(
+    user_id: str,
+    model: str,
+    prompt_variant: str = "default",
+    conversation_id: str = "",
+) -> str:
+    return f"{_PREFIX}{response_scope_key(user_id, model, prompt_variant, conversation_id)}"
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -108,8 +115,10 @@ class SemanticResponseCache:
             )
             return None
 
-    async def _load(self, user_id: str, model: str, prompt_variant: str) -> list[dict[str, Any]]:
-        key = _bucket_key(user_id, model, prompt_variant)
+    async def _load(
+        self, user_id: str, model: str, prompt_variant: str, conversation_id: str = ""
+    ) -> list[dict[str, Any]]:
+        key = _bucket_key(user_id, model, prompt_variant, conversation_id)
         try:
             raw = await self._cache.get(key)
         except Exception as exc:
@@ -138,8 +147,9 @@ class SemanticResponseCache:
         model: str,
         prompt_variant: str,
         entries: list[dict[str, Any]],
+        conversation_id: str = "",
     ) -> None:
-        key = _bucket_key(user_id, model, prompt_variant)
+        key = _bucket_key(user_id, model, prompt_variant, conversation_id)
         payload = json.dumps(entries, default=str)
         try:
             await self._cache.set(key, payload, ttl_seconds=settings.RESPONSE_CACHE_TTL_SECONDS)
@@ -155,6 +165,7 @@ class SemanticResponseCache:
         model: str,
         query: str,
         prompt_variant: str = "default",
+        conversation_id: str = "",
     ) -> dict[str, Any] | None:
         if not settings.RESPONSE_CACHE_ENABLED or not settings.RESPONSE_CACHE_SEMANTIC_ENABLED:
             return None
@@ -164,7 +175,7 @@ class SemanticResponseCache:
         vector = await self._embed(normalized)
         if not vector:
             return None
-        entries = await self._load(user_id, model, prompt_variant)
+        entries = await self._load(user_id, model, prompt_variant, conversation_id)
         if not entries:
             return None
         best: dict[str, Any] | None = None
@@ -206,6 +217,7 @@ class SemanticResponseCache:
         tokens_output: int,
         cost_usd: float,
         prompt_variant: str = "default",
+        conversation_id: str = "",
     ) -> None:
         if not (settings.RESPONSE_CACHE_ENABLED and settings.RESPONSE_CACHE_SEMANTIC_ENABLED):
             return
@@ -217,7 +229,7 @@ class SemanticResponseCache:
         vector = await self._embed(normalized)
         if not vector:
             return
-        entries = await self._load(user_id, model, prompt_variant)
+        entries = await self._load(user_id, model, prompt_variant, conversation_id)
         entries = [e for e in entries if e.get("query") != normalized]
         entries.insert(
             0,
@@ -233,15 +245,16 @@ class SemanticResponseCache:
         max_e = settings.RESPONSE_CACHE_SEMANTIC_MAX_ENTRIES
         if len(entries) > max_e:
             entries = entries[:max_e]
-        await self._store(user_id, model, prompt_variant, entries)
+        await self._store(user_id, model, prompt_variant, entries, conversation_id)
 
     async def invalidate(
         self,
         user_id: str,
         model: str,
         prompt_variant: str = "default",
+        conversation_id: str = "",
     ) -> None:
-        """Drop the whole bucket for ``(user_id, model, prompt_variant)``.
+        """Drop the whole bucket for ``(user_id, model, prompt_variant, conversation_id)``.
 
         Called after a new assistant message so a previously cached answer for
         the same question can no longer be served as stale. Fail-open: a store
@@ -250,7 +263,7 @@ class SemanticResponseCache:
         """
         if not settings.RESPONSE_CACHE_ENABLED:
             return
-        key = _bucket_key(user_id, model, prompt_variant)
+        key = _bucket_key(user_id, model, prompt_variant, conversation_id)
         try:
             await self._cache.delete(key)
             logger.debug(
@@ -271,6 +284,7 @@ class SemanticResponseCache:
         model: str,
         entries: list[dict[str, Any]],
         prompt_variant: str = "default",
+        conversation_id: str = "",
     ) -> None:
         """Pre-populate the bucket with pre-computed entries.
 
@@ -305,13 +319,13 @@ class SemanticResponseCache:
             )
         if not prepared:
             return
-        existing = await self._load(user_id, model, prompt_variant)
+        existing = await self._load(user_id, model, prompt_variant, conversation_id)
         existing = [e for e in existing if e.get("query") not in {p["query"] for p in prepared}]
         combined = prepared + existing
         max_e = settings.RESPONSE_CACHE_SEMANTIC_MAX_ENTRIES
         if len(combined) > max_e:
             combined = combined[:max_e]
-        await self._store(user_id, model, prompt_variant, combined)
+        await self._store(user_id, model, prompt_variant, combined, conversation_id)
 
 
 semantic_response_cache = SemanticResponseCache()

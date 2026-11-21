@@ -258,7 +258,11 @@ async def send_message_sync(
             from backend.app.services.memory.semantic_cache import semantic_response_cache
 
             sem = await semantic_response_cache.get(
-                str(current_user.id), target_model, sanitized_content, prompt_variant=cache_variant
+                str(current_user.id),
+                target_model,
+                sanitized_content,
+                prompt_variant=cache_variant,
+                conversation_id=str(conversation_id),
             )
             if sem is not None:
                 cache_hit_payload = sem
@@ -314,6 +318,7 @@ async def send_message_sync(
                 tokens_output=comp_tok,
                 cost_usd=cost_tracking_service.calculate_cost(target_model, prompt_tok, comp_tok),
                 prompt_variant=cache_variant,
+                conversation_id=str(conversation_id),
             )
         except Exception as exc:  # noqa: BLE001 - cache write must not fail the reply
             logger.debug("response_cache_write_failed", error=str(exc))

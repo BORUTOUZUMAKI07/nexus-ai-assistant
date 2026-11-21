@@ -41,6 +41,22 @@ def normalize_query(text: str) -> str:
     return " ".join(tokens)
 
 
+def response_scope_key(
+    user_id: str,
+    model: str,
+    prompt_variant: str = "default",
+    conversation_id: str = "",
+) -> str:
+    """Single source of truth for response-cache scoping.
+
+    ``prompt_variant`` keeps bandit/canary answers separate; ``conversation_id``
+    keeps one thread's history out of another thread's answer. An empty
+    conversation id preserves direct callers and existing unit tests on the
+    legacy key shape.
+    """
+    return f"{user_id}:{model}:{prompt_variant}:{conversation_id}"
+
+
 def cache_key(
     user_id: str,
     model: str,
@@ -50,12 +66,7 @@ def cache_key(
 ) -> str:
     # Normalize defensively (idempotent) so raw and pre-normalized queries hash identically.
     digest = hashlib.sha256(normalize_query(query).encode("utf-8")).hexdigest()
-    # prompt_variant scopes the key so a bandit/canary variant flip can never
-    # serve an answer generated under a different system prompt. conversation_id
-    # scopes it further: the same question in another thread has different
-    # history and must never replay this thread's answer. Empty keeps direct
-    # callers (and existing unit tests) on the legacy key shape.
-    return f"{_PREFIX}{user_id}:{model}:{prompt_variant}:{conversation_id}:{digest}"
+    return f"{_PREFIX}{response_scope_key(user_id, model, prompt_variant, conversation_id)}:{digest}"
 
 
 class ResponseCache:
