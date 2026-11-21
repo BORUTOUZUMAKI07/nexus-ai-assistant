@@ -10,11 +10,11 @@ Rules: RED test first, minimal GREEN, focused tests + ruff + typecheck, small co
 | B | M1 secret-scan whole-file skip | done (`a5089a8`) |
 | C | M6 + L5 doc/version drift | done (`ddc1c29`) |
 | D | M3 observability status from real probe | done (`9c07b48`) |
-| E | M4 image config is dead | done |
-| F | H1 + H2 admin trace auth + real store | done |
-| G | H3 backend 2FA login 500 / cookie gap | done |
-| H | H3 frontend 2FA BFF + sign-in/enrollment UI | done |
-| I | L3 admin evaluation UI | done |
+| E | M4 image config is dead | done (`de931bb`) |
+| F | H1 + H2 admin trace auth + real store | done (`16c29c1`) |
+| G | H3 backend 2FA login 500 / cookie gap | done (`e970378`) |
+| H | H3 frontend 2FA BFF + sign-in/enrollment UI | done (`ccdf731`, `c75b52c`, `b359ff5`) |
+| I | L3 admin evaluation UI | done (`16aafd6`) |
 | J | L4 backend-to-BFF route coverage test | done |
 | K | L1 redundant webhook pre-check | done |
 | L | L2 collector auth enforcement test | done |

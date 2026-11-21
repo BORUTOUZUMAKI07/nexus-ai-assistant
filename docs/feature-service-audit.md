@@ -10,6 +10,32 @@ Evidence legend:
 - **[STUB]** — present in code but non-functional
 - **[DOC]** — documented claim not independently verified
 
+## Resolution status (2026-11-21)
+
+All fifteen findings below are **resolved** on `fix/memory-design-gaps`. The
+finding text is kept verbatim as the historical record; the table is the current
+state. Every fix has a focused test — no skips, suppressions, or secrets were
+added. Full verification before the merge: backend suite, frontend suite, ruff,
+mypy/typecheck, secret scan, and the guardrail diff checks.
+
+| Finding | Resolution | Commit(s) / guard |
+|---|---|---|
+| H1 | Trace endpoints now require `get_current_admin` | `16c29c1`, `backend/tests/integration/test_admin.py` |
+| H2 | `get_trace_span` reads real stored spans; compare route ordered before the dynamic route | `16c29c1`, `backend/tests/observability/test_trace_store.py`, `test_admin.py` |
+| H3 | Backend 2FA login no longer dereferences a missing token; `/auth/2fa/verify` re-bakes httpOnly session cookies; BFF relays + sign-in TOTP UI + settings enrollment/revocation UI; hidden BFF-only preauth cookie | `e970378`, `ccdf731`, `c75b52c`, `b359ff5`, frontend auth/proxy tests |
+| M1 | Secret scan suppresses a fake marker only for the matching value, not the whole file | `a5089a8`, `backend/tests/infra/test_check_secrets.py` |
+| M2 | Outbox backoff is genuinely exponential (`base * 2 ** (attempts-1)`) | `461e926`, outbox timing tests |
+| M3 | Stack status derives from real probe evidence, not configuration alone | `9c07b48`, observability status tests |
+| M4 | Image settings are read by the service and validated | `de931bb`, image service tests |
+| M5 | Resolved as a documented asymmetry — see the finding below; webhooks + cache invalidation run on the stream path via the outbox, cache lookup stays sync-only, no A/B rollout | `55c8f54`, `backend/tests/ci/test_docs_consistency.py`, `test_post_answer_outbox_executor.py` |
+| M6 | Docs name Next.js 16.4.6 to match the manifest and lockfile | `ddc1c29`, `test_docs_consistency.py` |
+| M7 | Edge gate and BFF share the cookie-name constants; docs state the real auth boundary | `709e69c`, `frontend/src/test/proxy.test.ts` |
+| L1 | Redundant owner-agnostic webhook pre-check removed; owner scoping stays in the service | `ed2edd3`, `backend/tests/api/test_webhooks.py` |
+| L2 | Collector basic auth pinned to env injection with synthetic values only; config unchanged | `dd91f7a`, `test_otel_collector_config.py` |
+| L3 | Admin Evaluation studio UI added for the real backend evaluators | `16aafd6`, `frontend/src/test/components/admin-view.test.tsx` |
+| L4 | Backend OpenAPI ↔ BFF coverage test with justified, staleness-checked exceptions | `5bfbf68`, `backend/tests/api/test_backend_bff_coverage.py` |
+| L5 | Vercel named as the reference frontend deployment target | `ddc1c29`, `test_docs_consistency.py` |
+
 ## Severity-ranked findings
 
 ### HIGH

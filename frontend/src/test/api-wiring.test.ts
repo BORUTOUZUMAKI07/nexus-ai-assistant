@@ -55,6 +55,14 @@ const handlerDirs = walkFiles(API_DIR, [".ts"])
  * dynamic segment, exactly as the App Router resolves them. A dynamic segment
  * matches one path part and nothing else — `/api/artifacts` is not a
  * substitute for `/api/artifacts/[id]`.
+ *
+ * The wildcard works in both directions. A helper such as
+ * `nexusFetch(`${API_BASE}/admin/evaluation/${path}`)` produces a request
+ * segment that is dynamic at scan time but concrete at runtime, so it must be
+ * allowed to match any handler part at that position. The literal parts still
+ * have to match, so a missing handler directory is still caught: deleting every
+ * `/api/admin/evaluation/*` relay leaves no four-part handler under that
+ * prefix and the guard fails.
  */
 function isMounted(requestPath: string): boolean {
   const requestParts = requestPath.split("/").filter(Boolean);
@@ -62,6 +70,7 @@ function isMounted(requestPath: string): boolean {
     const handlerParts = handler.split("/").filter(Boolean);
     if (handlerParts.length !== requestParts.length) return false;
     return handlerParts.every((part, i) => {
+      if (requestParts[i] === "*") return true;
       if (part.startsWith("[") && part.endsWith("]")) return true;
       if (part === "*") return true;
       return part === requestParts[i];
@@ -117,6 +126,15 @@ describe("API wiring", () => {
   it("finds the route handlers on disk", () => {
     // A guard that silently matches nothing would pass forever.
     expect(handlerDirs.length).toBeGreaterThan(20);
+  });
+
+  it("matches a dynamic call-site segment against any handler at that position", () => {
+    // postEvaluation() interpolates a fragment, so the guard sees
+    // /api/admin/evaluation/* rather than six concrete paths. The wildcard
+    // must match the six real relays, but must not make a whole missing
+    // prefix look mounted.
+    expect(isMounted("/api/admin/evaluation/*")).toBe(true);
+    expect(isMounted("/api/never-defined/*")).toBe(false);
   });
 
   it("every /api path the browser calls has a route handler", () => {
