@@ -9,6 +9,7 @@ import "server-only";
 
 import { cookies, headers as nextHeaders } from "next/headers";
 import { NextResponse } from "next/server";
+import { TOKEN_COOKIE } from "@/lib/auth";
 
 // Server-only backend address. Do NOT use a NEXT_PUBLIC_ variable here: this
 // value must never reach the client bundle (it exposes the internal host/port
@@ -116,7 +117,7 @@ export async function backendFetch(
   // received that token yet at that point (it only learns about it from this
   // response's Set-Cookie), so the cookie store still holds the stale value and
   // the re-probe would 401 for the wrong reason.
-  const accessToken = options.accessToken ?? cookieStore.get("nexus_access_token")?.value;
+  const accessToken = options.accessToken ?? cookieStore.get(TOKEN_COOKIE)?.value;
 
   const method = (init?.method ?? "GET").toUpperCase();
   if (MUTATING_METHODS.has(method)) {

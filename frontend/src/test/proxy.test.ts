@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { NextRequest } from "next/server";
 import { proxy, config } from "@/proxy";
+import { TOKEN_COOKIE, REFRESH_COOKIE } from "@/lib/auth";
 
 /**
  * The edge session gate had no test coverage at all.
@@ -173,17 +176,25 @@ describe("edge session gate", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
-  it("keeps the refresh cookie name in sync with the auth module", async () => {
-    const { REFRESH_COOKIE } = await import("@/lib/auth");
-    expect(REFRESH_COOKIE).toBe("nexus_refresh_token");
-  });
+  it("reads both cookie names from the shared auth module, never literals", () => {
+    // M7: the gate and the BFF each used to hardcode "nexus_access_token" while
+    // lib/auth.ts owned the real name. `lib/auth.ts` imports nothing (no
+    // next/headers), so it is safe in the Edge runtime; there is no reason for
+    // the duplication. A rename must change one constant, not three files.
+    const gate = readFileSync(join(__dirname, "..", "proxy.ts"), "utf-8");
+    const bff = readFileSync(join(__dirname, "..", "lib", "proxy.ts"), "utf-8");
 
-  it("keeps the cookie name in sync with the auth module", async () => {
-    // The gate hardcodes "nexus_access_token" because the edge runtime cannot
-    // import lib/auth.ts (it pulls in next/headers). That duplication is the
-    // load-bearing risk here: renaming the cookie without updating this would
-    // lock every signed-in user out of /app with no error anywhere.
-    const { TOKEN_COOKIE } = await import("@/lib/auth");
     expect(TOKEN_COOKIE).toBe("nexus_access_token");
+    expect(REFRESH_COOKIE).toBe("nexus_refresh_token");
+
+    expect(gate).toMatch(
+      /import\s*\{[^}]*\bTOKEN_COOKIE\b[^}]*\}\s*from\s*"@\/lib\/auth"/
+    );
+    expect(gate).toContain("REFRESH_COOKIE");
+    expect(gate).not.toContain('"nexus_access_token"');
+    expect(gate).not.toContain('"nexus_refresh_token"');
+
+    expect(bff).toContain("TOKEN_COOKIE");
+    expect(bff).not.toContain('cookieStore.get("nexus_access_token")');
   });
 });

@@ -32,10 +32,7 @@
  * Note: in Next.js 16 this file is `proxy.ts` — `middleware.ts` was renamed.
  */
 import { NextResponse, type NextRequest } from "next/server";
-
-/** Must match TOKEN_COOKIE / REFRESH_COOKIE in `src/lib/auth.ts`. */
-const ACCESS_COOKIE = "nexus_access_token";
-const REFRESH_COOKIE = "nexus_refresh_token";
+import { TOKEN_COOKIE, REFRESH_COOKIE } from "@/lib/auth";
 
 /** Where an unauthenticated visitor is sent. */
 const SIGNIN_PATH = "/signin";
@@ -72,7 +69,7 @@ export function proxy(request: NextRequest) {
   // the session on the next request. Any cookie present means "a session may
   // exist", which is exactly what an optimistic gate should ask; whether it is
   // valid is decided by the probe, and by the backend for every real API call.
-  const hasAccess = Boolean(request.cookies.get(ACCESS_COOKIE)?.value);
+  const hasAccess = Boolean(request.cookies.get(TOKEN_COOKIE)?.value);
   const hasRefresh = Boolean(request.cookies.get(REFRESH_COOKIE)?.value);
   // The sign-in page itself is exempt from the redirect below: it is where an
   // anonymous visitor is *sent*, so redirecting it to itself would be a loop.
