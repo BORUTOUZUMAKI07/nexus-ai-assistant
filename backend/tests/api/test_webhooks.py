@@ -199,6 +199,80 @@ def test_manual_redeliver_unknown_delivery():
     assert _await(svc.redeliver(user, uuid4())) is None
 
 
+# ── L1 — the redeliver route must not do a second, owner-agnostic lookup ──────
+
+
+class _SpyWebhookService:
+    """Records which service methods the route handler actually calls."""
+
+    def __init__(self, redeliver_result):
+        self.deliveries_calls: list[tuple] = []
+        self.redeliver_calls: list[tuple] = []
+        self._result = redeliver_result
+
+    async def deliveries(self, endpoint_id, limit=20):
+        self.deliveries_calls.append((endpoint_id, limit))
+        return []
+
+    async def redeliver(self, user_id, delivery_id):
+        self.redeliver_calls.append((user_id, delivery_id))
+        return self._result
+
+
+def test_redeliver_route_relies_on_the_owner_scoped_service_call_alone():
+    """The route used to query `deliveries(endpoint_id)` first with no owner filter.
+
+    That extra query was redundant: `redeliver(user_id, delivery_id)` already
+    JOINs WebhookEndpoint.user_id. Beyond the wasted round-trip it was a timing
+    oracle for delivery ids belonging to other users. Owner scoping is proven at
+    the service layer (`test_redeliver_owner_only`); the route must not repeat it
+    in a weaker form.
+    """
+    from types import SimpleNamespace
+
+    from backend.app.api.v1 import webhooks as route_module
+
+    user_id = uuid4()
+    endpoint_id = uuid4()
+    delivery_id = uuid4()
+    spy = _SpyWebhookService(
+        SimpleNamespace(id=delivery_id, status="delivered", http_status=200)
+    )
+
+    result = _await(
+        route_module.redeliver(
+            endpoint_id=endpoint_id,
+            delivery_id=delivery_id,
+            current_user=SimpleNamespace(id=user_id),
+            webhook_svc=spy,
+        )
+    )
+
+    assert spy.redeliver_calls == [(user_id, delivery_id)]
+    assert spy.deliveries_calls == []
+    assert result == {"id": str(delivery_id), "status": "delivered", "http_status": 200}
+
+
+def test_redeliver_route_still_404s_when_the_service_rejects():
+    from types import SimpleNamespace
+
+    import fastapi
+    from backend.app.api.v1 import webhooks as route_module
+
+    spy = _SpyWebhookService(None)
+    with pytest.raises(fastapi.HTTPException) as exc:
+        _await(
+            route_module.redeliver(
+                endpoint_id=uuid4(),
+                delivery_id=uuid4(),
+                current_user=SimpleNamespace(id=uuid4()),
+                webhook_svc=spy,
+            )
+        )
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Delivery not found"
+
+
 # ── P0 #8 — SSRF guard on outbound webhook targets ────────────────────────────
 
 

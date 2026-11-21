@@ -99,10 +99,13 @@ async def redeliver(
     current_user: User = Depends(get_current_user),
     webhook_svc: WebhookService = Depends(get_webhook_service),
 ):
-    """Re-attempt a failed delivery endpoint (owner-scoped)."""
-    deliveries = await webhook_svc.deliveries(endpoint_id, limit=100)
-    if not any(str(d.id) == str(delivery_id) for d in deliveries):
-        raise HTTPException(status_code=404, detail="Delivery not found")
+    """Re-attempt a failed delivery endpoint (owner-scoped).
+
+    The owner check lives in `WebhookService.redeliver`, which JOINs the
+    endpoint's user_id. An earlier route-level `deliveries(endpoint_id)` lookup
+    was owner-agnostic, wasted a query, and leaked existence via timing; it is
+    deliberately gone. `endpoint_id` stays in the path for REST shape only.
+    """
     result = await webhook_svc.redeliver(current_user.id, delivery_id)
     if not result:
         raise HTTPException(status_code=404, detail="Delivery not found")

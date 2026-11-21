@@ -16,7 +16,7 @@ Rules: RED test first, minimal GREEN, focused tests + ruff + typecheck, small co
 | H | H3 frontend 2FA BFF + sign-in/enrollment UI | done |
 | I | L3 admin evaluation UI | done |
 | J | L4 backend-to-BFF route coverage test | done |
-| K | L1 redundant webhook pre-check | pending |
+| K | L1 redundant webhook pre-check | done |
 | L | L2 collector auth enforcement test | pending |
 | M | M7 optimistic proxy honesty | pending |
 | N | M5 sync/stream chat parity | pending |
