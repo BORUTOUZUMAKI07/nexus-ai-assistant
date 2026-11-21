@@ -1123,6 +1123,7 @@ async def _persist_reply(
                         await semantic_response_cache.invalidate(
                             user_id=str(user_id),
                             model=response_model,
+                            conversation_id=str(conversation_id),
                         )
                     async with trace_span(
                         "chat.persist.webhook_enqueue",

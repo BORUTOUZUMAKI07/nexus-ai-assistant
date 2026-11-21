@@ -20,10 +20,17 @@ TaskHandler = Callable[[AsyncSession, dict[str, Any]], Awaitable[None]]
 
 
 async def invalidate_semantic_cache(session: AsyncSession, payload: dict[str, Any]) -> None:
-    """Drop the (user, model) cache bucket that the new answer may have stale'd."""
+    """Drop the cache bucket the new answer may have made stale.
+
+    Older queued payloads did not record the conversation or prompt variant;
+    their defaults keep them working while new jobs invalidate exactly the
+    scope that was written.
+    """
     await semantic_response_cache.invalidate(
         user_id=payload["user_id"],
         model=payload["model"],
+        prompt_variant=payload.get("prompt_variant", "default"),
+        conversation_id=payload.get("conversation_id", ""),
     )
 
 

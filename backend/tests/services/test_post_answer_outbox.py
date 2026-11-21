@@ -156,6 +156,37 @@ async def test_enqueue_is_idempotent_per_run_message_and_task_type(
     assert all(str(test_user.id) not in str(event.values()) for event in events)
 
 
+async def test_cache_invalidation_payload_carries_conversation_and_variant(db_session, test_user):
+    """RED: invalidation must target the same scope as the cache write."""
+    run, conversation = await _make_run(db_session, test_user.id)
+    await outbox_service.enqueue_post_answer_tasks(
+        db_session,
+        run_id=run.id,
+        message_id=uuid4(),
+        user_id=test_user.id,
+        conversation_id=conversation.id,
+        model="gpt-x",
+        content="the answer",
+        prompt_variant="default:mem0-abc123",
+        task_types=(outbox_service.TASK_CACHE_INVALIDATION,),
+    )
+    row = (
+        await db_session.exec(
+            select(PostAnswerTask).where(
+                PostAnswerTask.run_id == run.id,
+                PostAnswerTask.task_type == outbox_service.TASK_CACHE_INVALIDATION,
+            )
+        )
+    ).scalars().one()
+
+    assert row.payload == {
+        "user_id": str(test_user.id),
+        "model": "gpt-x",
+        "conversation_id": str(conversation.id),
+        "prompt_variant": "default:mem0-abc123",
+    }
+
+
 async def test_a_new_message_gets_its_own_tasks(db_session, test_user):
     run, conversation = await _make_run(db_session, test_user.id)
     common = dict(
@@ -380,7 +411,13 @@ async def test_real_handlers_invalidate_cache_and_dispatch_webhook(
     monkeypatch.setattr(outbox_handlers, "WebhookService", _WebhookService)
 
     await outbox_handlers.invalidate_semantic_cache(
-        db_session, {"user_id": str(test_user.id), "model": "gpt-x"}
+        db_session,
+        {
+            "user_id": str(test_user.id),
+            "model": "gpt-x",
+            "conversation_id": str(conversation.id),
+            "prompt_variant": "default:mem0-abc123",
+        },
     )
     await outbox_handlers.dispatch_webhook(
         db_session,
@@ -393,7 +430,12 @@ async def test_real_handlers_invalidate_cache_and_dispatch_webhook(
         },
     )
 
-    assert observed["cache"] == {"user_id": str(test_user.id), "model": "gpt-x"}
+    assert observed["cache"] == {
+        "user_id": str(test_user.id),
+        "model": "gpt-x",
+        "conversation_id": str(conversation.id),
+        "prompt_variant": "default:mem0-abc123",
+    }
     assert observed["webhook"]["event"] == "message.completed"
     assert observed["webhook"]["user_id"] == test_user.id
     assert observed["webhook"]["payload"] == {

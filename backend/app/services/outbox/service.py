@@ -86,6 +86,7 @@ async def enqueue_post_answer_tasks(
     conversation_id: UUID,
     model: str,
     content: str,
+    prompt_variant: str = "default",
     task_types: tuple[str, ...] = TASK_TYPES,
 ) -> int:
     """Queue cache invalidation and webhook delivery for one persisted reply.
@@ -101,7 +102,12 @@ async def enqueue_post_answer_tasks(
     specs: tuple[tuple[str, dict[str, Any]], ...] = (
         (
             TASK_CACHE_INVALIDATION,
-            {"user_id": str(user_id), "model": model},
+            {
+                "user_id": str(user_id),
+                "model": model,
+                "conversation_id": str(conversation_id),
+                "prompt_variant": prompt_variant,
+            },
         ),
         (
             TASK_WEBHOOK_DISPATCH,
