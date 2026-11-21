@@ -254,6 +254,74 @@ def test_collector_hardening_is_wired() -> None:
     )
 
 
+# ── L2 — basicauth credentials must come from the environment ────────────────
+
+
+def test_basicauth_htpasswd_inline_is_an_env_substitution_not_a_literal() -> None:
+    """The upstream htpasswd.inline format is plaintext ``user:password``.
+
+    That is valid for the collector's basicauth extension — but only because
+    the two halves are ``${env:...}`` references. A literal ``user:pass`` here
+    would commit a credential to git and silently stop tracking the app's
+    settings. Pin the exact shape; no real credential ever appears in a test.
+    """
+    config = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    inline = (
+        ((config.get("extensions") or {}).get("basicauth/server") or {})
+        .get("htpasswd", {})
+        .get("inline")
+    )
+    assert inline == "${env:OTLP_AUTH_USER}:${env:OTLP_AUTH_PASSWORD}", (
+        "basicauth/server.htpasswd.inline must be exactly the env substitution "
+        "'${env:OTLP_AUTH_USER}:${env:OTLP_AUTH_PASSWORD}'. The collector expands "
+        "it at startup; any literal pair would be a committed secret and a drift "
+        f"from the app's settings. Got {inline!r}"
+    )
+
+
+def test_collector_auth_credentials_are_not_literals_in_compose() -> None:
+    """docker-compose injects credentials via env_file, never as literal values."""
+    compose = yaml.safe_load(
+        (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+    collector = (compose.get("services") or {}).get("otel-collector") or {}
+    env_file = collector.get("env_file") or []
+    if isinstance(env_file, str):
+        env_file = [env_file]
+    assert any("backend/.env" in str(entry) for entry in env_file), (
+        "otel-collector must read OTLP_AUTH_USER/OTLP_AUTH_PASSWORD from the "
+        "shared backend/.env; a missing env_file makes the collector exit at "
+        "startup because an unset ${env:...} name is an error"
+    )
+    environment = collector.get("environment") or []
+    entries = environment.items() if isinstance(environment, dict) else environment
+    literals = [str(entry) for entry in entries if str(entry).startswith("OTLP_AUTH_")]
+    assert literals == [], (
+        f"literal OTLP_AUTH_* values in docker-compose.yml: {literals}. "
+        "They must come from backend/.env via env_file, not be committed here."
+    )
+
+
+def test_backend_basic_header_matches_the_collector_inline_shape(monkeypatch) -> None:
+    """The app must send exactly the ``user:password`` pair the collector reads.
+
+    Synthetic values only. This is the client half of L2: the collector's
+    htpasswd.inline expands to ``user:password``, and the app base64-encodes the
+    same two settings into an HTTP Basic header. If either side changed its
+    separator or trimming, every OTLP write would be a silent 401.
+    """
+    import base64
+
+    from backend.app.services.observability import otel
+
+    monkeypatch.setattr(otel.settings, "OTLP_AUTH_USER", " synth-user ")
+    monkeypatch.setattr(otel.settings, "OTLP_AUTH_PASSWORD", "synth-pass")
+
+    headers = otel.otlp_auth_headers()
+    expected = base64.b64encode(b"synth-user:synth-pass").decode("ascii")
+    assert headers == {"Authorization": f"Basic {expected}"}
+
+
 def test_tail_sampling_keeps_errors_and_a_sample_of_the_rest() -> None:
     """The quota guard: the error policy must NOT match every healthy span.
 

@@ -17,7 +17,7 @@ Rules: RED test first, minimal GREEN, focused tests + ruff + typecheck, small co
 | I | L3 admin evaluation UI | done |
 | J | L4 backend-to-BFF route coverage test | done |
 | K | L1 redundant webhook pre-check | done |
-| L | L2 collector auth enforcement test | pending |
+| L | L2 collector auth enforcement test | done |
 | M | M7 optimistic proxy honesty | pending |
 | N | M5 sync/stream chat parity | pending |
 | Final | full verification, merge to main, push | pending |
