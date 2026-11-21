@@ -42,6 +42,7 @@ from backend.app.services.llm.structured_output import (
 from backend.app.services.llm.structured_parse import validate_object
 from backend.app.services.memory.lifecycle import should_persist_memory
 from backend.app.services.memory.long_term import long_term_memory
+from backend.app.services.memory.reinforcement import reinforce_recalled_memories
 from backend.app.services.observability.fallbacks import count_fallback
 from backend.app.services.rag.critique import (
     VERDICT_UNRELATED,
@@ -152,48 +153,6 @@ async def _mirror_memories_to_table(
     except Exception as exc:
         logger.warning("memory_mirror_failed_non_blocking", user_id=str(user_id), error=str(exc))
         return 0
-
-async def _reinforce_memories_background(
-    user_id: str,
-    recalled_items: list[dict[str, Any]],
-) -> None:
-    """Record a successful recall in the background to reinforce memory confidence."""
-    from backend.app.domain.user.repository import UserRepository
-    from backend.app.infrastructure.database.session import async_session_factory
-
-    try:
-        _ = UUID(str(user_id))
-    except (ValueError, TypeError, AttributeError):
-        return
-
-    db_ids: list[UUID] = []
-    mem0_ids: list[str] = []
-    for item in recalled_items:
-        if not isinstance(item, dict):
-            continue
-        if item.get("db_id"):
-            try:
-                db_ids.append(UUID(str(item["db_id"])))
-            except (ValueError, TypeError):
-                pass
-        elif item.get("id"):
-            try:
-                db_ids.append(UUID(str(item["id"])))
-            except (ValueError, TypeError):
-                mem0_ids.append(str(item["id"]))
-
-    try:
-        async with async_session_factory() as session:
-            repo = UserRepository(session)
-            if mem0_ids:
-                resolved_ids = await repo.find_memory_ids_by_mem0_ids(mem0_ids)
-                db_ids.extend(resolved_ids)
-            if db_ids:
-                count = await repo.reinforce_memories(db_ids)
-                logger.info("recalled_memories_reinforced", user_id=user_id, count=count)
-    except Exception as exc:
-        logger.warning("reinforce_memories_failed_non_blocking", error=str(exc))
-
 
 def _has_image_content(content: Any) -> bool:
     """Checks if message content has any image_url or image components."""
@@ -1972,7 +1931,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     recalled_memories = state.get("recalled_memories", [])
     if user_id and recalled_memories:
         try:
-            asyncio.create_task(_reinforce_memories_background(user_id, recalled_memories))
+            asyncio.create_task(reinforce_recalled_memories(str(user_id), recalled_memories))
         except Exception as exc:
             logger.warning("reinforce_memories_task_failed", error=str(exc))
 

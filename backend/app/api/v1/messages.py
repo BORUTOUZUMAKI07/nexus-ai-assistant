@@ -46,6 +46,7 @@ from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.experiments.service import experiment_service
 from backend.app.services.memory.lifecycle import should_persist_memory
 from backend.app.services.memory.long_term import long_term_memory
+from backend.app.services.memory.reinforcement import reinforce_recalled_memories
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.fallbacks import count_fallback
 from backend.app.services.observability.metrics import metrics_collector
@@ -60,24 +61,27 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/conversations/{conversation_id}/messages", tags=["messages"])
 
 
-async def _recall_memory_block(query: str, user_id: UUID, endpoint: str) -> str:
+async def _recall_memory_block(
+    query: str, user_id: UUID, endpoint: str
+) -> tuple[str, list[dict[str, Any]]]:
     """Load long-term memories for a direct /messages turn.
 
-    The orchestrator chat path already does this; these endpoints were the
-    alternate door that skipped it. Strictly best-effort: a Mem0 outage, a
-    missing key or a malformed response must never fail the user's answer.
+    Keep the recalled items (not just the formatted block) so a successful
+    recall can reinforce the same facts as the orchestrator chat path. Strictly
+    best-effort: a Mem0 outage, a missing key or a malformed response must never
+    fail the user's answer.
     """
     try:
-        block = await long_term_memory.build_memory_context_block(
+        block, recalled_items = await long_term_memory.build_memory_context_block_with_ids(
             query=query, user_id=user_id, limit=8
         )
     except Exception as exc:
         logger.warning("direct_message_memory_recall_failed", endpoint=endpoint, error=str(exc))
         count_fallback("mem0_recall_direct_messages")
-        return ""
+        return "", []
     if block:
         logger.info("direct_message_memories_loaded", endpoint=endpoint, user_id=str(user_id))
-    return block
+    return block, recalled_items
 
 
 def _memory_scoped_variant(variant: str, memory_block: str) -> str:
@@ -224,7 +228,7 @@ async def send_message_sync(
         )
 
     # Mem0 recall: the same personalisation the orchestrator chat path gets.
-    memory_block = await _recall_memory_block(
+    memory_block, recalled_memories = await _recall_memory_block(
         query=sanitized_content, user_id=current_user.id, endpoint="sync"
     )
     if memory_block:
@@ -399,6 +403,9 @@ async def send_message_sync(
         session=usage_svc._repo.session,
     )
 
+    if recalled_memories:
+        await reinforce_recalled_memories(str(current_user.id), recalled_memories)
+
     return assistant_msg
 
 
@@ -433,7 +440,7 @@ async def send_message_stream(
     system_prompt = await prompt_compiler.compile_system_prompt_cached(
         custom_instructions=message_in.system_prompt_override or conv.system_prompt,
     )
-    memory_block = await _recall_memory_block(
+    memory_block, recalled_memories = await _recall_memory_block(
         query=sanitized_content, user_id=current_user.id, endpoint="stream"
     )
     if memory_block:
@@ -528,6 +535,9 @@ async def send_message_stream(
                 assistant_text=full_response,
                 session=usage_svc._repo.session,
             )
+
+            if recalled_memories:
+                await reinforce_recalled_memories(str(current_user.id), recalled_memories)
 
         except GeneratorExit:
             # Client disconnected mid-stream. Persist whatever text was already

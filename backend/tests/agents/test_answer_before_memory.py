@@ -51,7 +51,7 @@ async def test_answer_is_emitted_before_the_memory_write(monkeypatch):
     monkeypatch.setattr(nodes, "_emit_answer_stream", _emit)
     monkeypatch.setattr(nodes.long_term_memory, "add_from_conversation", _add)
     monkeypatch.setattr(nodes, "_mirror_memories_to_table", _mirror)
-    monkeypatch.setattr(nodes, "_reinforce_memories_background", _noop)
+    monkeypatch.setattr(nodes, "reinforce_recalled_memories", _noop)
 
     state = {
         "messages": [_Msg("I prefer dark mode in all my tools")],

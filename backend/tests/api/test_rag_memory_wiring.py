@@ -40,12 +40,12 @@ async def test_rag_query_returns_mem0_context(monkeypatch):
 
     async def _recall(**kwargs):
         recalled.append(kwargs)
-        return MEMORY_BLOCK
+        return MEMORY_BLOCK, []
 
     async def _query(**_kwargs):
         return _rag_result()
 
-    monkeypatch.setattr(files.long_term_memory, "build_memory_context_block", _recall)
+    monkeypatch.setattr(files.long_term_memory, "build_memory_context_block_with_ids", _recall)
 
     user_id = uuid4()
     result = await files.query_rag(
@@ -69,7 +69,7 @@ async def test_rag_query_fails_open_when_memory_is_unavailable(monkeypatch):
     async def _query(**_kwargs):
         return _rag_result()
 
-    monkeypatch.setattr(files.long_term_memory, "build_memory_context_block", _recall)
+    monkeypatch.setattr(files.long_term_memory, "build_memory_context_block_with_ids", _recall)
 
     result = await files.query_rag(
         rag_in=RAGQueryRequest(query="What do we use?"),
@@ -85,7 +85,7 @@ async def test_rag_query_fails_open_when_memory_is_unavailable(monkeypatch):
 async def test_rag_query_accepts_a_dict_shaped_service_result(monkeypatch):
     """A plain-dict RAG result must still get memories, not a 500."""
     async def _recall(**_kwargs):
-        return MEMORY_BLOCK
+        return MEMORY_BLOCK, []
 
     async def _query(**_kwargs):
         return {
@@ -95,7 +95,7 @@ async def test_rag_query_accepts_a_dict_shaped_service_result(monkeypatch):
             "query_variants": ["What do we use?"],
         }
 
-    monkeypatch.setattr(files.long_term_memory, "build_memory_context_block", _recall)
+    monkeypatch.setattr(files.long_term_memory, "build_memory_context_block_with_ids", _recall)
 
     result = await files.query_rag(
         rag_in=RAGQueryRequest(query="What do we use?"),
@@ -105,3 +105,31 @@ async def test_rag_query_accepts_a_dict_shaped_service_result(monkeypatch):
 
     assert result.query == "What do we use?"
     assert result.memory_context == MEMORY_BLOCK
+
+
+@pytest.mark.asyncio
+async def test_rag_query_reinforces_recalled_memories(monkeypatch):
+    """RED: file search must reinforce the memories it injected."""
+    recalled_items = [{"id": "mem0-1", "memory": "User prefers dark mode in all tools"}]
+    reinforced = []
+
+    async def _recall(**_kwargs):
+        return MEMORY_BLOCK, recalled_items
+
+    async def _query(**_kwargs):
+        return _rag_result()
+
+    async def _reinforce(user_id, items):
+        reinforced.append((user_id, items))
+
+    monkeypatch.setattr(files.long_term_memory, "build_memory_context_block_with_ids", _recall)
+    monkeypatch.setattr(files, "reinforce_recalled_memories", _reinforce)
+
+    user_id = uuid4()
+    await files.query_rag(
+        rag_in=RAGQueryRequest(query="What do we use?"),
+        current_user=SimpleNamespace(id=user_id),
+        rag_svc=SimpleNamespace(query=_query),
+    )
+
+    assert reinforced == [(str(user_id), recalled_items)]

@@ -141,9 +141,9 @@ async def test_sync_endpoint_injects_mem0_memory_into_the_prompt(monkeypatch, ha
     """RED: a stated preference must reach the sync endpoint's system prompt."""
 
     async def _recall(**_kwargs):
-        return MEMORY_BLOCK
+        return MEMORY_BLOCK, []
 
-    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block", _recall)
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
 
     result = await _call_sync(harness)
 
@@ -158,9 +158,9 @@ async def test_stream_endpoint_injects_mem0_memory_into_the_prompt(monkeypatch, 
     """RED: the SSE variant must recall memories too."""
 
     async def _recall(**_kwargs):
-        return MEMORY_BLOCK
+        return MEMORY_BLOCK, []
 
-    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block", _recall)
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
 
     response = await messages.send_message_stream(
         conversation_id=harness.conversation_id,
@@ -186,7 +186,7 @@ async def test_memory_outage_does_not_fail_the_sync_reply(monkeypatch, harness):
     async def _recall(**_kwargs):
         raise RuntimeError("mem0 is down")
 
-    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block", _recall)
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
 
     result = await _call_sync(harness)
 
@@ -199,9 +199,9 @@ async def test_cache_key_scopes_the_answer_to_the_recalled_memory(monkeypatch, h
     """RED: identical questions with different memories must not share a cached answer."""
 
     async def _recall(**_kwargs):
-        return MEMORY_BLOCK
+        return MEMORY_BLOCK, []
 
-    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block", _recall)
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
 
     await _call_sync(harness)
     first_variant = harness.captured["cache_get_variants"][-1]
@@ -209,9 +209,9 @@ async def test_cache_key_scopes_the_answer_to_the_recalled_memory(monkeypatch, h
     harness.captured["cache_get_variants"].clear()
 
     async def _other_recall(**_kwargs):
-        return "### Relevant User Context\n- User prefers light mode\n"
+        return "### Relevant User Context\n- User prefers light mode\n", []
 
-    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block", _other_recall)
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _other_recall)
     await _call_sync(harness)
     second_variant = harness.captured["cache_get_variants"][-1]
 
@@ -324,3 +324,53 @@ async def test_stream_endpoint_writes_a_stated_preference(monkeypatch, harness):
 
     assert frames[-1]["event"] == "done"
     assert len(writes) == 1
+
+
+RECALLED_ITEMS = [{"id": "mem0-1", "memory": "User prefers dark mode in all tools"}]
+
+
+@pytest.mark.asyncio
+async def test_sync_endpoint_reinforces_recalled_memories(monkeypatch, harness):
+    """RED: a recalled fact must be reinforced after a direct sync answer."""
+    reinforced = []
+
+    async def _recall(**_kwargs):
+        return MEMORY_BLOCK, RECALLED_ITEMS
+
+    async def _reinforce(user_id, recalled_items):
+        reinforced.append((user_id, recalled_items))
+
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
+    monkeypatch.setattr(messages, "reinforce_recalled_memories", _reinforce)
+
+    await _call_sync(harness)
+
+    assert reinforced == [(str(harness.user.id), RECALLED_ITEMS)]
+
+
+@pytest.mark.asyncio
+async def test_stream_endpoint_reinforces_recalled_memories(monkeypatch, harness):
+    """RED: a recalled fact must be reinforced after a direct stream answer."""
+    reinforced = []
+
+    async def _recall(**_kwargs):
+        return MEMORY_BLOCK, RECALLED_ITEMS
+
+    async def _reinforce(user_id, recalled_items):
+        reinforced.append((user_id, recalled_items))
+
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
+    monkeypatch.setattr(messages, "reinforce_recalled_memories", _reinforce)
+
+    response = await messages.send_message_stream(
+        conversation_id=harness.conversation_id,
+        message_in=MessageCreate(content="What should I use?"),
+        current_user=harness.user,
+        org_id=None,
+        conv_svc=harness.conv_svc,
+        usage_svc=harness.usage_svc,
+    )
+    frames = [frame async for frame in _stream_events(response)]
+
+    assert frames[-1]["event"] == "done"
+    assert reinforced == [(str(harness.user.id), RECALLED_ITEMS)]

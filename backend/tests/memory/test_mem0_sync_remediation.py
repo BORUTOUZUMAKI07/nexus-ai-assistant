@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from backend.app.agents.orchestrator.nodes import _reinforce_memories_background
 from backend.app.domain.user.models import UserMemory
 from backend.app.domain.user.repository import UserRepository
 from backend.app.domain.user.schemas import UserMemoryCreate
 from backend.app.services.memory.long_term import LongTermMemoryService
+from backend.app.services.memory.reinforcement import reinforce_recalled_memories
 from backend.app.services.settings.service import UserSettingsService
 from backend.tests.fakes import FakeSession
 
@@ -177,7 +177,7 @@ async def test_reinforce_memories_background_boosts_confidence(monkeypatch):
     monkeypatch.setattr(sess_mod, "async_session_factory", lambda: MockSessionCtx())
 
     recalled_items = [{"id": "mem0-fastapi", "memory": "Prefers FastAPI"}]
-    await _reinforce_memories_background(str(user_id), recalled_items)
+    await reinforce_recalled_memories(str(user_id), recalled_items)
 
     assert reinforced_ids == [mem_uuid]
 
