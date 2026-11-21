@@ -13,6 +13,7 @@ No network: the HTTP client is injected (that is why the service takes a
 
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 from typing import Any
 
@@ -45,10 +46,12 @@ class _FakeClient:
     def __init__(self, by_model: dict[str, Any]) -> None:
         self._by_model = by_model
         self.calls: list[tuple[str, str]] = []
+        self.params: list[dict[str, Any]] = []
 
     async def get(self, url: str, params: dict[str, Any] | None = None, **_: Any) -> _Response:
         model = str((params or {}).get("model"))
         self.calls.append((model, url))
+        self.params.append(dict(params or {}))
         result = self._by_model[model]
         if isinstance(result, Exception):
             raise result
@@ -96,6 +99,83 @@ async def test_a_prompt_longer_than_the_cap_is_truncated_in_the_request():
     # quote("x"*n, safe="") == "x"*n, so the tail length is the truncated length.
     assert url.endswith("x" * MAX_PROMPT_CHARS)
     assert not url.endswith("x" * (MAX_PROMPT_CHARS + 1))
+
+
+async def test_the_configured_prompt_cap_is_used_instead_of_a_hardcoded_one(monkeypatch):
+    """RED: IMAGE_MAX_PROMPT_CHARS must control the truncation point."""
+    from backend.app.services.tools import image_generation as service_mod
+
+    monkeypatch.setattr(service_mod.settings, "IMAGE_MAX_PROMPT_CHARS", 25)
+    service, client = _service({"flux": _Response()})
+
+    await service.generate("x" * 200)
+
+    _, url = client.calls[0]
+    assert url.endswith("x" * 25)
+    assert not url.endswith("x" * 26)
+
+
+async def test_the_configured_default_dimensions_are_used(monkeypatch):
+    """RED: the env defaults must reach the provider when the caller omits them."""
+    from backend.app.services.tools import image_generation as service_mod
+
+    monkeypatch.setattr(service_mod.settings, "IMAGE_DEFAULT_WIDTH", 512)
+    monkeypatch.setattr(service_mod.settings, "IMAGE_DEFAULT_HEIGHT", 768)
+    service, client = _service({"flux": _Response()})
+
+    await service.generate("a red panda")
+
+    assert client.params[0]["width"] == 512
+    assert client.params[0]["height"] == 768
+
+
+async def test_the_configured_timeout_reaches_the_default_http_client(monkeypatch):
+    """RED: IMAGE_REQUEST_TIMEOUT_SECONDS must bound each provider call."""
+    from backend.app.services.tools import image_generation as service_mod
+
+    seen: dict[str, Any] = {}
+
+    class _SpyClient:
+        def __init__(self, **kwargs: Any) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr(service_mod.settings, "IMAGE_REQUEST_TIMEOUT_SECONDS", 12.0)
+    monkeypatch.setattr(service_mod.httpx, "AsyncClient", _SpyClient)
+
+    service = service_mod.ImageGenerationService()
+    assert service.request_timeout == 12.0
+    service._client_factory()
+
+    assert seen["timeout"] == 12.0
+
+
+def test_the_route_request_model_uses_the_configured_limits(monkeypatch):
+    """RED: route validation must not keep its own 1000/1024 constants."""
+    settings = images_mod.settings
+    original = (
+        settings.IMAGE_MAX_PROMPT_CHARS,
+        settings.IMAGE_DEFAULT_WIDTH,
+        settings.IMAGE_DEFAULT_HEIGHT,
+    )
+    try:
+        monkeypatch.setattr(settings, "IMAGE_MAX_PROMPT_CHARS", 25)
+        monkeypatch.setattr(settings, "IMAGE_DEFAULT_WIDTH", 512)
+        monkeypatch.setattr(settings, "IMAGE_DEFAULT_HEIGHT", 768)
+        reloaded = importlib.reload(images_mod)
+        model = reloaded.ImageGenerationRequest
+
+        assert model(prompt="x" * 25).width == 512
+        assert model(prompt="x" * 25).height == 768
+        with pytest.raises(ValueError):
+            model(prompt="x" * 26)
+    finally:
+        monkeypatch.undo()
+        importlib.reload(images_mod)
+    assert (
+        settings.IMAGE_MAX_PROMPT_CHARS,
+        settings.IMAGE_DEFAULT_WIDTH,
+        settings.IMAGE_DEFAULT_HEIGHT,
+    ) == original
 
 
 async def test_a_successful_render_returns_a_base64_data_url():

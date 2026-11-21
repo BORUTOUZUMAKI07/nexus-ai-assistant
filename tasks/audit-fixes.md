@@ -6,11 +6,11 @@ Rules: RED test first, minimal GREEN, focused tests + ruff + typecheck, small co
 
 | Slice | Finding | Status |
 |---|---|---|
-| A | M2 outbox constant backoff | pending |
-| B | M1 secret-scan whole-file skip | pending |
-| C | M6 + L5 doc/version drift | pending |
-| D | M3 observability status from real probe | pending |
-| E | M4 image config is dead | pending |
+| A | M2 outbox constant backoff | done (`461e926`) |
+| B | M1 secret-scan whole-file skip | done (`a5089a8`) |
+| C | M6 + L5 doc/version drift | done (`ddc1c29`) |
+| D | M3 observability status from real probe | done (`9c07b48`) |
+| E | M4 image config is dead | done |
 | F | H1 + H2 admin trace auth + real store | pending |
 | G | H3 backend 2FA login 500 / cookie gap | pending |
 | H | H3 frontend 2FA BFF + sign-in UI | pending |

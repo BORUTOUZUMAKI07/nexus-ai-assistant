@@ -30,6 +30,7 @@ from urllib.parse import quote
 
 import httpx
 import structlog
+from backend.app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
@@ -47,7 +48,9 @@ _ALLOWED_MIME: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/web
 # A hard ceiling on the prompt text. The free endpoint accepts much longer, but
 # beyond this the URL grows past what some proxies will forward, and the prompt
 # is already far past the point where more words change the picture.
-MAX_PROMPT_CHARS = 1000
+# Kept for callers/tests that import the constant; the service reads the live
+# setting so an environment change is honoured without a code edit.
+MAX_PROMPT_CHARS = settings.IMAGE_MAX_PROMPT_CHARS
 
 # Overall deadline for the whole fallback chain (2 models × per-call timeout).
 MAX_TOTAL_SECONDS = 90.0
@@ -71,19 +74,20 @@ class ImageGenerationService:
 
     def __init__(
         self,
-        timeout: float = 60.0,
+        timeout: float | None = None,
         client_factory: Any | None = None,
     ) -> None:
-        self._timeout = timeout
+        self._timeout = settings.IMAGE_REQUEST_TIMEOUT_SECONDS if timeout is None else timeout
+        self.request_timeout = self._timeout
         self._client_factory = client_factory or (
-            lambda: httpx.AsyncClient(timeout=timeout, follow_redirects=False)
+            lambda: httpx.AsyncClient(timeout=self._timeout, follow_redirects=False)
         )
 
     async def generate(
         self,
         prompt: str,
-        width: int = 1024,
-        height: int = 1024,
+        width: int | None = None,
+        height: int | None = None,
         seed: int | None = None,
     ) -> dict[str, Any]:
         """Return a rendered image as a base64 data URL.
@@ -95,9 +99,12 @@ class ImageGenerationService:
         cleaned = (prompt or "").strip()
         if not cleaned:
             raise ImageGenerationError("prompt must not be empty")
-        if len(cleaned) > MAX_PROMPT_CHARS:
-            cleaned = cleaned[:MAX_PROMPT_CHARS]
+        prompt_cap = settings.IMAGE_MAX_PROMPT_CHARS
+        if len(cleaned) > prompt_cap:
+            cleaned = cleaned[:prompt_cap]
 
+        effective_width = settings.IMAGE_DEFAULT_WIDTH if width is None else width
+        effective_height = settings.IMAGE_DEFAULT_HEIGHT if height is None else height
         encoded_prompt = quote(cleaned, safe="")
         last_error: str = "image generation failed"
 
@@ -108,8 +115,8 @@ class ImageGenerationService:
                 async with self._client_factory() as client:
                     for model in MODEL_FALLBACKS:
                         params: dict[str, Any] = {
-                            "width": width,
-                            "height": height,
+                            "width": effective_width,
+                            "height": effective_height,
                             "nologo": "true",
                             "model": model,
                         }
@@ -153,8 +160,8 @@ class ImageGenerationService:
                             "data_url": f"data:{mime};base64,{encoded}",
                             "mime": mime,
                             "model": model,
-                            "width": width,
-                            "height": height,
+                            "width": effective_width,
+                            "height": effective_height,
                             "bytes": len(data),
                         }
         except TimeoutError:

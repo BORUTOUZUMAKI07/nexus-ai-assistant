@@ -29,9 +29,9 @@ router = APIRouter(prefix="/images", tags=["images"])
 class ImageGenerationRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
-    prompt: str = Field(min_length=1, max_length=1000)
-    width: int = Field(default=1024, ge=256, le=2048)
-    height: int = Field(default=1024, ge=256, le=2048)
+    prompt: str = Field(min_length=1, max_length=settings.IMAGE_MAX_PROMPT_CHARS)
+    width: int = Field(default=settings.IMAGE_DEFAULT_WIDTH, ge=256, le=2048)
+    height: int = Field(default=settings.IMAGE_DEFAULT_HEIGHT, ge=256, le=2048)
 
 
 @router.post("/generate", status_code=status.HTTP_200_OK)
