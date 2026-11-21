@@ -1787,6 +1787,92 @@ export async function fetchRedTeamRuns(retry: FetchRetryOptions = {}): Promise<R
   return data.runs;
 }
 
+// ─── Admin: evaluation suite ───────────────────────────────────────────────
+
+export interface RagEvaluationRequest {
+  question: string;
+  answer: string;
+  contexts?: string[];
+  ground_truth?: string;
+}
+
+export interface QualityEvaluationRequest {
+  prompt?: string;
+  response: string;
+  tokens_used?: number;
+  latency_ms?: number;
+}
+
+export interface ArenaEvaluationRequest {
+  query: string;
+  output_a: string;
+  output_b: string;
+  instructions?: string;
+}
+
+export interface ConversationalEvaluationRequest {
+  transcript: Array<{ role: string; content: string }>;
+  criteria?: string;
+}
+
+export interface PromptRegressionRequest {
+  system_prompt: string;
+  threshold?: number;
+}
+
+/** All evaluators return an arbitrary report; the admin UI renders it as JSON. */
+type EvaluationReport = Record<string, unknown>;
+
+async function postEvaluation(path: string, body?: unknown): Promise<EvaluationReport> {
+  const res = await nexusFetch(`${API_BASE}/admin/evaluation/${path}`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  if (!res.ok) throw await parseError(res, "Evaluation failed");
+  return (await res.json()) as EvaluationReport;
+}
+
+export const runRagEvaluation = (input: RagEvaluationRequest) =>
+  postEvaluation("rag", input);
+
+export const runQualityEvaluation = (input: QualityEvaluationRequest) =>
+  postEvaluation("quality", input);
+
+// The probe suite is a fixed backend battery -- no user-supplied body.
+export const runRedTeamEvaluation = () => postEvaluation("redteam");
+
+export const runArenaEvaluation = (input: ArenaEvaluationRequest) =>
+  postEvaluation("arena", input);
+
+export const runConversationalEvaluation = (input: ConversationalEvaluationRequest) =>
+  postEvaluation("conversational", input);
+
+export const runPromptRegressionGate = (input: PromptRegressionRequest) =>
+  postEvaluation("prompt-regression", input);
+
+export async function compareEvaluationTraces(
+  traceA: string,
+  traceB: string
+): Promise<EvaluationReport> {
+  const query = new URLSearchParams({ trace_a: traceA, trace_b: traceB });
+  const res = await nexusFetch(
+    `${API_BASE}/admin/evaluation/traces/compare?${query.toString()}`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) throw await parseError(res, "Trace comparison failed");
+  return (await res.json()) as EvaluationReport;
+}
+
+export async function fetchEvaluationTrace(traceId: string): Promise<EvaluationReport> {
+  const res = await nexusFetch(
+    `${API_BASE}/admin/evaluation/traces/${encodeURIComponent(traceId)}`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) throw await parseError(res, "Trace lookup failed");
+  return (await res.json()) as EvaluationReport;
+}
+
 // ─── Organizations ─────────────────────────────────────────────────────────
 
 export interface Organization {

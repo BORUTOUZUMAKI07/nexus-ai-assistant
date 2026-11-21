@@ -28,6 +28,7 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
+  FlaskConical,
 } from "lucide-react";
 import {
   createHookPolicy,
@@ -58,8 +59,17 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { EvaluationPanel } from "@/features/admin/EvaluationPanel";
 
-type Tab = "users" | "health" | "audit" | "hooks" | "monitoring" | "optimization" | "compliance";
+type Tab =
+  | "users"
+  | "health"
+  | "audit"
+  | "hooks"
+  | "monitoring"
+  | "optimization"
+  | "compliance"
+  | "evaluation";
 
 const EMPTY_HOOK_FORM: HookPolicyInput = {
   name: "",
@@ -155,7 +165,11 @@ export const AdminView: React.FC = () => {
               ? [sliceQuery, fairnessQuery, banditQuery]
               : activeTab === "optimization"
                 ? [optRunsQuery]
-                : [auditReportQuery, redTeamQuery];
+                : activeTab === "evaluation"
+                  ? // On-demand calls live in the panel itself, so this tab has
+                    // no background query to gate its loading/error banner.
+                    []
+                  : [auditReportQuery, redTeamQuery];
 
   const loading = activeQueries.some((q) => q.isPending);
   const busy = activeQueries.some((q) => q.isFetching);
@@ -392,9 +406,9 @@ export const AdminView: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      {/* The strip scrolls on its own at narrow widths: seven tabs are 718px wide, and a
-          plain `flex` row inside a clipped container pushed "Optimization" and
-          "Compliance" off a 390px screen with no way to reach them (measured). */}
+      {/* The strip scrolls on its own at narrow widths: a plain `flex` row inside a
+          clipped container pushed the later tabs off a 390px screen with no way to
+          reach them (measured). */}
       <div className="flex gap-1.5 overflow-x-auto border-b border-[var(--border-subtle)] pb-2">
         {tabButton("users", "Users", Users)}
         {tabButton("health", "System health", Activity)}
@@ -403,6 +417,7 @@ export const AdminView: React.FC = () => {
         {tabButton("monitoring", "Slices & fairness", BarChart3)}
         {tabButton("optimization", "Optimization", Wand2)}
         {tabButton("compliance", "Compliance", ScrollText)}
+        {tabButton("evaluation", "Evaluation", FlaskConical)}
       </div>
 
       {error && (
@@ -1436,6 +1451,9 @@ export const AdminView: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* Tab 8: Evaluation — on-demand evaluator runs and trace inspection */}
+      {!loading && activeTab === "evaluation" && <EvaluationPanel />}
 
       {pendingDeleteHook && (
         <Dialog

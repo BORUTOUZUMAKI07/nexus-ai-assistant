@@ -126,4 +126,40 @@ describe("AdminView", () => {
     expect(screen.getByText("GDPR exports")).toBeInTheDocument()
     expect(screen.getAllByText(/canary_v1/).length).toBeGreaterThanOrEqual(1)
   })
+
+  it("runs a RAG evaluation from the Evaluation tab and renders the scores", async () => {
+    render(<AdminView />)
+    fireEvent.click(screen.getByRole("button", { name: "Evaluation" }))
+
+    expect(await screen.findByText("Evaluation studio")).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText("Question"), {
+      target: { value: "What is the capital of France?" },
+    })
+    fireEvent.change(screen.getByLabelText("Answer"), {
+      target: { value: "Paris." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Run RAG evaluation" }))
+
+    const result = await screen.findByTestId("evaluation-result")
+    expect(result).toHaveTextContent("ragas")
+    expect(result).toHaveTextContent("faithfulness")
+  })
+
+  it("compares two traces from the Evaluation tab", async () => {
+    render(<AdminView />)
+    fireEvent.click(screen.getByRole("button", { name: "Evaluation" }))
+    await screen.findByText("Evaluation studio")
+
+    fireEvent.click(screen.getByRole("button", { name: "Trace compare" }))
+    fireEvent.change(screen.getByLabelText("Trace A id"), {
+      target: { value: "trace-a" },
+    })
+    fireEvent.change(screen.getByLabelText("Trace B id"), {
+      target: { value: "trace-b" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Run trace comparison" }))
+
+    const result = await screen.findByTestId("evaluation-result")
+    expect(result).toHaveTextContent("cost_usd")
+  })
 })

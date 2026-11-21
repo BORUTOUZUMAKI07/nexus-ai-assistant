@@ -21,6 +21,14 @@ import {
   updateConversation,
   listOAuthProviders,
   uploadFile,
+  runRagEvaluation,
+  runQualityEvaluation,
+  runRedTeamEvaluation,
+  runArenaEvaluation,
+  runConversationalEvaluation,
+  runPromptRegressionGate,
+  compareEvaluationTraces,
+  fetchEvaluationTrace,
 } from "@/lib/api"
 
 const API = "/api"
@@ -319,6 +327,67 @@ describe("api client", () => {
     )
     const res = await sendHITLFeedback({ threadId: "t-1", action: "approve" })
     expect(res.run_id).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+  })
+
+  it("posts every evaluation request to its own BFF endpoint", async () => {
+    const seen: Array<{ path: string; body: unknown }> = []
+    const names = ["rag", "quality", "redteam", "arena", "conversational", "prompt-regression"]
+    for (const name of names) {
+      server.use(
+        http.post(`${API}/admin/evaluation/${name}`, async ({ request }) => {
+          const text = await request.text()
+          seen.push({ path: new URL(request.url).pathname, body: text ? JSON.parse(text) : null })
+          return HttpResponse.json({ evaluator: name })
+        })
+      )
+    }
+
+    await expect(runRagEvaluation({ question: "q", answer: "a", contexts: ["c"] })).resolves.toEqual({ evaluator: "rag" })
+    await expect(runQualityEvaluation({ response: "ok", tokens_used: 12, latency_ms: 30 })).resolves.toEqual({ evaluator: "quality" })
+    await expect(runRedTeamEvaluation()).resolves.toEqual({ evaluator: "redteam" })
+    await expect(runArenaEvaluation({ query: "q", output_a: "a", output_b: "b" })).resolves.toEqual({ evaluator: "arena" })
+    await expect(runConversationalEvaluation({ transcript: [{ role: "user", content: "hi" }] })).resolves.toEqual({ evaluator: "conversational" })
+    await expect(runPromptRegressionGate({ system_prompt: "Be helpful", threshold: 0.9 })).resolves.toEqual({ evaluator: "prompt-regression" })
+
+    expect(seen.map((s) => s.path)).toEqual(names.map((n) => `${API}/admin/evaluation/${n}`))
+    expect(seen[0].body).toEqual({ question: "q", answer: "a", contexts: ["c"] })
+    // The red-team probe battery takes no body at all -- the backend owns the
+    // suite, so the client must not invent one.
+    expect(seen[2].body).toBeNull()
+    expect(seen[5].body).toEqual({ system_prompt: "Be helpful", threshold: 0.9 })
+  })
+
+  it("loads trace detail and comparison with encoded query parameters", async () => {
+    let compareQuery: URLSearchParams | null = null
+    let detailId = ""
+    server.use(
+      http.get(`${API}/admin/evaluation/traces/compare`, ({ request }) => {
+        compareQuery = new URL(request.url).searchParams
+        return HttpResponse.json({ delta: { cost_usd: 0.01 } })
+      }),
+      http.get(`${API}/admin/evaluation/traces/:traceId`, ({ params }) => {
+        detailId = String(params.traceId)
+        return HttpResponse.json({ trace_id: detailId })
+      })
+    )
+
+    await expect(compareEvaluationTraces("a b", "c/d")).resolves.toEqual({ delta: { cost_usd: 0.01 } })
+    expect(compareQuery?.get("trace_a")).toBe("a b")
+    expect(compareQuery?.get("trace_b")).toBe("c/d")
+
+    await expect(fetchEvaluationTrace("trace-1")).resolves.toEqual({ trace_id: "trace-1" })
+    expect(detailId).toBe("trace-1")
+  })
+
+  it("surfaces the backend detail when an evaluation fails", async () => {
+    server.use(
+      http.post(`${API}/admin/evaluation/rag`, () =>
+        HttpResponse.json({ detail: "Scoring service unavailable" }, { status: 503 })
+      )
+    )
+    await expect(runRagEvaluation({ question: "q", answer: "a" })).rejects.toThrow(
+      "Scoring service unavailable"
+    )
   })
 })
 

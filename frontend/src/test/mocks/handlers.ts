@@ -930,6 +930,55 @@ export const handlers = [
     HttpResponse.json({ runs: mockRedTeamRuns })
   ),
 
+  // ── Admin: evaluation suite ──────────────────────────────────────────────
+  // Distinctive evaluator names let component tests prove the response came
+  // from the mocked endpoint, not from an empty default in the UI.
+  http.post("/api/admin/evaluation/rag", () =>
+    HttpResponse.json({
+      scores: {
+        faithfulness: 0.91,
+        answer_relevance: 0.88,
+        context_precision: 0.8,
+        overall_score: 0.87,
+      },
+      evaluator: "ragas",
+    })
+  ),
+  http.post("/api/admin/evaluation/quality", () =>
+    HttpResponse.json({
+      metrics: { tokens_per_second: 42, wording_efficiency: 0.8, formatting_score: 1 },
+      evaluator: "quality",
+    })
+  ),
+  http.post("/api/admin/evaluation/redteam", () =>
+    HttpResponse.json({
+      report: { total_probes: 12, blocked_probes: 11, defense_rate: 11 / 12 },
+      evaluator: "redteam",
+    })
+  ),
+  http.post("/api/admin/evaluation/arena", () =>
+    HttpResponse.json({ winner: "A", result: { score: 0.75 } })
+  ),
+  http.post("/api/admin/evaluation/conversational", () =>
+    HttpResponse.json({
+      results: [{ metric: "compliance", score: 0.9 }],
+      evaluator: "conversational",
+    })
+  ),
+  http.post("/api/admin/evaluation/prompt-regression", () =>
+    HttpResponse.json({ score: 0.92, threshold: 0.8, passed: true })
+  ),
+  http.get("/api/admin/evaluation/traces/compare", () =>
+    HttpResponse.json({
+      trace_a: { trace_id: "trace-a", cost_usd: 0.01 },
+      trace_b: { trace_id: "trace-b", cost_usd: 0.02 },
+      delta: { cost_usd: 0.01, tokens: 10, latency_ms: 5, confidence: 0.02 },
+    })
+  ),
+  http.get("/api/admin/evaluation/traces/:traceId", ({ params }) =>
+    HttpResponse.json({ trace_id: String(params.traceId), events: [] })
+  ),
+
   // ── Organizations / share links / outbound webhooks ───────────────────
   // These surfaces gained their first UI, so every route they rely on needs a
   // mock or their component tests fall through to nothing (see api-parity).
