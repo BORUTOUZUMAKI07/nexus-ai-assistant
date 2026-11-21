@@ -1174,10 +1174,18 @@ export async function registerUser(payload: {
   return res.json();
 }
 
+export interface LoginResult {
+  ok: boolean;
+  /** Present when a TOTP-enabled account still needs a second factor. */
+  status?: string;
+  /** Lifetime of the BFF's hidden preauth challenge, in seconds. */
+  expires_in?: number;
+}
+
 export async function loginUser(payload: {
   email: string;
   password: string;
-}): Promise<{ ok: boolean; retryAfter?: number }> {
+}): Promise<LoginResult> {
   const res = await authPostWithWakeRetry(`${API_BASE}/auth/login`, payload);
   if (!res.ok) {
     const retryAfter = res.headers.get("Retry-After");
@@ -1185,6 +1193,15 @@ export async function loginUser(payload: {
       friendlyAuthError(await parseError(res, "Invalid email or password")),
       { retryAfter: retryAfter ? parseInt(retryAfter, 10) : undefined },
     );
+  }
+  return (await res.json()) as LoginResult;
+}
+
+/** Complete a TOTP challenge. The preauth token stays in a BFF-only cookie. */
+export async function verifyTwoFactor(code: string): Promise<{ ok: boolean }> {
+  const res = await authPostWithWakeRetry(`${API_BASE}/auth/2fa/verify`, { code });
+  if (!res.ok) {
+    throw await parseError(res, "Two-factor verification failed");
   }
   return (await res.json()) as { ok: boolean };
 }

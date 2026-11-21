@@ -7,6 +7,7 @@ vi.mock("@/lib/api", () => ({
   listOAuthProviders: vi.fn(async (): Promise<OAuthProviderInfo[]> => []),
   registerUser: vi.fn(),
   loginUser: vi.fn(),
+  verifyTwoFactor: vi.fn(),
   startOAuthLogin: vi.fn(),
 }))
 

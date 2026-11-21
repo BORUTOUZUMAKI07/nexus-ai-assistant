@@ -4,8 +4,14 @@ import React, { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Loader2, Lock, Mail, User, ArrowRight } from "lucide-react";
-import { registerUser, loginUser, startOAuthLogin, listOAuthProviders } from "@/lib/api";
+import { Loader2, Lock, Mail, Shield, User, ArrowRight } from "lucide-react";
+import {
+  registerUser,
+  loginUser,
+  verifyTwoFactor,
+  startOAuthLogin,
+  listOAuthProviders,
+} from "@/lib/api";
 import { checkAuth } from "@/lib/auth";
 
 /**
@@ -129,6 +135,10 @@ export default function SignInPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  // A 2FA challenge is a half-finished login: the BFF holds the preauth token,
+  // and this page only collects the second factor before navigating.
+  const [awaitingTwoFactor, setAwaitingTwoFactor] = useState(false);
+  const [twoFactorCode, setTwoFactorCode] = useState("");
   const [loading, setLoading] = useState(false);
   // `undefined` = no locally produced message yet, so fall back to whatever the
   // redirect URL carried. `null` = explicitly cleared by a retry. A string = a
@@ -174,9 +184,22 @@ export default function SignInPage() {
           full_name: fullName,
         });
       }
-      // /api/auth/login writes the httpOnly session cookies; this page just
-      // navigates once the server confirms the session was created.
-      await loginUser({ email, password });
+      if (awaitingTwoFactor) {
+        // The hidden preauth cookie is exchanged for the real httpOnly session
+        // cookies by /api/auth/2fa/verify -- page scripts never see either.
+        await verifyTwoFactor(twoFactorCode.trim());
+        router.replace(nextPath);
+        return;
+      }
+
+      const result = await loginUser({ email, password });
+      if (result.status === "2fa_required") {
+        setAwaitingTwoFactor(true);
+        setTwoFactorCode("");
+        return;
+      }
+      // A normal login has already written the httpOnly session cookies; this
+      // page only navigates once the server confirms the session was created.
       router.replace(nextPath);
     } catch (err) {
       if (err instanceof Error && "retryAfter" in err && err.retryAfter) {
@@ -344,6 +367,32 @@ export default function SignInPage() {
             </div>
           </div>
 
+          {awaitingTwoFactor && (
+            <div>
+              <label htmlFor="signin-two-factor-code" className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
+                Authentication code
+              </label>
+              <div className="relative">
+                <Shield className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-faint)]" />
+                <input
+                  id="signin-two-factor-code"
+                  type="text"
+                  required
+                  autoComplete="one-time-code"
+                  inputMode="numeric"
+                  maxLength={10}
+                  value={twoFactorCode}
+                  onChange={(e) => setTwoFactorCode(e.target.value)}
+                  placeholder="000000"
+                  className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] py-2 pl-9 pr-4 text-sm tracking-[0.3em] text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+                />
+              </div>
+              <p className="mt-1.5 text-xs text-[var(--text-muted)]">
+                Enter the code from your authenticator app to finish signing in.
+              </p>
+            </div>
+          )}
+
           <button
             type="submit"
             disabled={loading}
@@ -353,7 +402,11 @@ export default function SignInPage() {
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <>
-                {mode === "login" ? "Sign In" : "Get Started"}
+                {awaitingTwoFactor
+                  ? "Verify code"
+                  : mode === "login"
+                    ? "Sign In"
+                    : "Get Started"}
                 <ArrowRight className="h-4 w-4" />
               </>
             )}
@@ -420,7 +473,11 @@ export default function SignInPage() {
               Don&apos;t have an account?{" "}
               <button
                 type="button"
-                onClick={() => setMode("register")}
+                onClick={() => {
+                  setAwaitingTwoFactor(false);
+                  setTwoFactorCode("");
+                  setMode("register");
+                }}
                 className="font-medium text-[var(--accent-ink)] hover:text-[var(--accent-ink)] hover:underline"
               >
                 Sign up
@@ -431,7 +488,11 @@ export default function SignInPage() {
               Already have an account?{" "}
               <button
                 type="button"
-                onClick={() => setMode("login")}
+                onClick={() => {
+                  setAwaitingTwoFactor(false);
+                  setTwoFactorCode("");
+                  setMode("login");
+                }}
                 className="font-medium text-[var(--accent-ink)] hover:text-[var(--accent-ink)] hover:underline"
               >
                 Sign in
