@@ -42,6 +42,7 @@ from backend.app.services.llm.structured_output import (
 from backend.app.services.llm.structured_parse import validate_object
 from backend.app.services.memory.lifecycle import should_persist_memory
 from backend.app.services.memory.long_term import long_term_memory
+from backend.app.services.memory.preferences import is_memory_enabled
 from backend.app.services.memory.reinforcement import reinforce_recalled_memories
 from backend.app.services.observability.fallbacks import count_fallback
 from backend.app.services.rag.critique import (
@@ -611,20 +612,32 @@ async def planner_node(state: ExecutionState) -> dict[str, Any]:
     """
     messages = state.get("messages", [])
     user_id = state.get("user_id", "")
+    memory_enabled = await is_memory_enabled(user_id) if user_id else True
 
     if not messages:
-        return {"plan": None, "current_step": 0, "user_memories": []}
+        return {
+            "plan": None,
+            "current_step": 0,
+            "user_memories": [],
+            "memory_enabled": memory_enabled,
+        }
 
     last_user_raw = _latest_user_content(messages)
     if _has_image_content(last_user_raw):
         # Multimodal vision queries bypass planner
-        return {"plan": None, "current_step": 0, "user_memories": [], "task_type": "vision"}
+        return {
+            "plan": None,
+            "current_step": 0,
+            "user_memories": [],
+            "task_type": "vision",
+            "memory_enabled": memory_enabled,
+        }
     last_user_msg = _extract_text_content(last_user_raw)
 
     # â”€â”€ Load long-term memories relevant to this query (mem0 semantic search) â”€â”€
     memory_block = ""
     recalled_items: list[dict[str, Any]] = []
-    if user_id:
+    if user_id and memory_enabled:
         try:
             memory_block, recalled_items = await long_term_memory.build_memory_context_block_with_ids(
                 query=last_user_msg,
@@ -646,7 +659,7 @@ async def planner_node(state: ExecutionState) -> dict[str, Any]:
     # dropped. The memory block loaded above is kept, so both still personalise;
     # only the multi-step machinery is skipped.
     if state.get("mode") == "fast" or should_bypass_agent_graph(state):
-        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items}
+        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items, "memory_enabled": memory_enabled}
 
     # Determine if planning is needed
     # Cheap pre-check: skip the planner LLM round-trip entirely for short,
@@ -658,7 +671,7 @@ async def planner_node(state: ExecutionState) -> dict[str, Any]:
         and not any(tok in last_user_msg.lower() for tok in _STEP_TRIGGER_KEYWORDS)
     )
     if _short_instruction:
-        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items}
+        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items, "memory_enabled": memory_enabled}
 
     plan_prompt = (
         f"Analyze this user request:\n'{last_user_msg}'\n\n"
@@ -673,11 +686,11 @@ async def planner_node(state: ExecutionState) -> dict[str, Any]:
     )
 
     if "DIRECT" in plan_response.upper():
-        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items}
+        return {"plan": None, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items, "memory_enabled": memory_enabled}
 
     steps = [line.strip() for line in plan_response.split("\n") if line.strip()]
     logger.info("planner_generated_steps", step_count=len(steps))
-    return {"plan": steps, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items}
+    return {"plan": steps, "current_step": 0, "user_memories": [memory_block] if memory_block else [], "recalled_memories": recalled_items, "memory_enabled": memory_enabled}
 
 
 # â”€â”€ ARQ: Attentive Reasoning Query flags â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1197,6 +1210,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     tool_results = state.get("tool_results", [])
     system_prompt = state.get("system_prompt", "You are Nexus AI.")
     user_id = state.get("user_id", "")
+    memory_enabled = bool(state.get("memory_enabled", True))
     user_memories: list[str] = state.get("user_memories", [])
 
     # Inject long-term memories into system prompt
@@ -1929,7 +1943,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
 
     # ── Reinforce recalled memories in background (confidence reinforcement) ──
     recalled_memories = state.get("recalled_memories", [])
-    if user_id and recalled_memories:
+    if memory_enabled and user_id and recalled_memories:
         try:
             asyncio.create_task(reinforce_recalled_memories(str(user_id), recalled_memories))
         except Exception as exc:
@@ -1955,7 +1969,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     # intentionally AFTER emission: an embedding + vector + DB round trip
     # must never sit between "answer is ready" and "answer is visible".
     memory_decision = should_persist_memory(last_user_content, response_text)
-    if user_id and memory_decision.should_write:
+    if memory_enabled and user_id and memory_decision.should_write:
         exchange = [
             {"role": "user", "content": last_user_content},
             {"role": "assistant", "content": response_text},
@@ -1985,7 +1999,7 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
         except Exception as exc:
             # Memory saving is best-effort â€” never fail the main response
             logger.warning("mem0_save_failed_non_blocking", error=str(exc))
-    elif user_id:
+    elif user_id and memory_enabled:
         logger.info("memory_write_skipped", reason=memory_decision.reason)
 
     ai_message = AIMessage(content=response_text)

@@ -421,3 +421,63 @@ async def test_sync_endpoint_invalidates_the_cache_variant_it_wrote(monkeypatch,
             },
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_sync_endpoint_honours_a_memory_opt_out(monkeypatch, harness):
+    """RED: explicit disable must stop both automatic recall and automatic write."""
+    gate_calls = []
+
+    async def _disabled(*_args, **_kwargs):
+        gate_calls.append(True)
+        return False
+
+    async def _recall(**_kwargs):
+        raise AssertionError("recall must not run when memory is disabled")
+
+    async def _write(**_kwargs):
+        raise AssertionError("write must not run when memory is disabled")
+
+    monkeypatch.setattr(messages, "is_memory_enabled", _disabled, raising=False)
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
+    monkeypatch.setattr(messages.long_term_memory, "add_from_conversation", _write)
+
+    result = await _call_sync(harness, PREFERENCE)
+
+    assert result.content == "Here is your answer."
+    assert gate_calls
+    assert harness.captured["system_prompt"] == "SYSTEM"
+
+
+@pytest.mark.asyncio
+async def test_stream_endpoint_honours_a_memory_opt_out(monkeypatch, harness):
+    """RED: the SSE variant must respect the same explicit setting."""
+    recall_calls = []
+
+    async def _disabled(*_args, **_kwargs):
+        return False
+
+    async def _recall(**_kwargs):
+        recall_calls.append(True)
+        return MEMORY_BLOCK, []
+
+    async def _write(**_kwargs):
+        raise AssertionError("write must not run when memory is disabled")
+
+    monkeypatch.setattr(messages, "is_memory_enabled", _disabled, raising=False)
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
+    monkeypatch.setattr(messages.long_term_memory, "add_from_conversation", _write)
+
+    response = await messages.send_message_stream(
+        conversation_id=harness.conversation_id,
+        message_in=MessageCreate(content=PREFERENCE),
+        current_user=harness.user,
+        org_id=None,
+        conv_svc=harness.conv_svc,
+        usage_svc=harness.usage_svc,
+    )
+    frames = [frame async for frame in _stream_events(response)]
+
+    assert frames[-1]["event"] == "done"
+    assert recall_calls == []
+    assert harness.captured["system_prompt"] == "SYSTEM"

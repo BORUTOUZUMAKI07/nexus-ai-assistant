@@ -28,6 +28,7 @@ from backend.app.domain.user.models import User
 from backend.app.infrastructure.resilience.rate_limit import rate_limit
 from backend.app.services.files.service import FileService
 from backend.app.services.memory.long_term import long_term_memory
+from backend.app.services.memory.preferences import is_memory_enabled
 from backend.app.services.memory.reinforcement import reinforce_recalled_memories
 from backend.app.services.observability.fallbacks import count_fallback
 from backend.app.services.rag.service import RAGService
@@ -249,14 +250,16 @@ async def query_rag(
     # Mem0 sits beside Qdrant, not inside it: document hits stay pure while the
     # caller also gets the user's relevant long-term context. Best-effort.
     recalled_memories: list[dict] = []
-    try:
-        memory_context, recalled_memories = await long_term_memory.build_memory_context_block_with_ids(
-            query=rag_in.query, user_id=current_user.id, limit=8
-        )
-    except Exception as exc:
-        logger.warning("rag_memory_recall_failed", user_id=str(current_user.id), error=str(exc))
-        count_fallback("mem0_recall_rag")
-        memory_context = ""
+    memory_context = ""
+    if await is_memory_enabled(current_user.id):
+        try:
+            memory_context, recalled_memories = await long_term_memory.build_memory_context_block_with_ids(
+                query=rag_in.query, user_id=current_user.id, limit=8
+            )
+        except Exception as exc:
+            logger.warning("rag_memory_recall_failed", user_id=str(current_user.id), error=str(exc))
+            count_fallback("mem0_recall_rag")
+            memory_context = ""
 
     # The RAG seam is typed as RAGQueryResult, but lightweight/stub services may
     # return an equivalent plain dict. Normalise before attaching memory so the

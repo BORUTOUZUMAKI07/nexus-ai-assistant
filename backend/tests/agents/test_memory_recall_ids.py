@@ -80,3 +80,32 @@ async def test_planner_recall_failure_is_fail_open(monkeypatch):
 
     assert result["user_memories"] == []
     assert result["recalled_memories"] == []
+
+
+@pytest.mark.asyncio
+async def test_planner_honours_an_explicit_memory_opt_out(monkeypatch):
+    """RED: disabled memory must skip the planner's mem0 recall entirely."""
+    from backend.app.agents.orchestrator import nodes
+
+    recalls = []
+
+    async def _disabled(*_args, **_kwargs):
+        return False
+
+    async def _recall_with_ids(**kwargs):
+        recalls.append(kwargs)
+        return MEMORY_BLOCK, RECALL_ITEMS
+
+    monkeypatch.setattr(nodes, "is_memory_enabled", _disabled, raising=False)
+    monkeypatch.setattr(
+        nodes.long_term_memory, "build_memory_context_block_with_ids", _recall_with_ids
+    )
+
+    result = await nodes.planner_node(
+        {"messages": [_Msg("What should I use?")], "user_id": "u1", "conversation_id": "c1"}
+    )
+
+    assert recalls == []
+    assert result["user_memories"] == []
+    assert result["recalled_memories"] == []
+    assert result["memory_enabled"] is False

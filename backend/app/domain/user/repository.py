@@ -95,6 +95,11 @@ class UserRepository(BaseRepository[User]):
         result = await self.session.exec(statement)
         return result.first()
 
+    async def is_memory_enabled(self, user_id: UUID) -> bool:
+        """Explicit opt-out check; absent settings keep the enabled default."""
+        settings = await self.get_settings(user_id)
+        return bool(settings.enable_memory) if settings else True
+
     async def upsert_settings(self, user_id: UUID, settings_data: dict) -> UserSettings:
         settings = await self.get_settings(user_id)
         if not settings:

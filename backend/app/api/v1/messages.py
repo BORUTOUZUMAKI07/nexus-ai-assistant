@@ -46,6 +46,7 @@ from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.experiments.service import experiment_service
 from backend.app.services.memory.lifecycle import should_persist_memory
 from backend.app.services.memory.long_term import long_term_memory
+from backend.app.services.memory.preferences import is_memory_enabled
 from backend.app.services.memory.reinforcement import reinforce_recalled_memories
 from backend.app.services.observability.cost_tracking import cost_tracking_service
 from backend.app.services.observability.fallbacks import count_fallback
@@ -62,15 +63,17 @@ router = APIRouter(prefix="/conversations/{conversation_id}/messages", tags=["me
 
 
 async def _recall_memory_block(
-    query: str, user_id: UUID, endpoint: str
+    query: str, user_id: UUID, endpoint: str, *, memory_enabled: bool
 ) -> tuple[str, list[dict[str, Any]]]:
     """Load long-term memories for a direct /messages turn.
 
     Keep the recalled items (not just the formatted block) so a successful
     recall can reinforce the same facts as the orchestrator chat path. Strictly
     best-effort: a Mem0 outage, a missing key or a malformed response must never
-    fail the user's answer.
+    fail the user's answer. An explicit memory opt-out skips recall entirely.
     """
+    if not memory_enabled:
+        return "", []
     try:
         block, recalled_items = await long_term_memory.build_memory_context_block_with_ids(
             query=query, user_id=user_id, limit=8
@@ -103,6 +106,7 @@ async def _persist_memory_from_exchange(
     user_text: str,
     assistant_text: str,
     session: Any,
+    memory_enabled: bool,
 ) -> bool:
     """Write durable facts from a direct /messages turn, like the graph does.
 
@@ -111,6 +115,8 @@ async def _persist_memory_from_exchange(
     user-facing memory API, so extracted facts are mirrored into it. Everything
     here is best-effort: memory persistence must never fail an answer.
     """
+    if not memory_enabled:
+        return False
     decision = should_persist_memory(user_text, assistant_text)
     if not decision.should_write:
         return False
@@ -229,9 +235,14 @@ async def send_message_sync(
             f"You are running as the '{experiment_variant}' variant of this assistant."
         )
 
+    memory_enabled = await is_memory_enabled(current_user.id, session=usage_svc._repo.session)
+
     # Mem0 recall: the same personalisation the orchestrator chat path gets.
     memory_block, recalled_memories = await _recall_memory_block(
-        query=sanitized_content, user_id=current_user.id, endpoint="sync"
+        query=sanitized_content,
+        user_id=current_user.id,
+        endpoint="sync",
+        memory_enabled=memory_enabled,
     )
     if memory_block:
         system_prompt = f"{system_prompt}\n\n{memory_block}"
@@ -408,6 +419,7 @@ async def send_message_sync(
         user_text=sanitized_content,
         assistant_text=response_text,
         session=usage_svc._repo.session,
+        memory_enabled=memory_enabled,
     )
     if memory_changed:
         # The answer above was built with the old memory block. Once a new fact
@@ -468,8 +480,12 @@ async def send_message_stream(
     system_prompt = await prompt_compiler.compile_system_prompt_cached(
         custom_instructions=message_in.system_prompt_override or conv.system_prompt,
     )
+    memory_enabled = await is_memory_enabled(current_user.id, session=usage_svc._repo.session)
     memory_block, recalled_memories = await _recall_memory_block(
-        query=sanitized_content, user_id=current_user.id, endpoint="stream"
+        query=sanitized_content,
+        user_id=current_user.id,
+        endpoint="stream",
+        memory_enabled=memory_enabled,
     )
     if memory_block:
         system_prompt = f"{system_prompt}\n\n{memory_block}"
@@ -562,6 +578,7 @@ async def send_message_stream(
                 user_text=sanitized_content,
                 assistant_text=full_response,
                 session=usage_svc._repo.session,
+                memory_enabled=memory_enabled,
             )
             if memory_changed:
                 await response_cache.invalidate(

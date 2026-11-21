@@ -133,3 +133,32 @@ async def test_rag_query_reinforces_recalled_memories(monkeypatch):
     )
 
     assert reinforced == [(str(user_id), recalled_items)]
+
+
+@pytest.mark.asyncio
+async def test_rag_query_honours_a_memory_opt_out(monkeypatch):
+    """RED: disabling memory must skip recall, not just hide the result."""
+
+    recall_calls = []
+
+    async def _disabled(*_args, **_kwargs):
+        return False
+
+    async def _recall(**_kwargs):
+        recall_calls.append(True)
+        return MEMORY_BLOCK, []
+
+    async def _query(**_kwargs):
+        return _rag_result()
+
+    monkeypatch.setattr(files, "is_memory_enabled", _disabled, raising=False)
+    monkeypatch.setattr(files.long_term_memory, "build_memory_context_block_with_ids", _recall)
+
+    result = await files.query_rag(
+        rag_in=RAGQueryRequest(query="What do we use?"),
+        current_user=SimpleNamespace(id=uuid4()),
+        rag_svc=SimpleNamespace(query=_query),
+    )
+
+    assert recall_calls == []
+    assert result.memory_context == ""

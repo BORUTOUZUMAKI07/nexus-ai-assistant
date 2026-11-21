@@ -332,6 +332,30 @@ async def test_synthesizer_still_writes_for_stated_intent(monkeypatch):
     assert any("mem0" in c for c in result["calls"]), "a stated preference must be persisted"
 
 
+async def test_synthesizer_skips_mem0_write_when_memory_is_disabled(monkeypatch):
+    """RED: an explicit opt-out must stop automatic persistence too."""
+    from backend.app.agents.orchestrator import nodes
+
+    writes = []
+
+    async def fake_add(**kwargs):
+        writes.append(kwargs)
+        return [{"id": "m1", "memory": "User prefers Python"}]
+
+    async def fake_completion(**_kwargs):
+        return "A response."
+
+    monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+    monkeypatch.setattr(nodes.long_term_memory, "add_from_conversation", fake_add)
+
+    state = _synth_state("I prefer dark mode in all my tools")
+    state["memory_enabled"] = False
+    await nodes.synthesizer_node(state)
+
+    assert writes == []
+
+
 async def test_synthesizer_mirrors_extracted_facts_to_the_table(monkeypatch):
     """The regression: mem0 memories were invisible to every local query."""
     from backend.app.agents.orchestrator import nodes
