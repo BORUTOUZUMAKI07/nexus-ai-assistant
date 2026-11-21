@@ -22,6 +22,10 @@ from backend.app.core.config import settings
 from backend.app.domain.usage.models import CostLog, EvaluationLog, UsageLog
 from backend.app.services.monitoring.drift_service import DriftService
 from backend.app.services.observability.metrics import metrics_collector
+from backend.app.services.observability.otel import collector_endpoint_resolvable
+from backend.app.services.observability.startup_verification import (
+    get_startup_telemetry_status,
+)
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -35,20 +39,56 @@ _RECENT_ROWS = 25
 # ─────────────────────────────────────────────────────────────────────────── #
 
 
+def _new_relic_probe_evidence() -> dict[str, Any]:
+    """Read the already-cached delivery probe; never make a per-request call."""
+    startup = get_startup_telemetry_status().get("new_relic", {})
+    try:
+        resolvable = bool(collector_endpoint_resolvable())
+    except Exception:
+        resolvable = False
+    return {
+        "startup": startup.get("status", "pending"),
+        "startup_detail": startup.get("detail", ""),
+        "credentials_ok": bool(settings.OTLP_AUTH_USER and settings.OTLP_AUTH_PASSWORD),
+        "collector_resolvable": resolvable,
+    }
+
+
 def observability_stack_status() -> dict[str, Any]:
-    """Which collectors are wired and live (honest: enabled-but-uninstalled New Relic is reported)."""
+    """Report New Relic from probe evidence, not from config flags alone.
+
+    ``live`` means the startup span was flushed to the exporter, credentials
+    exist and the collector host resolves. Configuration alone is only
+    ``enabled``; a failed or pending probe is shown as degraded/pending so the
+    admin badge cannot claim delivery that was never verified.
+    """
     newrelic_installed = importlib.util.find_spec("opentelemetry") is not None
     newrelic_configured = bool((settings.NEW_RELIC_OTLP_ENDPOINT or "").strip())
+    enabled = bool(settings.NEW_RELIC_ENABLED)
+
+    if not (enabled and newrelic_installed and newrelic_configured):
+        status = "inactive"
+        evidence = {}
+    else:
+        evidence = _new_relic_probe_evidence()
+        if (
+            evidence["startup"] == "ok"
+            and evidence["credentials_ok"]
+            and evidence["collector_resolvable"]
+        ):
+            status = "live"
+        elif evidence["startup"] == "pending":
+            status = "pending"
+        else:
+            status = "degraded"
+
     return {
         "newrelic": {
-            "enabled": bool(settings.NEW_RELIC_ENABLED),
+            "enabled": enabled,
             "configured": newrelic_configured,
             "package_installed": newrelic_installed,
-            "status": (
-                "live"
-                if settings.NEW_RELIC_ENABLED and newrelic_installed and newrelic_configured
-                else "inactive"
-            ),
+            "status": status,
+            "probe": evidence,
             "activate": "NEW_RELIC_ENABLED=true NEW_RELIC_OTLP_ENDPOINT=http://localhost:4318 "
                         "(run the Layer-2 collector from docker-compose — it owns the New Relic ingest key)",
         },
@@ -451,6 +491,9 @@ def render_viewer_html(data: dict[str, Any]) -> str:
     </div>
     <p class="muted" style="margin-top:10px">New Relic activation: <code>{_esc(newrelic.get('activate'))}</code>
     (enabled={str(newrelic.get('enabled')).lower()}, package installed={str(newrelic.get('package_installed')).lower()}).</p>
+    <p class="muted">Delivery probe: <code>{_esc((newrelic.get('probe') or {}).get('startup', 'not run'))}</code>
+    (collector resolvable={str((newrelic.get('probe') or {}).get('collector_resolvable', False)).lower()},
+    credentials present={str((newrelic.get('probe') or {}).get('credentials_ok', False)).lower()}).</p>
   </section>
 
   <section>
