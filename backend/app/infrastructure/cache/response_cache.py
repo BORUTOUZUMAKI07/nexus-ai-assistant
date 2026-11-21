@@ -139,5 +139,27 @@ class ResponseCache:
             logger.warning("response_cache_write_failed_fail_open", error=str(exc))
             count_fallback("response_cache_write")
 
+    async def invalidate(
+        self,
+        user_id: str,
+        model: str,
+        query: str,
+        prompt_variant: str = "default",
+        conversation_id: str = "",
+    ) -> None:
+        """Drop one exact answer when a new fact makes its memory scope stale."""
+        if not settings.RESPONSE_CACHE_ENABLED:
+            return
+        normalized = normalize_query(query)
+        if len(normalized) < settings.RESPONSE_CACHE_MIN_LENGTH:
+            return
+        try:
+            await self._cache.delete(
+                cache_key(user_id, model, normalized, prompt_variant, conversation_id)
+            )
+        except Exception as exc:
+            logger.warning("response_cache_invalidate_failed_fail_open", error=str(exc))
+            count_fallback("response_cache_invalidate")
+
 
 response_cache = ResponseCache()

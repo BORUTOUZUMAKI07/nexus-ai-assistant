@@ -103,7 +103,7 @@ async def _persist_memory_from_exchange(
     user_text: str,
     assistant_text: str,
     session: Any,
-) -> None:
+) -> bool:
     """Write durable facts from a direct /messages turn, like the graph does.
 
     The write gate is the same one the orchestrator uses, so chatter never pays
@@ -113,7 +113,7 @@ async def _persist_memory_from_exchange(
     """
     decision = should_persist_memory(user_text, assistant_text)
     if not decision.should_write:
-        return
+        return False
     try:
         extracted = await long_term_memory.add_from_conversation(
             messages=[
@@ -130,7 +130,7 @@ async def _persist_memory_from_exchange(
                 user_id=str(user_id),
                 reason=decision.reason,
             )
-            return
+            return False
         created, _ = await UserRepository(session).mirror_memories(
             user_id=user_id,
             facts=extracted,
@@ -143,6 +143,7 @@ async def _persist_memory_from_exchange(
             mirrored=len(created),
             reason=decision.reason,
         )
+        return bool(extracted)
     except Exception as exc:
         logger.warning(
             "direct_message_memory_write_failed",
@@ -150,6 +151,7 @@ async def _persist_memory_from_exchange(
             error=str(exc),
         )
         count_fallback("mem0_write_direct_messages")
+        return False
 
 
 @router.post("", response_model=MessageResponse)
@@ -400,13 +402,34 @@ async def send_message_sync(
         logger.warning("webhook_dispatch_failed", conversation_id=str(conversation_id), error=str(exc))
 
     # Best-effort memory write after the answer is already complete.
-    await _persist_memory_from_exchange(
+    memory_changed = await _persist_memory_from_exchange(
         user_id=current_user.id,
         conversation_id=conversation_id,
         user_text=sanitized_content,
         assistant_text=response_text,
         session=usage_svc._repo.session,
     )
+    if memory_changed:
+        # The answer above was built with the old memory block. Once a new fact
+        # exists, its cached variants are stale even though the TTL has not run.
+        await response_cache.invalidate(
+            str(current_user.id),
+            target_model,
+            sanitized_content,
+            prompt_variant=cache_variant,
+            conversation_id=str(conversation_id),
+        )
+        try:
+            from backend.app.services.memory.semantic_cache import semantic_response_cache
+
+            await semantic_response_cache.invalidate(
+                str(current_user.id),
+                target_model,
+                prompt_variant=cache_variant,
+                conversation_id=str(conversation_id),
+            )
+        except Exception as exc:  # noqa: BLE001 - cache invalidation is best-effort
+            logger.debug("response_cache_invalidate_failed", error=str(exc))
 
     if recalled_memories:
         await reinforce_recalled_memories(str(current_user.id), recalled_memories)
@@ -533,13 +556,30 @@ async def send_message_stream(
             yield f"data: {json.dumps({'event': 'done', 'assistant_message_id': str(assistant_msg.id), 'tokens': comp_tok, 'latency_ms': duration_ms})}\n\n"
 
             # The answer is already on the wire; persist facts only afterwards.
-            await _persist_memory_from_exchange(
+            memory_changed = await _persist_memory_from_exchange(
                 user_id=current_user.id,
                 conversation_id=conversation_id,
                 user_text=sanitized_content,
                 assistant_text=full_response,
                 session=usage_svc._repo.session,
             )
+            if memory_changed:
+                await response_cache.invalidate(
+                    str(current_user.id),
+                    target_model,
+                    sanitized_content,
+                    conversation_id=str(conversation_id),
+                )
+                try:
+                    from backend.app.services.memory.semantic_cache import semantic_response_cache
+
+                    await semantic_response_cache.invalidate(
+                        str(current_user.id),
+                        target_model,
+                        conversation_id=str(conversation_id),
+                    )
+                except Exception as exc:  # noqa: BLE001 - best-effort
+                    logger.debug("response_cache_invalidate_failed", error=str(exc))
 
             if recalled_memories:
                 await reinforce_recalled_memories(str(current_user.id), recalled_memories)

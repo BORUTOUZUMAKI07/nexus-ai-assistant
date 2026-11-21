@@ -24,6 +24,9 @@ class FakeCache:
         self.store[key] = value
         return True
 
+    async def delete(self, key):
+        return self.store.pop(key, None) is not None
+
 
 class _ConvService:
     def __init__(self):
@@ -163,3 +166,20 @@ async def test_semantic_cache_does_not_share_paraphrases_across_conversations(mo
 
     assert other_thread is None
     assert same_thread["content"] == "answer from conversation A"
+
+
+@pytest.mark.asyncio
+async def test_exact_cache_invalidation_only_drops_the_requested_scope(monkeypatch):
+    """A new answer must be able to evict one exact key without touching neighbours."""
+    monkeypatch.setattr(settings, "RESPONSE_CACHE_ENABLED", True)
+    cache = ResponseCache(cache=FakeCache())
+    query = "What is on file?"
+    await cache.set("user-1", "model-a", query, "old A1", 1, 1, 0.0, "v1", "conv-a")
+    await cache.set("user-1", "model-a", query, "old A2", 1, 1, 0.0, "v2", "conv-a")
+    await cache.set("user-1", "model-a", query, "old B1", 1, 1, 0.0, "v1", "conv-b")
+
+    await cache.invalidate("user-1", "model-a", query, "v1", "conv-a")
+
+    assert await cache.get("user-1", "model-a", query, "v1", "conv-a") is None
+    assert (await cache.get("user-1", "model-a", query, "v2", "conv-a"))["content"] == "old A2"
+    assert (await cache.get("user-1", "model-a", query, "v1", "conv-b"))["content"] == "old B1"

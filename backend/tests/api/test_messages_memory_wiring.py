@@ -374,3 +374,50 @@ async def test_stream_endpoint_reinforces_recalled_memories(monkeypatch, harness
 
     assert frames[-1]["event"] == "done"
     assert reinforced == [(str(harness.user.id), RECALLED_ITEMS)]
+
+
+@pytest.mark.asyncio
+async def test_sync_endpoint_invalidates_the_cache_variant_it_wrote(monkeypatch, harness):
+    """RED: a fresh answer must evict the exact and semantic keys it may staleness."""
+    invalidations = []
+
+    async def _recall(**_kwargs):
+        return MEMORY_BLOCK, []
+
+    async def _exact(*_args, **kwargs):
+        invalidations.append(("exact", kwargs))
+
+    async def _semantic(*_args, **kwargs):
+        invalidations.append(("semantic", kwargs))
+
+    async def _add(**_kwargs):
+        return [{"id": "m1", "memory": PREFERENCE}]
+
+    async def _mirror(self, **_kwargs):
+        return [], 0
+
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
+    monkeypatch.setattr(messages.long_term_memory, "add_from_conversation", _add)
+    monkeypatch.setattr(messages.UserRepository, "mirror_memories", _mirror)
+    monkeypatch.setattr(messages.response_cache, "invalidate", _exact)
+    monkeypatch.setattr(semantic_module.semantic_response_cache, "invalidate", _semantic)
+
+    await _call_sync(harness, PREFERENCE)
+
+    expected_variant = messages._memory_scoped_variant("default", MEMORY_BLOCK)
+    assert invalidations == [
+        (
+            "exact",
+            {
+                "prompt_variant": expected_variant,
+                "conversation_id": str(harness.conversation_id),
+            },
+        ),
+        (
+            "semantic",
+            {
+                "prompt_variant": expected_variant,
+                "conversation_id": str(harness.conversation_id),
+            },
+        ),
+    ]
