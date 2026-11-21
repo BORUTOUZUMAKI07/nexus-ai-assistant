@@ -6,6 +6,7 @@ import backend.app.api.v1.admin as admin_module
 import pytest
 from backend.app.domain.system.repository import SystemRepository
 from backend.app.domain.system.schemas import AuditLogCreate
+from backend.app.domain.usage.models import EvaluationLog
 
 
 @pytest.mark.asyncio
@@ -129,3 +130,73 @@ async def test_admin_evaluation_forbidden_for_normal_user(client, user_auth_head
         headers=user_auth_headers,
     )
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/admin/evaluation/traces/trace-a",
+        "/api/v1/admin/evaluation/traces/compare?trace_a=trace-a&trace_b=trace-b",
+    ],
+)
+async def test_admin_trace_routes_require_admin(client, user_auth_headers, path):
+    """RED: both trace endpoints must be behind the admin dependency."""
+    resp = await client.get(path, headers=user_auth_headers)
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_trace_routes_read_real_evaluation_logs(
+    client, admin_auth_headers, db_session
+):
+    """RED: traces must come from evaluation_logs, not an unconditional 404."""
+    for trace_id, cost in (("trace-a", 0.01), ("trace-b", 0.03)):
+        db_session.add(
+            EvaluationLog(
+                trace_id=trace_id,
+                metric_name="cost_usd",
+                score=cost,
+                passed=True,
+                evaluator="heuristic",
+                reason=f"cost for {trace_id}",
+            )
+        )
+        db_session.add(
+            EvaluationLog(
+                trace_id=trace_id,
+                metric_name="confidence_score",
+                score=0.5 if trace_id == "trace-a" else 0.8,
+                passed=True,
+                evaluator="heuristic",
+            )
+        )
+    await db_session.commit()
+
+    single = await client.get(
+        "/api/v1/admin/evaluation/traces/trace-a", headers=admin_auth_headers
+    )
+    assert single.status_code == 200
+    span = single.json()
+    assert span["trace_id"] == "trace-a"
+    assert span["cost_usd"] == 0.01
+    assert {event["metric"] for event in span["events"]} == {
+        "cost_usd",
+        "confidence_score",
+    }
+
+    # `/traces/compare` must be registered before `/traces/{trace_id}` or the
+    # dynamic segment shadows it and the literal path can never be reached.
+    compare = await client.get(
+        "/api/v1/admin/evaluation/traces/compare?trace_a=trace-a&trace_b=trace-b",
+        headers=admin_auth_headers,
+    )
+    assert compare.status_code == 200
+    body = compare.json()
+    assert body["delta"]["cost_usd"] == 0.02
+    assert body["delta"]["confidence"] == 0.3
+
+    missing = await client.get(
+        "/api/v1/admin/evaluation/traces/no-such-trace", headers=admin_auth_headers
+    )
+    assert missing.status_code == 404

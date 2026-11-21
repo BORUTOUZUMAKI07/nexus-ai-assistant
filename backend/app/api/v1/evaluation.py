@@ -18,7 +18,7 @@ from backend.app.services.evaluation.quality_service import quality_service
 from backend.app.services.evaluation.ragas_service import ragas_service
 from backend.app.services.evaluation.redteam_service import redteam_service
 from backend.app.services.evaluation.regression_service import prompt_regression_gate
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -231,35 +231,25 @@ async def run_prompt_regression(
     return report
 
 
-@router.get("/traces/{trace_id}")
-async def get_trace(trace_id: str) -> dict[str, Any]:
-    """
-    Return a single turn's full trace span (events, cost, tokens, model,
-    confidence) for side-by-side comparison.
-    """
-    from backend.app.services.observability.trace_store import get_trace_span
-
-    span = await get_trace_span(trace_id)
-    if not span:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="trace not found")
-    return span
-
-
+# NOTE: the literal `/traces/compare` route must be declared BEFORE
+# `/traces/{trace_id}`; otherwise FastAPI matches "compare" as a trace id and
+# the comparison endpoint is unreachable.
 @router.get("/traces/compare")
-async def compare_traces(trace_a: str, trace_b: str) -> dict[str, Any]:
+async def compare_traces(
+    trace_a: str,
+    trace_b: str,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
     """
     Side-by-side comparison of two traces. Returns both spans plus a delta
     of cost, tokens, latency, and confidence.
     """
     from backend.app.services.observability.trace_store import get_trace_span
 
-    span_a = await get_trace_span(trace_a)
-    span_b = await get_trace_span(trace_b)
+    span_a = await get_trace_span(trace_a, session)
+    span_b = await get_trace_span(trace_b, session)
     if not span_a or not span_b:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="one or both traces not found")
 
     def _num(x: Any, default: float = 0.0) -> float:
@@ -282,3 +272,21 @@ async def compare_traces(trace_a: str, trace_b: str) -> dict[str, Any]:
         "trace_b": span_b,
         "delta": delta,
     }
+
+
+@router.get("/traces/{trace_id}")
+async def get_trace(
+    trace_id: str,
+    session: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    Return a single turn's full trace span (events, cost, tokens, model,
+    confidence) for side-by-side comparison.
+    """
+    from backend.app.services.observability.trace_store import get_trace_span
+
+    span = await get_trace_span(trace_id, session)
+    if not span:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return span

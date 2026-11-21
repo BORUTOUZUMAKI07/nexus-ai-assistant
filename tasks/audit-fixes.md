@@ -11,7 +11,7 @@ Rules: RED test first, minimal GREEN, focused tests + ruff + typecheck, small co
 | C | M6 + L5 doc/version drift | done (`ddc1c29`) |
 | D | M3 observability status from real probe | done (`9c07b48`) |
 | E | M4 image config is dead | done |
-| F | H1 + H2 admin trace auth + real store | pending |
+| F | H1 + H2 admin trace auth + real store | done |
 | G | H3 backend 2FA login 500 / cookie gap | pending |
 | H | H3 frontend 2FA BFF + sign-in UI | pending |
 | I | L3 admin evaluation UI | pending |
