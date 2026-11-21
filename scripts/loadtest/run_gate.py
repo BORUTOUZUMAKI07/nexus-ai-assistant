@@ -8,12 +8,15 @@ Usage:
 
 Exits non-zero if SLOs are violated, suitable for a CI job gate.
 """
+
 from __future__ import annotations
 
 import argparse
 import subprocess
 import sys
 from pathlib import Path
+
+from targets import RESULTS_PREFIX
 
 LOCUSTFILE = Path(__file__).parent / "locustfile.py"
 
@@ -40,7 +43,7 @@ def run_gate(
         "--headless",
         "--only-summary",
         "--csv",
-        "/tmp/locust_results",
+        RESULTS_PREFIX,
     ]
     print(f"[locust-gate] Running: {' '.join(cmd)}")
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -49,7 +52,7 @@ def run_gate(
         print(proc.stderr, file=sys.stderr)
 
     # Parse stats CSV
-    stats_path = Path("/tmp/locust_results_stats.csv")
+    stats_path = Path(f"{RESULTS_PREFIX}_stats.csv")
     if not stats_path.exists():
         print("[locust-gate] No stats CSV produced; assuming failure")
         return 1
@@ -98,9 +101,7 @@ def main() -> int:
     parser.add_argument("--host", required=True, help="Target host URL")
     parser.add_argument("--users", type=int, default=10, help="Number of users")
     parser.add_argument("--spawn-rate", type=int, default=2, help="Spawn rate")
-    parser.add_argument(
-        "--run-time", default="60s", help="Run time (e.g. 60s, 2m)"
-    )
+    parser.add_argument("--run-time", default="60s", help="Run time (e.g. 60s, 2m)")
     args = parser.parse_args()
     return run_gate(args.host, args.users, args.spawn_rate, args.run_time)
 
