@@ -256,19 +256,49 @@ class LongTermMemoryService:
         self,
         user_id: str | UUID,
         limit: int = 50,
+        *,
+        all_pages: bool = False,
     ) -> list[dict[str, Any]]:
         """
-        Retrieve all stored memories for a user.
+        Retrieve stored memories for a user, optionally across every page.
+
+        ``limit`` is the page size. ``all_pages`` is for completeness-sensitive
+        reads such as GDPR export: mem0 returns a paginated ``next`` token, so a
+        single call would silently drop facts past the first page. Fail-open is
+        unchanged — any error yields an empty list rather than breaking a read.
         """
         if not self._client:
             return []
 
         uid = str(user_id)
+        page = 1
+        seen_next: set[str] = set()
+        collected: list[dict[str, Any]] = []
         try:
-            data = await self._client.get_all(filters={"user_id": uid}, page_size=limit)
-            if isinstance(data, dict):
-                return data.get("results", [])
-            return data
+            while True:
+                data = await self._client.get_all(
+                    filters={"user_id": uid}, page=page, page_size=limit
+                )
+                if isinstance(data, dict):
+                    results = data.get("results", [])
+                    next_page = data.get("next")
+                else:
+                    results = data
+                    next_page = None
+                if not isinstance(results, list):
+                    results = []
+                if not all_pages:
+                    return results
+
+                collected.extend(results)
+                token = str(next_page) if next_page else ""
+                # A repeated token or an empty page with a token would otherwise
+                # spin forever if the upstream client ignored `page`.
+                if not token or token in seen_next or not results:
+                    break
+                seen_next.add(token)
+                page += 1
+            return collected
         except Exception as exc:
             logger.warning("mem0_get_all_failed", user_id=uid, error=str(exc))
             return []

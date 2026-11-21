@@ -3,7 +3,7 @@ Comprehensive unit tests for mem0 Two-Way Sync, Resilient Fallback,
 and Confidence Reinforcement remediation.
 """
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 from uuid import uuid4
 
 import pytest
@@ -194,3 +194,23 @@ async def test_delete_all_for_user_calls_client_delete_all():
 
     assert result is True
     mock_client.delete_all.assert_awaited_once_with(user_id=str(uid))
+
+
+@pytest.mark.asyncio
+async def test_get_all_can_fetch_every_page_scoped_to_user():
+    """RED: GDPR export cannot stop at the first mem0 page."""
+    client = AsyncMock()
+    client.get_all.side_effect = [
+        {"results": [{"id": "m1", "memory": "first"}], "next": "page-2"},
+        {"results": [{"id": "m2", "memory": "second"}], "next": None},
+    ]
+    service = LongTermMemoryService(client=client)
+    uid = uuid4()
+
+    items = await service.get_all(uid, limit=100, all_pages=True)
+
+    assert [item["id"] for item in items] == ["m1", "m2"]
+    assert client.get_all.await_args_list == [
+        call(filters={"user_id": str(uid)}, page=1, page_size=100),
+        call(filters={"user_id": str(uid)}, page=2, page_size=100),
+    ]

@@ -17,6 +17,7 @@ from backend.app.domain.usage.models import UsageLog
 from backend.app.domain.user.models import APIKey, User, UserMemory, UserSettings
 from backend.app.services.auth import account as account_module
 from backend.app.services.auth.account import AccountService
+from backend.app.services.memory import long_term as long_term_module
 from fakes import FakeSession
 
 
@@ -129,6 +130,63 @@ def test_export_as_json_bytes_roundtrips():
     raw_bytes = _await(AccountService(fake).export_as_json_bytes(user.id))
     payload = json.loads(raw_bytes)
     assert payload["user"]["email"] == user.email
+
+
+def test_export_includes_all_mem0_only_facts_for_the_authenticated_user(monkeypatch):
+    """RED: facts that never mirrored into user_memories must still be exported."""
+    fake = FakeSession()
+    user, _ = _seed_user_data(fake)
+    calls = []
+
+    async def _get_all(user_id, *, limit=100, all_pages=False):
+        calls.append((str(user_id), limit, all_pages))
+        return [
+            {"id": "m1", "memory": "mem0-only first", "created_at": "2026-01-01"},
+            {"id": "foreign", "user_id": str(uuid4()), "memory": "another user's fact"},
+            {"id": "m2", "memory": "mem0-only second", "created_at": "2026-01-02"},
+        ]
+
+    monkeypatch.setattr(long_term_module.long_term_memory, "get_all", _get_all)
+    payload = _await(AccountService(fake).export_user_data(user.id))
+
+    assert calls == [(str(user.id), 100, True)]
+    assert [m["memory"] for m in payload["mem0_memories"]] == [
+        "mem0-only first",
+        "mem0-only second",
+    ]
+    assert all(m["user_id"] == str(user.id) for m in payload["mem0_memories"])
+
+
+def test_export_fails_open_when_mem0_is_unavailable(monkeypatch):
+    fake = FakeSession()
+    user, _ = _seed_user_data(fake)
+
+    async def _get_all(*_args, **_kwargs):
+        raise RuntimeError("mem0 down")
+
+    monkeypatch.setattr(long_term_module.long_term_memory, "get_all", _get_all)
+    payload = _await(AccountService(fake).export_user_data(user.id))
+
+    assert payload["mem0_memories"] == []
+    assert payload["user"]["email"] == user.email
+
+
+def test_delete_account_erases_mem0_for_the_authenticated_user(monkeypatch):
+    """Erasure must target the account being deleted, never a broader namespace."""
+    fake = FakeSession()
+    user, _ = _seed_user_data(fake)
+    monkeypatch.setattr(account_module, "ConversationRepository", lambda session: FakeConvRepo())
+    erased = []
+
+    async def _delete_all(user_id):
+        erased.append(user_id)
+        return True
+
+    monkeypatch.setattr(long_term_module.long_term_memory, "delete_all_for_user", _delete_all)
+
+    _await(AccountService(fake).delete_account(user.id))
+
+    assert erased == [user.id]
 
 
 class FakeConvRepo:

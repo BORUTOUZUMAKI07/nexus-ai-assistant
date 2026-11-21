@@ -94,6 +94,37 @@ class AccountService:
             select(UserMemory).where(UserMemory.user_id == user_id)
         )).all()
 
+        # The local mirror is best-effort: mem0 can hold facts that never landed
+        # in user_memories (write races, mirror outages, direct mem0 writes).
+        # GDPR export must still include them, scoped to this authenticated user.
+        mem0_memories: list[dict] = []
+        try:
+            from backend.app.services.memory.long_term import long_term_memory
+
+            raw_mem0 = await long_term_memory.get_all(user_id, limit=100, all_pages=True)
+            for item in raw_mem0:
+                if not isinstance(item, dict):
+                    continue
+                item_user_id = item.get("user_id")
+                if item_user_id is not None and str(item_user_id) != str(user_id):
+                    continue
+                content = item.get("memory") or item.get("content")
+                if not content:
+                    continue
+                raw_metadata = item.get("metadata")
+                metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+                mem0_memories.append(
+                    {
+                        "id": str(item.get("id") or item.get("memory_id") or ""),
+                        "user_id": str(user_id),
+                        "memory": content,
+                        "category": item.get("category") or metadata.get("category"),
+                        "created_at": item.get("created_at") or item.get("updated_at"),
+                    }
+                )
+        except Exception as exc:
+            logger.warning("mem0_account_export_failed", user_id=str(user_id), error=str(exc))
+
         api_keys = (await self.session.exec(
             select(APIKey).where(APIKey.user_id == user_id)
         )).all()
@@ -145,6 +176,7 @@ class AccountService:
                 }
                 for m in memories
             ],
+            "mem0_memories": mem0_memories,
             "api_keys": [
                 {
                     "provider": k.provider,
