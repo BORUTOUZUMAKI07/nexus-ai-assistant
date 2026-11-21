@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { PREAUTH_COOKIE, PREAUTH_MAX_AGE, authCookieOptions } from "@/lib/auth";
 import { backendFetch } from "@/lib/proxy";
 
 export async function POST(req: NextRequest) {
@@ -59,16 +60,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, detail }, { status: res.status, headers });
   }
 
-  // A 2FA-enabled account gets `{"status":"2fa_required","preauth_token":...}`
-  // and no cookies. Passing that through keeps it distinguishable from a real
-  // session instead of reporting a login the browser does not actually have.
+  // A 2FA-enabled account gets a challenge instead of a session. The preauth
+  // token belongs in a short-lived httpOnly cookie on the frontend domain; the
+  // JSON body only tells the page which form to show next.
   let payload: Record<string, unknown> = { ok: true };
+  let preauthToken: string | undefined;
+  let preauthMaxAge = PREAUTH_MAX_AGE;
   try {
-    const parsed = JSON.parse(text);
-    if (parsed?.status) payload = { ...parsed, ok: false };
+    const parsed = JSON.parse(text) as Record<string, unknown> | null;
+    if (parsed?.status) {
+      const { preauth_token, ...rest } = parsed;
+      payload = { ...rest, ok: false };
+      if (typeof preauth_token === "string") preauthToken = preauth_token;
+      if (typeof rest.expires_in === "number") preauthMaxAge = rest.expires_in;
+    }
   } catch {
     // Non-JSON success body: `{ok: true}` is the whole contract.
   }
 
-  return NextResponse.json(payload, { status: res.status, headers });
+  const response = NextResponse.json(payload, { status: res.status, headers });
+  if (preauthToken) {
+    response.cookies.set(PREAUTH_COOKIE, preauthToken, {
+      ...authCookieOptions(req),
+      maxAge: preauthMaxAge,
+    });
+  }
+  return response;
 }

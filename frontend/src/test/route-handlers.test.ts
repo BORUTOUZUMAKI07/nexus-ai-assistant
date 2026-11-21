@@ -21,6 +21,7 @@ import { readdirSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 import {
   ACCESS_TOKEN_MAX_AGE,
+  PREAUTH_COOKIE,
   REFRESH_COOKIE,
   REFRESH_TOKEN_MAX_AGE,
   TOKEN_COOKIE,
@@ -39,6 +40,9 @@ vi.mock("@/lib/proxy", () => ({
 const SESSION = {
   nexus_access_token: "test-access-token",
   nexus_refresh_token: "test-refresh-token",
+  // A challenge in flight must still let /api/auth/2fa/verify reach the backend;
+  // without this the generic sweep would only prove the missing-cookie branch.
+  [PREAUTH_COOKIE]: "test-preauth-token",
 }
 
 function cookieStore(jar: Record<string, string> = SESSION) {
@@ -272,6 +276,11 @@ const SHORT_CIRCUITS = new Set([
 const SAMPLE_BODIES: Record<string, unknown> = {
   "/api/chat": { messages: [{ role: "user", content: "hi" }] },
   "/api/hitl": { threadId: "thread-1", action: "approve" },
+  // TOTP relays validate `code` before forwarding, so a generic probe would
+  // only exercise their 400 branch and look like a missing backend call.
+  "/api/auth/2fa/verify": { code: "123456" },
+  "/api/auth/2fa/enable": { code: "123456" },
+  "/api/auth/2fa/disable": { code: "123456" },
 }
 
 /**
@@ -1048,6 +1057,94 @@ describe("auth cookie lifetimes follow the tokens they carry", () => {
     // The original bug was these two being equal, which let the access cookie
     // outlive its own token by the whole refresh window.
     expect(ACCESS_TOKEN_MAX_AGE).toBeLessThan(REFRESH_TOKEN_MAX_AGE)
+  })
+
+  it("login keeps the 2FA preauth token in an httpOnly cookie, not the body", async () => {
+    backendFetch.mockImplementation(async () =>
+      fakeBackendResponse(200, {
+        status: "2fa_required",
+        preauth_token: "preauth-secret",
+        expires_in: 120,
+      }),
+    )
+    const mod = await loadRoute(routeFile("/api/auth/login")!)
+
+    const res = await mod.POST!(
+      nextRequest("/api/auth/login", "", { email: "a@example.com", password: "password123" }),
+      routeContext("/api/auth/login"),
+    )
+
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    const body = JSON.parse(text)
+    expect(body).toMatchObject({ status: "2fa_required", ok: false, expires_in: 120 })
+    // The browser must never receive the challenge token as JSON -- only the
+    // server can read the cookie that carries it.
+    expect(text).not.toContain("preauth-secret")
+    expect(body).not.toHaveProperty("preauth_token")
+    expect(maxAgeOf(res, PREAUTH_COOKIE)).toBe(120)
+
+    const stored = (res as unknown as {
+      cookies?: { get: (name: string) => Record<string, unknown> | null }
+    }).cookies?.get(PREAUTH_COOKIE)
+    expect(stored?.value).toBe("preauth-secret")
+    expect(stored?.httpOnly).toBe(true)
+    expect(stored?.secure).toBe(true)
+    expect(stored?.sameSite).toBe("lax")
+    expect(stored?.path).toBe("/")
+  })
+
+  it("2FA verify re-bakes the frontend session and forgets the challenge", async () => {
+    backendFetch.mockImplementation(async () =>
+      fakeBackendResponse(200, {
+        access_token: "backend-access-token",
+        refresh_token: "backend-refresh-token",
+        token_type: "bearer",
+        expires_in: 1800,
+        refresh_expires_in: 1209600,
+      }),
+    )
+    const route = "/api/auth/2fa/verify"
+    const mod = await loadRoute(routeFile(route)!)
+    backendFetch.mockClear()
+
+    const res = await mod.POST!(nextRequest(route, "", { code: "123456" }), routeContext(route))
+
+    expect(res.status).toBe(200)
+    // Neither the backend's cookies nor its token body may be forwarded to page
+    // scripts. The BFF translates them into cookies on the frontend domain.
+    const text = await res.text()
+    expect(text).not.toContain("backend-access-token")
+    expect(text).not.toContain("backend-refresh-token")
+
+    const [path, init] = backendFetch.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe("/auth/2fa/verify")
+    expect(init.method).toBe("POST")
+    expect(JSON.parse(String(init.body))).toEqual({
+      preauth_token: "test-preauth-token",
+      code: "123456",
+    })
+
+    expect(maxAgeOf(res, TOKEN_COOKIE)).toBe(1800)
+    expect(maxAgeOf(res, REFRESH_COOKIE)).toBe(1209600)
+    expect(maxAgeOf(res, PREAUTH_COOKIE)).toBe(0)
+  })
+
+  it("2FA verify refuses to call the backend without a preauth cookie", async () => {
+    vi.resetModules()
+    vi.doUnmock("next/headers")
+    vi.doMock("next/headers", () => ({
+      cookies: async () => cookieStore({}),
+      headers: async () => ({ get: () => undefined }),
+    }))
+    backendFetch.mockClear()
+    const route = "/api/auth/2fa/verify"
+    const mod = await loadRoute(routeFile(route)!)
+
+    const res = await mod.POST!(nextRequest(route, "", { code: "123456" }), routeContext(route))
+
+    expect(res.status).toBe(401)
+    expect(backendFetch).not.toHaveBeenCalled()
   })
 })
 

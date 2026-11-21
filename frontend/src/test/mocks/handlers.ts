@@ -401,6 +401,17 @@ export const handlers = [
     })
   ),
 
+  // 2FA BFF relays. The real /verify route keeps the challenge and tokens in
+  // httpOnly cookies; the mock only needs to give component tests a reachable
+  // endpoint and a success body shaped like the route's `{ ok }` response.
+  http.post("/api/auth/2fa/verify", () => HttpResponse.json({ ok: true })),
+  http.post("/api/auth/2fa/setup", () =>
+    HttpResponse.json({ secret: "MOCK_TOTP_SECRET_NOT_REAL", otpauth_uri: "otpauth://totp/Nexus" })
+  ),
+  http.post("/api/auth/2fa/enable", () => HttpResponse.json({ status: "enabled" })),
+  http.post("/api/auth/2fa/disable", () => HttpResponse.json({ status: "disabled" })),
+  http.get("/api/auth/2fa/status", () => HttpResponse.json({ enabled: false })),
+
   http.post("/api/auth/register", () => HttpResponse.json(mockUser)),
 
   http.post("/api/auth/verify-email", () => HttpResponse.json(mockUser)),

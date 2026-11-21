@@ -14,6 +14,9 @@
 
 export const TOKEN_COOKIE = "nexus_access_token";
 export const REFRESH_COOKIE = "nexus_refresh_token";
+// Short-lived BFF-only cookie that holds the backend's 2FA preauth token while
+// the user enters a TOTP code. The browser never sees this value as JSON.
+export const PREAUTH_COOKIE = "nexus_preauth_token";
 export const SESSION_EXPIRED_EVENT = "nexus:session-expired";
 
 // Fallback cookie lifetimes, used only when the backend response omits the
@@ -24,6 +27,9 @@ export const SESSION_EXPIRED_EVENT = "nexus:session-expired";
 // the backend had already expired, turning a clean expiry into a 401 loop.
 export const ACCESS_TOKEN_MAX_AGE = 60 * 60; // 1 hour
 export const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+// Backend TOTP_PREAUTH_MINUTES defaults to 5; the backend's `expires_in` wins
+// when present, this is only the fallback for an older/partial response.
+export const PREAUTH_MAX_AGE = 5 * 60;
 
 // Cookie attributes shared by the auth route handlers. httpOnly + Secure keep
 // the JWTs out of document.cookie.
