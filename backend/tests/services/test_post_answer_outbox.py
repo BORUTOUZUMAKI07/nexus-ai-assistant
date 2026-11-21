@@ -23,6 +23,21 @@ from backend.app.services.outbox.models import PostAnswerTask
 from sqlalchemy import delete, select
 
 
+@pytest.mark.parametrize(
+    ("attempts", "expected"),
+    [(1, 1.0), (2, 2.0), (3, 4.0), (4, 8.0), (5, 16.0)],
+)
+def test_retry_delay_doubles_on_each_failed_attempt(attempts, expected):
+    """RED: the documented exponential backoff must actually grow."""
+    assert outbox_service.retry_delay_seconds(attempts) == expected
+
+
+def test_retry_delay_still_honours_the_cap_and_early_attempts():
+    assert outbox_service.retry_delay_seconds(20) == 300.0
+    assert outbox_service.retry_delay_seconds(3, base=2.0, cap=5.0) == 5.0
+    assert outbox_service.retry_delay_seconds(0) == 1.0
+
+
 class _LogRecorder:
     def __init__(self) -> None:
         self.events: list[tuple[str, dict]] = []

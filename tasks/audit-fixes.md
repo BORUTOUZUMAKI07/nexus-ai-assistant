@@ -1,0 +1,23 @@
+# Audit Finding Fixes — Implementation Slices
+
+Goal: fix every finding in `docs/feature-service-audit.md`, then merge to local `main` and push (user approved on 2026-11-21).
+
+Rules: RED test first, minimal GREEN, focused tests + ruff + typecheck, small commit. No new skips/suppressions/secrets. Keep cron `0 6 * * *`, both `Connection: keep-alive` headers, fail-open memory and per-user scoping.
+
+| Slice | Finding | Status |
+|---|---|---|
+| A | M2 outbox constant backoff | pending |
+| B | M1 secret-scan whole-file skip | pending |
+| C | M6 + L5 doc/version drift | pending |
+| D | M3 observability status from real probe | pending |
+| E | M4 image config is dead | pending |
+| F | H1 + H2 admin trace auth + real store | pending |
+| G | H3 backend 2FA login 500 / cookie gap | pending |
+| H | H3 frontend 2FA BFF + sign-in UI | pending |
+| I | L3 admin evaluation UI | pending |
+| J | L4 backend-to-BFF route coverage test | pending |
+| K | L1 redundant webhook pre-check | pending |
+| L | L2 collector auth enforcement test | pending |
+| M | M7 optimistic proxy honesty | pending |
+| N | M5 sync/stream chat parity | pending |
+| Final | full verification, merge to main, push | pending |

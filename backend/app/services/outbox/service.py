@@ -52,7 +52,7 @@ def retry_delay_seconds(
     cap: float = RETRY_CAP_SECONDS,
 ) -> float:
     """Exponential backoff with a ceiling; attempt 1 waits one base interval."""
-    return float(min(cap, base ** max(0, attempts - 1)))
+    return float(min(cap, base * 2 ** max(0, attempts - 1)))
 
 
 def _insert_ignoring_conflicts(values: dict[str, Any], session: AsyncSession):
