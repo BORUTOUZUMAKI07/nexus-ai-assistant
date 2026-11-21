@@ -413,18 +413,19 @@ def partition_new_memories(
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Split extracted facts into (new, duplicates), also deduping internally.
 
-    mem0 can return the same fact twice in one batch, so the seen-set is
+    mem0 can return the same fact twice in one batch, so the seen list is
     seeded with what is already stored *and* grows as new facts are accepted.
+    The check itself goes through :func:`is_duplicate` so there is one exact
+    normalized-match policy for both direct callers and batch partitioning.
     """
-    seen = {normalize_for_dedupe(c) for c in existing_contents if c}
+    seen = [normalize_for_dedupe(c) for c in existing_contents if c]
     new: list[dict[str, str]] = []
     dupes: list[dict[str, str]] = []
     for item in candidates:
         text = item.get("memory") or item.get("text") or ""
-        key = normalize_for_dedupe(text)
-        if not key or key in seen:
+        if is_duplicate(text, seen):
             dupes.append(item)
             continue
-        seen.add(key)
+        seen.append(normalize_for_dedupe(text))
         new.append(item)
     return new, dupes

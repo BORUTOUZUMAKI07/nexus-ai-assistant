@@ -18,6 +18,7 @@ import pathlib
 
 import backend.app.infrastructure.database.engine  # noqa: F401  (populates metadata)
 import pytest
+from backend.app.domain.user.schemas import UserMemoryCreate
 from backend.app.services.memory.lifecycle import CONFIDENCE_FLOOR, INITIAL_CONFIDENCE
 from sqlmodel import SQLModel
 
@@ -114,3 +115,8 @@ def test_model_default_is_no_longer_degenerate_always_certain():
 def test_floor_sits_below_the_initial_confidence():
     """Otherwise every memory is born already decayed."""
     assert CONFIDENCE_FLOOR < INITIAL_CONFIDENCE
+
+
+def test_manual_memory_create_defaults_to_the_policy_initial_confidence():
+    """The API schema must not reintroduce the always-certain default."""
+    assert UserMemoryCreate(content="User prefers Python").confidence == INITIAL_CONFIDENCE

@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from backend.app.services.memory.lifecycle import INITIAL_CONFIDENCE
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 # Usernames reach an HTML email body and other rendered surfaces, so the set is
@@ -209,7 +210,7 @@ class UserMemoryCreate(BaseModel):
 
     content: str = Field(min_length=1, max_length=10000)
     category: str = Field(default="preference", min_length=1, max_length=64)
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=INITIAL_CONFIDENCE, ge=0.0, le=1.0)
     source_conversation_id: UUID | None = None
 
 

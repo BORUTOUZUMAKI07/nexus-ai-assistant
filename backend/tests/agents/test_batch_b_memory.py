@@ -271,6 +271,28 @@ def test_partition_reads_both_mem0_text_shapes():
     assert len(new) == 1
 
 
+def test_partition_uses_the_shared_duplicate_policy(monkeypatch):
+    """RED: `is_duplicate` must be the policy, not a parallel implementation."""
+    import backend.app.services.memory.lifecycle as lifecycle
+
+    calls = []
+    real = lifecycle.is_duplicate
+
+    def _spy(candidate, existing_contents):
+        calls.append((candidate, list(existing_contents)))
+        return real(candidate, existing_contents)
+
+    monkeypatch.setattr(lifecycle, "is_duplicate", _spy)
+
+    new, dupes = lifecycle.partition_new_memories(
+        [{"memory": "User prefers Python"}, {"memory": "User prefers python."}],
+        [],
+    )
+
+    assert len(new) == 1 and len(dupes) == 1
+    assert len(calls) == 2
+
+
 # ── B1+B3 wiring: the synthesizer gate and the mirror helper ────────────────
 
 
