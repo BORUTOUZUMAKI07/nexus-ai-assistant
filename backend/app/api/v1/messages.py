@@ -439,7 +439,7 @@ async def send_message_sync(
                 prompt_variant=cache_variant,
                 conversation_id=str(conversation_id),
             )
-        except Exception as exc:  # noqa: BLE001 - cache invalidation is best-effort
+        except Exception as exc:
             logger.debug("response_cache_invalidate_failed", error=str(exc))
 
     if recalled_memories:
@@ -593,7 +593,7 @@ async def send_message_stream(
                         target_model,
                         conversation_id=str(conversation_id),
                     )
-                except Exception as exc:  # noqa: BLE001 - best-effort
+                except Exception as exc:
                     logger.debug("response_cache_invalidate_failed", error=str(exc))
 
             if recalled_memories:
