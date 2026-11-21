@@ -358,11 +358,14 @@ describe("api client", () => {
   })
 
   it("loads trace detail and comparison with encoded query parameters", async () => {
-    let compareQuery: URLSearchParams | null = null
+    // Capture in a mutable holder: assignments made inside the MSW handler are
+    // invisible to TypeScript's control-flow analysis for a plain `let`, which
+    // narrows it to `null` here and makes `?.get()` a `never` access.
+    const captured: { compareQuery: URLSearchParams | null } = { compareQuery: null }
     let detailId = ""
     server.use(
       http.get(`${API}/admin/evaluation/traces/compare`, ({ request }) => {
-        compareQuery = new URL(request.url).searchParams
+        captured.compareQuery = new URL(request.url).searchParams
         return HttpResponse.json({ delta: { cost_usd: 0.01 } })
       }),
       http.get(`${API}/admin/evaluation/traces/:traceId`, ({ params }) => {
@@ -372,8 +375,8 @@ describe("api client", () => {
     )
 
     await expect(compareEvaluationTraces("a b", "c/d")).resolves.toEqual({ delta: { cost_usd: 0.01 } })
-    expect(compareQuery?.get("trace_a")).toBe("a b")
-    expect(compareQuery?.get("trace_b")).toBe("c/d")
+    expect(captured.compareQuery?.get("trace_a")).toBe("a b")
+    expect(captured.compareQuery?.get("trace_b")).toBe("c/d")
 
     await expect(fetchEvaluationTrace("trace-1")).resolves.toEqual({ trace_id: "trace-1" })
     expect(detailId).toBe("trace-1")
