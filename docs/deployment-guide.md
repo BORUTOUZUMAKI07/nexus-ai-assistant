@@ -2,12 +2,12 @@
 
 > Verified against the source at `1f43c89` (main). Supersedes the earlier
 > guide (which claimed Next.js 14, "22 SQLModel tables", `pip install -e .`,
-> and Upstash Redis — all outdated). **Next.js is 16.4.2, the schema has 38
+> and Upstash Redis — all outdated). **Next.js is 16.4.6, the schema has 38
 > tables, deps are managed with `uv sync`, Redis/Qdrant can run locally via
 > docker-compose or hosted (Upstash / Qdrant Cloud), and object storage is
 > Supabase Storage (hosted).**
 
-> Note (2026-10-16): the frontend moved to **Next.js 16.4.2** (a security
+> Note (2026-10-16): the frontend moved to **Next.js 16.4.6** (a security
 > release: the 16.3.x line carried a critical `next/og` RCE) and the schema to
 > **38 tables**.
 
@@ -16,7 +16,7 @@
 | Component | Runtime notes |
 |---|---|
 | **Backend API** | FastAPI via uvicorn (or gunicorn+uvicorn workers) on a Docker host. `backend/Dockerfile` is the official image. |
-| **Frontend** | Next.js **16.4.2** standalone output; `frontend/Dockerfile` builds it. |
+| **Frontend** | Next.js **16.4.6** standalone output; `frontend/Dockerfile` builds it. |
 | **Database** | PostgreSQL with **pgvector** (`pgvector/pgvector:pg16` locally) — 38 SQLModel tables. Supabase/Postgres-compatible hosts work. |
 | **Vector store** | Qdrant (hybrid dense+sparse). Local container `qdrant/qdrant` in compose. |
 | **Redis** | Cache, rate-limiting and idempotency keys. Local `redis:7-alpine` in compose. `REDIS_URL=redis://localhost:6379/0` locally. Not a job queue. |
@@ -162,14 +162,17 @@ npm run start              # NODE_ENV=production server (scripts/serve.js)
 
 Point the frontend at the backend via `BACKEND_URL` (server-side env; falls back
 to `http://127.0.0.1:8000`). The BFF route handlers under `frontend/src/app/api/**`
-forward requests with cookies. Frontend `package.json` pins **next 16.4.2**,
+forward requests with cookies. Frontend `package.json` pins **next 16.4.6**,
 react 19.2.8, typescript 5, vitest 4, playwright.
 
-> Vercel note: the old guide suggested Vercel with `NEXT_PUBLIC_API_URL`.
-> Because the browser must not expose the backend cookie/header surface, the
-> recommended deployment is the provided `frontend/Dockerfile` (same-origin or
-> internal networking, `BACKEND_URL` set server-side). If you use Vercel, set
-> `BACKEND_URL` as a non-public env var and keep the BFF pattern.
+> Vercel note: Vercel is the deployed reference target (`frontend/vercel.json`,
+> §11) and `render.yaml` intentionally defines only the backend and collector.
+> Do not use `NEXT_PUBLIC_API_URL` — it would expose the backend surface to the
+> browser. Set `BACKEND_URL` as a **server-side, non-public** env var and keep
+> the BFF pattern, which forwards cookies to the Render backend. The provided
+> `frontend/Dockerfile` (standalone output) is the supported self-host
+> alternative for same-origin or internal networking, not the recommended
+> deployment.
 
 ## 6. Local infrastructure (docker-compose)
 

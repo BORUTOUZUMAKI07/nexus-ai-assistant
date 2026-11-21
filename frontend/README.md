@@ -1,6 +1,6 @@
 # Nexus AI Assistant — Frontend
 
-The Next.js **16.4.2** (App Router) + **React 19.2.8** chat client for Nexus AI
+The Next.js **16.4.6** (App Router) + **React 19.2.8** chat client for Nexus AI
 Assistant. It proxies every backend call through BFF-style route handlers:
 the browser talks to `localhost:3000`, and `src/app/api/**/route.ts` forwards
 to the FastAPI backend (`localhost:8000`) with credentials/cookies attached.
@@ -20,7 +20,7 @@ to the FastAPI backend (`localhost:8000`) with credentials/cookies attached.
   helper in `src/lib/proxy.ts` (reads the JWT cookie → `Authorization: Bearer`
   header); `src/proxy.ts` is the edge middleware that server-side-gates `/app`.
   Backend address resolution: `BACKEND_URL` → `http://127.0.0.1:8000`.
-- **Stack**: Next 16.4.2 · React 19.2.8 · TypeScript 5 · Tailwind 4 ·
+- **Stack**: Next 16.4.6 · React 19.2.8 · TypeScript 5 · Tailwind 4 ·
   Radix UI + `cmdk` · `lucide-react` · `motion` · `sonner` · Vitest 4 ·
   Playwright · MSW (test mocking).
 

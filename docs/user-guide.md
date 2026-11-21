@@ -1,6 +1,6 @@
 # Nexus AI Assistant — User Guide
 
-> Written against the frontend at `1f43c89` (Next.js 16.4.2). The app
+> Written against the frontend at `1f43c89` (Next.js 16.4.6). The app
 > combines a streaming chat with plan mode, RAG knowledge base, artifacts,
 > settings, usage, and admin views.
 
