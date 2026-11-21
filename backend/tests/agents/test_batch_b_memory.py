@@ -332,6 +332,30 @@ async def test_synthesizer_still_writes_for_stated_intent(monkeypatch):
     assert any("mem0" in c for c in result["calls"]), "a stated preference must be persisted"
 
 
+async def test_synthesizer_uses_the_prompt_compiler_memory_seam(monkeypatch):
+    """RED: the orchestrator must not hand-build the memory append itself."""
+    from backend.app.agents.orchestrator import nodes
+
+    seam_calls = []
+
+    def _append(system_prompt, memory_block):
+        seam_calls.append((system_prompt, memory_block))
+        return "SYSTEM+MEMORY"
+
+    async def fake_completion(**_kwargs):
+        return "A response."
+
+    monkeypatch.setattr(nodes.prompt_compiler, "append_memory_block", _append)
+    monkeypatch.setattr(nodes.ai_client, "completion", fake_completion)
+    monkeypatch.setattr(nodes, "critic_subagent", _NoCritic())
+
+    state = _synth_state("thanks!")
+    state["user_memories"] = ["- User prefers dark mode"]
+    await nodes.synthesizer_node(state)
+
+    assert seam_calls == [("SYSTEM", "- User prefers dark mode")]
+
+
 async def test_synthesizer_skips_mem0_write_when_memory_is_disabled(monkeypatch):
     """RED: an explicit opt-out must stop automatic persistence too."""
     from backend.app.agents.orchestrator import nodes

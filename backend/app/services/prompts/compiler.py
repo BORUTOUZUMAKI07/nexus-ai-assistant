@@ -40,6 +40,18 @@ class PromptCompiler:
     def __init__(self, base_prompt: str = SYSTEM_BASE_PROMPT):
         self.base_prompt = base_prompt
 
+    def append_memory_block(self, system_prompt: str, memory_block: str | None) -> str:
+        """Append a pre-rendered long-term memory block to a compiled prompt.
+
+        Memory recall already returns user-facing text with its own heading. This
+        seam keeps the separator in one place so direct /messages and the
+        orchestrator cannot drift apart. An absent block leaves the prompt byte
+        for byte unchanged, preserving today's cache and prompt-snapshot shapes.
+        """
+        if not memory_block:
+            return system_prompt
+        return f"{system_prompt}\n\n{memory_block}"
+
     def compile_system_prompt(
         self,
         custom_instructions: str | None = None,

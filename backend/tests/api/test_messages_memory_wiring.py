@@ -180,6 +180,58 @@ async def test_stream_endpoint_injects_mem0_memory_into_the_prompt(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_sync_endpoint_uses_the_prompt_compiler_memory_seam(monkeypatch, harness):
+    """RED: both /messages paths must delegate the memory append to one seam."""
+    seam_calls = []
+
+    async def _recall(**_kwargs):
+        return MEMORY_BLOCK, []
+
+    def _append(system_prompt, memory_block):
+        seam_calls.append((system_prompt, memory_block))
+        return "SYSTEM+MEMORY"
+
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
+    monkeypatch.setattr(messages.prompt_compiler, "append_memory_block", _append)
+
+    result = await _call_sync(harness)
+
+    assert result.content == "Here is your answer."
+    assert seam_calls == [("SYSTEM", MEMORY_BLOCK)]
+    assert harness.captured["system_prompt"] == "SYSTEM+MEMORY"
+
+
+@pytest.mark.asyncio
+async def test_stream_endpoint_uses_the_prompt_compiler_memory_seam(monkeypatch, harness):
+    """RED: the SSE variant must use the same seam as the sync variant."""
+    seam_calls = []
+
+    async def _recall(**_kwargs):
+        return MEMORY_BLOCK, []
+
+    def _append(system_prompt, memory_block):
+        seam_calls.append((system_prompt, memory_block))
+        return "SYSTEM+MEMORY"
+
+    monkeypatch.setattr(messages.long_term_memory, "build_memory_context_block_with_ids", _recall)
+    monkeypatch.setattr(messages.prompt_compiler, "append_memory_block", _append)
+
+    response = await messages.send_message_stream(
+        conversation_id=harness.conversation_id,
+        message_in=MessageCreate(content="What should I use?"),
+        current_user=harness.user,
+        org_id=None,
+        conv_svc=harness.conv_svc,
+        usage_svc=harness.usage_svc,
+    )
+    frames = [frame async for frame in _stream_events(response)]
+
+    assert frames[-1]["event"] == "done"
+    assert seam_calls == [("SYSTEM", MEMORY_BLOCK)]
+    assert harness.captured["system_prompt"] == "SYSTEM+MEMORY"
+
+
+@pytest.mark.asyncio
 async def test_memory_outage_does_not_fail_the_sync_reply(monkeypatch, harness):
     """Fail-open: a Mem0 error must never break the user's answer."""
 

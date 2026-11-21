@@ -45,6 +45,7 @@ from backend.app.services.memory.long_term import long_term_memory
 from backend.app.services.memory.preferences import is_memory_enabled
 from backend.app.services.memory.reinforcement import reinforce_recalled_memories
 from backend.app.services.observability.fallbacks import count_fallback
+from backend.app.services.prompts.compiler import prompt_compiler
 from backend.app.services.rag.critique import (
     VERDICT_UNRELATED,
     retrieval_critique_service,
@@ -1213,10 +1214,11 @@ async def synthesizer_node(state: AgentState) -> dict[str, Any]:
     memory_enabled = bool(state.get("memory_enabled", True))
     user_memories: list[str] = state.get("user_memories", [])
 
-    # Inject long-term memories into system prompt
+    # Inject long-term memories into system prompt through the shared compiler
+    # seam so direct /messages and the orchestrator keep identical spacing.
     if user_memories:
         memory_block = "\n".join(user_memories)
-        system_prompt = f"{system_prompt}\n\n{memory_block}"
+        system_prompt = prompt_compiler.append_memory_block(system_prompt, memory_block)
 
     context_additions: list[str] = []
 

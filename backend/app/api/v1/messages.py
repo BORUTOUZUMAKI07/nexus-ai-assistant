@@ -244,8 +244,7 @@ async def send_message_sync(
         endpoint="sync",
         memory_enabled=memory_enabled,
     )
-    if memory_block:
-        system_prompt = f"{system_prompt}\n\n{memory_block}"
+    system_prompt = prompt_compiler.append_memory_block(system_prompt, memory_block)
     cache_variant = _memory_scoped_variant(experiment_variant, memory_block)
 
     formatted_context = await context_compiler.compile_context(
@@ -487,8 +486,7 @@ async def send_message_stream(
         endpoint="stream",
         memory_enabled=memory_enabled,
     )
-    if memory_block:
-        system_prompt = f"{system_prompt}\n\n{memory_block}"
+    system_prompt = prompt_compiler.append_memory_block(system_prompt, memory_block)
 
     formatted_context = await context_compiler.compile_context(
         messages=history,
