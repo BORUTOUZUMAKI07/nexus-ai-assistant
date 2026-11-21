@@ -1,6 +1,7 @@
 ﻿#!/usr/bin/env python3
 """Tripwire: refuse to commit tracked files that look like secrets."""
 from __future__ import annotations
+
 import re
 import subprocess
 import sys
@@ -15,6 +16,31 @@ PATTERNS = [
 ]
 ALLOWLIST_PATHS = {"backend/tests/", "frontend/src/test/", ".github/scripts/check_secrets.py", "docs/"}
 FAKE_PATTERNS = ["test-secret-key", "test_key", "example", "dummy", "fake", "xxx", "changeme"]
+
+
+def _is_declared_fake(match: re.Match[str], content: str) -> bool:
+    """Only suppress a match explicitly marked fake, never the whole file.
+
+    A marker inside the token (``AKIAIOSFODNN7EXAMPLE``) or on the same line
+    (``KEY = '...'  # example``) is intentional. A marker on a different line
+    is unrelated and must not hide a real credential.
+    """
+    line_start = content.rfind("\n", 0, match.start()) + 1
+    line_end = content.find("\n", match.end())
+    if line_end == -1:
+        line_end = len(content)
+    evidence = f"{match.group(0)}\n{content[line_start:line_end]}".lower()
+    return any(fake in evidence for fake in FAKE_PATTERNS)
+
+
+def violations_in(content: str) -> list[str]:
+    """Return the names of secret patterns with at least one real match."""
+    names = []
+    for pattern, name in PATTERNS:
+        if any(not _is_declared_fake(match, content) for match in pattern.finditer(content)):
+            names.append(name)
+    return names
+
 
 def scan() -> int:
     try:
@@ -31,12 +57,9 @@ def scan() -> int:
             content = Path(path).read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        if any(f in content.lower() for f in FAKE_PATTERNS):
-            continue
-        for pattern, name in PATTERNS:
-            if pattern.search(content):
-                violations.append(f"{path}: {name}")
-                break
+        found = violations_in(content)
+        if found:
+            violations.append(f"{path}: {found[0]}")
     if violations:
         print("SECRET SCAN FAILED", file=sys.stderr)
         for v in violations:
