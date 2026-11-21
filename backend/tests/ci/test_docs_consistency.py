@@ -38,3 +38,52 @@ def test_topology_table_still_places_the_frontend_on_vercel():
     text = (_ROOT / "docs" / "deployment-guide.md").read_text(encoding="utf-8")
     assert "| Frontend | **Vercel** |" in text
     assert (_ROOT / "frontend" / "vercel.json").is_file()
+
+
+def _m5_finding() -> str:
+    """The M5 paragraph, isolated from the rest of the severity-ranked findings."""
+    text = (_ROOT / "docs" / "feature-service-audit.md").read_text(encoding="utf-8")
+    return text.split("**M5 —", 1)[1].split("**M6 —", 1)[0]
+
+
+def test_m5_doc_no_longer_claims_the_stream_path_has_no_webhooks_or_cache_work():
+    """RED: the finding was fixed in code, but its prose still said the primary
+    chat path silently skipped webhooks and cache bookkeeping entirely.
+
+    `execute_run` now enqueues both `message.completed` and semantic-cache
+    invalidation as durable outbox rows after the reply commits (fail-open
+    fallback included), and live-verification D7 records a real delivery. The
+    doc must say that, and must name the tests that guard it, instead of leaving
+    an open finding that no longer exists.
+    """
+    finding = _m5_finding()
+
+    assert "outbox" in finding
+    assert "message.completed" in finding
+    assert "test_post_answer_outbox_executor.py" in finding
+    assert "test_post_answer_outbox.py" in finding
+    assert "has none of these" not in finding
+    assert "effectively never fire" not in finding
+
+
+def test_m5_doc_explains_the_deliberate_remaining_asymmetry():
+    """Cache lookup stays sync-only (a cached blob cannot replace an agent SSE
+    run), and no canary/A/B rollout is deployed — so adding variant selection to
+    the stream path would be a new rollout, not a parity fix. The doc must say
+    both, or a reader will re-open M5 and reintroduce exactly that rollout.
+    """
+    finding = _m5_finding()
+    lowered = finding.lower()
+
+    assert "by design" in lowered
+    assert "no canary/a/b" in lowered or "not deployed" in lowered
+    assert "invalidate" in lowered
+
+
+def test_m5_remediation_item_no_longer_asks_for_a_full_path_unification():
+    text = (_ROOT / "docs" / "feature-service-audit.md").read_text(encoding="utf-8")
+    remediation = text.split("## Recommended remediation order", 1)[1]
+    item_5 = next(line for line in remediation.splitlines() if line.startswith("5. **M5**"))
+
+    assert "unify sync/stream chat paths" not in item_5
+    assert "resolved" in item_5.lower()

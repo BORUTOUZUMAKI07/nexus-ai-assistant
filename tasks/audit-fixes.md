@@ -19,5 +19,5 @@ Rules: RED test first, minimal GREEN, focused tests + ruff + typecheck, small co
 | K | L1 redundant webhook pre-check | done |
 | L | L2 collector auth enforcement test | done |
 | M | M7 optimistic proxy honesty | done |
-| N | M5 sync/stream chat parity | pending |
+| N | M5 sync/stream chat parity | done |
 | Final | full verification, merge to main, push | pending |

@@ -44,9 +44,16 @@ Backend 2FA is fully implemented (`auth.py:324–399`, throttle at `:380–386`)
 
 `IMAGE_DEFAULT_WIDTH`, `IMAGE_DEFAULT_HEIGHT`, `IMAGE_MAX_PROMPT_CHARS`, `IMAGE_REQUEST_TIMEOUT_SECONDS` (`config.py:959–962`, `.env.example:358–363`) are never read. Service hardcodes `MAX_PROMPT_CHARS = 1000` (`image_generation.py:50`), `width=1024, height=1024` (`:85–86`), `timeout=60.0` (`:74`). Env tuning silently does nothing.
 
-**M5 — Sync vs stream chat parity gap** — `backend/app/api/v1/messages.py`, `backend/app/api/v1/conversations.py`
+**M5 — Sync vs stream chat parity gap (resolved as a documented, deliberate asymmetry)** — `backend/app/api/v1/messages.py`, `backend/app/api/v1/conversations.py`, `backend/app/services/runs/executor.py`
 
-Sync `POST /messages` has response-cache lookup, experiments/bandit selection, and webhook dispatch (`messages.py:240–315`, `:373–391`). Streaming `POST /conversations/{id}/stream` (`conversations.py:261–269`, body `:405–577`) has none of these. The primary UI uses the stream path (`frontend/src/app/api/chat/route.ts`), so cache accounting, A/B experiments, and `message.completed` webhooks effectively never fire for normal chat — despite `docs/live-verification.md` marking those as live-verified via the sync path/harness.
+The original finding was that the streaming path — the one the product actually chats through — had no response-cache lookup, no experiment/bandit selection, and no `message.completed` webhook dispatch. The first and third of those have since been fixed in code, so the finding is no longer open:
+
+- **Webhooks — fixed on the primary path.** `execute_run` enqueues `message.completed` as a durable outbox row *after* the assistant row commits, with a fail-open inline fallback for deployment before the outbox migration. Live-verified in `docs/live-verification.md` D7 (a real delivered row, HTTP 200). Guarded by `backend/tests/agents/test_post_answer_outbox_executor.py` and `backend/tests/services/test_post_answer_outbox.py`.
+- **Cache invalidation — fixed on the primary path.** The same outbox enqueue drops the exact `(user_id, model, prompt_variant, conversation_id)` semantic-cache bucket, so a stream turn cannot leave a stale answer behind. Guarded by the same two tests.
+- **Response-cache lookup/write — sync only, by design.** A streamed turn is an agent run with tool calls and checkpoints; serving a cached blob in place of it would change the SSE contract and skip the work the user is watching. Stream turns still invalidate the cache, so cache *correctness* is shared across both paths.
+- **Experiment/bandit variant selection — not deployed.** There is no canary/A/B rollout active, so the run path deliberately uses the `default` prompt variant. Adding variant selection to streaming would introduce a new rollout, not close a parity gap.
+
+Provider prompt-cache accounting (`cached_tokens`, `cache_hit_rate`) is written from `_persist_reply` on the run path (live-verified in D3/G4/G6), so the original claim that cache accounting never fires for normal chat was already stale. The remaining asymmetry is intentional and pinned by `backend/tests/ci/test_docs_consistency.py`; it should not be "fixed" by adding experiments to the stream path.
 
 **M6 — Next.js version drift** — `frontend/package.json`, `docs/deployment-guide.md`
 
@@ -131,7 +138,7 @@ Docs state Next.js 16.4.2 (`:3–12,165`); `frontend/package.json:32` declares `
 
 ## Live-verified vs config-only summary
 
-- **[LIVE]** email/password + OAuth sign-in, streamed chat, message actions, file/image upload, image generation, TTS/voice, Deep/Web/Code/Plan modes, Knowledge/Projects/Usage/Settings/Admin panels, share links, org invite, public share page, webhooks (post-fix), cache accounting (sync path only), conversation model pinning, mobile widths.
+- **[LIVE]** email/password + OAuth sign-in, streamed chat, message actions, file/image upload, image generation, TTS/voice, Deep/Web/Code/Plan modes, Knowledge/Projects/Usage/Settings/Admin panels, share links, org invite, public share page, webhooks on the stream path (post-fix, D7), provider cache accounting on the stream path (G4/G6), exact/semantic response-cache lookup (sync path only, M5 — deliberate), conversation model pinning, mobile widths.
 - **[UNIT / not truly live]** free-tier quota & sampling, microphone accuracy, short-clip voice guard, admin/system paths before role grant, all HITL/ARQ/budget/refusal-fallback logic.
 - **[CONFIG / not live]** remote New Relic ingestion, LangSmith, E2B/Firecrawl/Tavily (credential-only health), OTel collector auth (L2), billing/Stripe state where `EMAIL_VERIFICATION_REQUIRED=false`.
 - **[DOC only]** Next.js version claims (M6), Vercel frontend deployment (L5).
@@ -143,7 +150,7 @@ Docs state Next.js 16.4.2 (`:3–12,165`); `frontend/package.json:32` declares `
 2. **H1 + H2** — add admin auth to trace endpoints; implement or remove `get_trace_span` and the compare feature.
 3. **M1** — fix the secret-scan whole-file skip.
 4. **M2** — fix the constant 1-second retry delay.
-5. **M5** — unify sync/stream chat paths so cache, experiments, and webhooks run on the primary streaming path.
+5. **M5** — resolved as a documented asymmetry: webhooks and cache invalidation now run on the stream path via the outbox; response-cache lookup stays sync-only by design and no canary/A/B rollout is deployed. Do not "unify" by adding experiments to streaming.
 6. **M3** — make stack status reflect a real probe; correct docs.
 7. **M4/M6/M7/L1–L5** — dead config, version drift, proxy semantics, collector auth validation, parity test scope.
 
