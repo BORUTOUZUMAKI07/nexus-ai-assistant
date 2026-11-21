@@ -1,6 +1,8 @@
 """Auth endpoints integration tests: register, login, refresh, me, guards."""
 import uuid
+from datetime import UTC, datetime, timedelta
 
+import pyotp
 import pytest
 from backend.app.core.security import decode_token
 from backend.app.domain.user.repository import UserRepository
@@ -134,6 +136,64 @@ async def test_login_and_me_flow(client):
     me = await client.get("/api/v1/auth/me", headers=headers)
     assert me.status_code == 200
     assert me.json()["email"] == email
+
+
+@pytest.mark.asyncio
+async def test_two_factor_login_challenge_and_verification(client):
+    """RED: a 2FA account must be able to sign in end-to-end through the API.
+
+    This pins the route-level contract the frontend depends on: login returns
+    a preauth challenge with no session cookies, and /2fa/verify returns the
+    token pair *and* sets the two httpOnly cookies.
+    """
+    email = f"totp-{uuid.uuid4().hex[:8]}@example.com"
+    password = "StrongPass123!"
+    await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "username": f"totp-{uuid.uuid4().hex[:6]}",
+            "password": password,
+        },
+    )
+    login = await client.post(
+        "/api/v1/auth/login", data={"username": email, "password": password}
+    )
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    setup = await client.post("/api/v1/auth/2fa/setup", headers=headers)
+    assert setup.status_code == 200, setup.text
+    secret = setup.json()["secret"]
+    enabled = await client.post(
+        "/api/v1/auth/2fa/enable",
+        json={"code": pyotp.TOTP(secret).now()},
+        headers=headers,
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    client.cookies.clear()
+    challenged = await client.post(
+        "/api/v1/auth/login", data={"username": email, "password": password}
+    )
+    assert challenged.status_code == 200, challenged.text
+    body = challenged.json()
+    assert body["status"] == "2fa_required"
+    assert body["preauth_token"]
+    assert "nexus_access_token" not in challenged.cookies
+    assert "nexus_refresh_token" not in challenged.cookies
+
+    # The code used to enable 2FA is single-use; the next step is still inside
+    # the configured validation window.
+    next_code = pyotp.TOTP(secret).at(datetime.now(UTC) + timedelta(seconds=30))
+    verified = await client.post(
+        "/api/v1/auth/2fa/verify",
+        json={"preauth_token": body["preauth_token"], "code": next_code},
+    )
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["access_token"]
+    assert "nexus_access_token" in verified.cookies
+    assert "nexus_refresh_token" in verified.cookies
 
 
 @pytest.mark.asyncio

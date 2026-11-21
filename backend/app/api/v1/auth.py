@@ -45,6 +45,32 @@ bearer_optional = HTTPBearer(auto_error=False)
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = structlog.get_logger(__name__)
 
+# Shared with the frontend BFF: the browser never reads these httpOnly cookies.
+ACCESS_TOKEN_COOKIE = "nexus_access_token"
+REFRESH_TOKEN_COOKIE = "nexus_refresh_token"
+
+
+def _set_token_cookies(response: Response, tokens: TokenResponse) -> None:
+    """Attach the real session pair to an HTTP response."""
+    response.set_cookie(
+        key=ACCESS_TOKEN_COOKIE,
+        value=tokens.access_token,
+        max_age=tokens.expires_in,
+        httponly=True,
+        secure=settings.ENVIRONMENT != "development",
+        samesite="lax",
+        path="/",
+    )
+    response.set_cookie(
+        key=REFRESH_TOKEN_COOKIE,
+        value=tokens.refresh_token,
+        max_age=tokens.refresh_expires_in,
+        httponly=True,
+        secure=settings.ENVIRONMENT != "development",
+        samesite="lax",
+        path="/",
+    )
+
 
 def _account_key(value: str | None) -> str | None:
     """Hash an account identifier so no raw email/username reaches Redis keys.
@@ -199,26 +225,12 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Set both tokens as httpOnly cookies. The frontend must never read them
-    # from JavaScript; the BFF forwards cookies server-side.
-    response.set_cookie(
-        key="nexus_access_token",
-        value=tokens.access_token,
-        max_age=tokens.expires_in,
-        httponly=True,
-        secure=settings.ENVIRONMENT != "development",
-        samesite="lax",
-        path="/",
-    )
-    response.set_cookie(
-        key="nexus_refresh_token",
-        value=tokens.refresh_token,
-        max_age=tokens.refresh_expires_in,
-        httponly=True,
-        secure=settings.ENVIRONMENT != "development",
-        samesite="lax",
-        path="/",
-    )
+    # A 2FA challenge is not a session: it must never issue cookies. The BFF
+    # stores the preauth token in a short-lived httpOnly cookie of its own.
+    if isinstance(tokens, TwoFactorChallengeResponse):
+        return tokens
+
+    _set_token_cookies(response, tokens)
     return tokens
 
 
@@ -373,6 +385,7 @@ async def two_factor_disable(
 @router.post("/2fa/verify", response_model=TokenResponse)
 async def two_factor_verify(
     request: Request,
+    response: Response,
     body: TwoFactorVerifyRequest,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
@@ -385,9 +398,11 @@ async def two_factor_verify(
         request, action="2fa_verify", limit=10, account=body.preauth_token
     )
     try:
-        return await auth_svc.verify_2fa(body.preauth_token, body.code)
+        tokens = await auth_svc.verify_2fa(body.preauth_token, body.code)
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.message)
+    _set_token_cookies(response, tokens)
+    return tokens
 
 
 @router.get("/2fa/status")
