@@ -29,6 +29,8 @@ def run_gate(
     headless: bool = True,
 ) -> int:
     cmd = [
+        sys.executable,
+        "-m",
         "locust",
         "-f",
         str(LOCUSTFILE),

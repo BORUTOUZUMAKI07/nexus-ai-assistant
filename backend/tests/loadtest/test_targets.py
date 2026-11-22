@@ -56,3 +56,9 @@ def test_gate_uses_shared_results_prefix() -> None:
     source = RUN_GATE.read_text(encoding="utf-8")
     assert "RESULTS_PREFIX" in source
     assert '"/tmp/locust_results"' not in source
+
+
+def test_gate_launches_locust_via_the_current_python() -> None:
+    source = RUN_GATE.read_text(encoding="utf-8")
+    assert '"-m",' in source and '"locust",' in source
+    assert "sys.executable" in source
