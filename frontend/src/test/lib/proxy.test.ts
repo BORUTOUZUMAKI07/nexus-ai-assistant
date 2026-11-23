@@ -67,6 +67,17 @@ describe("backendFetch bearer-forwarding", () => {
     expect(refreshFetch.mock.calls[0][1].headers.get("Authorization")).toBeNull()
   })
 
+  it("forwards the browser User-Agent so the backend can label a session", async () => {
+    const fetchMock = stubFetch(200)
+    getHeader.mockImplementation((name: string) =>
+      name.toLowerCase() === "user-agent" ? "Mozilla/5.0 (Test Device)" : undefined
+    )
+    await backendFetch("/auth/login", { method: "POST" })
+    expect(fetchMock.mock.calls[0][1].headers.get("User-Agent")).toBe(
+      "Mozilla/5.0 (Test Device)"
+    )
+  })
+
   it("targets the /api/v1 backend base URL", async () => {
     const fetchMock = stubFetch(200)
     await backendFetch("/usage/summary")

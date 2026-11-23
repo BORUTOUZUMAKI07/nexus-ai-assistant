@@ -35,6 +35,7 @@ import { AppearanceSettings } from "@/features/settings/AppearanceSettings";
 import { IntegrationsSettings } from "@/features/settings/IntegrationsSettings";
 import { AgentCapabilities } from "@/features/settings/AgentCapabilities";
 import { TwoFactorSettings } from "@/features/settings/TwoFactorSettings";
+import { SessionsSettings } from "@/features/settings/SessionsSettings";
 import { AUTOMATIC_MODEL_TIERS, MODELS, canonicalModelId, modelDisplayName } from "@/lib/models";
 
 export const SettingsView: React.FC = () => {
@@ -495,6 +496,9 @@ export const SettingsView: React.FC = () => {
 
       {/* Account security: TOTP enrollment and revocation */}
       <TwoFactorSettings />
+
+      {/* Account security: active sign-ins and per-device revocation */}
+      <SessionsSettings />
 
       {/* Organizations + webhooks — the API surface with a UI at last */}
       <IntegrationsSettings />

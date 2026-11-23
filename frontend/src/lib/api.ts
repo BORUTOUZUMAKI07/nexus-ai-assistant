@@ -1352,6 +1352,45 @@ export async function startOAuthLogin(provider: string): Promise<OAuthAuthorizat
   return (await res.json()) as OAuthAuthorizationUrl;
 }
 
+// ─── Active sessions ─────────────────────────────────────────────────────────
+
+/**
+ * One active sign-in. `family_id` is the refresh-token family, not an access
+ * token id: it survives rotation for the whole sign-in and is what the backend
+ * revokes. `is_current` is computed server-side from this request's token.
+ */
+export interface SessionInfo {
+  family_id: string;
+  created_at: string;
+  last_seen: string;
+  expires_at: number;
+  user_agent: string;
+  is_current: boolean;
+}
+
+/** Best-effort inventory for the security settings panel. */
+export async function getSessions(): Promise<SessionInfo[]> {
+  const res = await nexusFetch(`${API_BASE}/auth/sessions`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw await parseError(res, "Could not load sessions");
+  return res.json();
+}
+
+/** Terminate one other sign-in. A 404 means it already ended. */
+export async function revokeSession(familyId: string): Promise<void> {
+  // Encode defensively: the id comes from server data today, but a stray
+  // "/" or "?" would otherwise change the route the BFF forwards.
+  const id = encodeURIComponent(familyId);
+  const res = await nexusFetch(`${API_BASE}/auth/sessions/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw await parseError(res, "Could not revoke session");
+  }
+}
+
 // ─── Plans (plan-then-approve) ───────────────────────────────────────────────
 
 export interface PlanItem {

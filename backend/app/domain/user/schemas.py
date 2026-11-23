@@ -1,6 +1,7 @@
 """
 Pydantic Schemas for User Domain (Pydantic V2 Standard).
 """
+
 import re
 from datetime import datetime
 from typing import Any
@@ -31,11 +32,19 @@ class UserCreate(BaseModel):
         every other rendering surface inherits the constraint.
         """
         if not _USERNAME_RE.match(value):
-            raise ValueError(
-                "Username may contain only letters, digits, spaces, dots, "
-                "underscores and hyphens."
-            )
+            raise ValueError("Username may contain only letters, digits, spaces, dots, underscores and hyphens.")
         return value
+
+
+class SessionInfo(BaseModel):
+    """One active sign-in, as shown in the user's security settings."""
+
+    family_id: str
+    created_at: str
+    last_seen: str
+    expires_at: int
+    user_agent: str
+    is_current: bool = False
 
 
 class TokenResponse(BaseModel):
@@ -57,6 +66,7 @@ class TokenRefresh(BaseModel):
 
 
 # ── OAuth / OAuth (Google + GitHub) ─────────────────────────────────────────
+
 
 class OAuthCallbackRequest(BaseModel):
     """The authorization-code leg of the per-provider OAuth callback."""
@@ -99,6 +109,7 @@ class OAuthProvidersResponse(BaseModel):
 
 # ── Two-Factor Authentication (TOTP) ────────────────────────────────────────
 
+
 class TwoFactorChallengeResponse(BaseModel):
     status: str = "2fa_required"
     preauth_token: str
@@ -120,6 +131,7 @@ class TwoFactorVerifyRequest(BaseModel):
 
 
 # ── Email verification / password reset ─────────────────────────────────────
+
 
 class VerifyEmailRequest(BaseModel):
     token: str
@@ -182,10 +194,7 @@ class UserSettingsUpdate(BaseModel):
             return value
         reserved = RESERVED_SETTINGS_KEYS.intersection(value)
         if reserved:
-            raise ValueError(
-                "custom_settings may not set reserved key(s): "
-                + ", ".join(sorted(reserved))
-            )
+            raise ValueError("custom_settings may not set reserved key(s): " + ", ".join(sorted(reserved)))
         return value
 
 

@@ -20,11 +20,13 @@ import {
   fetchSettings,
   fetchSliceReport,
   fetchUsage,
+  getSessions,
   type APIKey,
   type ArtifactItem,
   type Conversation,
   type KnowledgeFile,
   type Project,
+  type SessionInfo,
 } from "@/lib/api";
 
 // ─── Admin-surface types ─────────────────────────────────────────────────────
@@ -97,6 +99,7 @@ export const settingsKeys = {
   settings: ["settings"] as const,
   memories: ["settings", "memories"] as const,
   keys: ["settings", "keys"] as const,
+  sessions: ["auth", "sessions"] as const,
 };
 
 export const adminKeys = {
@@ -251,6 +254,19 @@ export function useMemoriesQuery() {
 
 export function useAPIKeysQuery() {
   return useQuery({ queryKey: settingsKeys.keys, queryFn: fetchAPIKeys });
+}
+
+/**
+ * Active sign-ins. This panel is security-relevant but not latency-critical,
+ * so it re-fetches when the window regains focus — a session revoked in
+ * another tab shows up here without a manual reload.
+ */
+export function useSessionsQuery() {
+  return useQuery({
+    queryKey: settingsKeys.sessions,
+    queryFn: async (): Promise<SessionInfo[]> => getSessions(),
+    refetchOnWindowFocus: true,
+  });
 }
 
 /**

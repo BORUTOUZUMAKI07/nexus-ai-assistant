@@ -49,13 +49,28 @@ class RedisService(ICacheService):
     async def delete(self, key: str) -> int:
         return await self.client.delete(key)
 
+    async def scan(self, prefix: str, limit: int = 1000) -> list[str]:
+        """Bounded incremental key scan. Never uses KEYS (blocks Redis)."""
+        if not prefix or limit < 1:
+            return []
+        found: list[str] = []
+        cursor = 0
+        while True:
+            cursor, batch = await self.client.scan(cursor, match=f"{prefix}*", count=min(100, limit))
+            found.extend(batch)
+            if cursor == 0 or len(found) >= limit:
+                break
+        return found[:limit]
+
     async def is_token_blacklisted(self, jti: str) -> bool:
         return await self.client.exists(f"blacklist:{jti}") > 0
 
     async def blacklist_token(self, jti: str, ttl_seconds: int) -> None:
         await self.client.setex(f"blacklist:{jti}", ttl_seconds, "true")
 
-    async def check_rate_limit(self, identifier: str, limit: int = 100, window_seconds: int = 60, cost: int = 1) -> tuple[bool, int]:
+    async def check_rate_limit(
+        self, identifier: str, limit: int = 100, window_seconds: int = 60, cost: int = 1
+    ) -> tuple[bool, int]:
         """
         Sliding-window token bucket rate limiter using an atomic Lua script.
         Trimming, counting, and recording happen in ONE server-side op, so two

@@ -2,6 +2,7 @@
 Authentication API Router.
 Pure HTTP transport layer — delegates all auth use cases to AuthService (SRP + DIP).
 """
+
 import hashlib
 import time
 from collections import deque
@@ -20,6 +21,7 @@ from backend.app.domain.user.schemas import (
     OAuthLoginResponse,
     OAuthProvidersResponse,
     ResetPasswordRequest,
+    SessionInfo,
     TokenRefresh,
     TokenResponse,
     TwoFactorChallengeResponse,
@@ -77,6 +79,15 @@ def _set_token_cookies(response: Response, tokens: TokenResponse) -> None:
     )
 
 
+def _client_user_agent(request: Request) -> str:
+    """The browser's user-agent, bounded to what the session index stores.
+
+    A header is caller-controlled text, so this is a display label only: the
+    session registry truncates it again and never uses it for authorization.
+    """
+    return request.headers.get("user-agent", "")[:200]
+
+
 def _account_key(value: str | None) -> str | None:
     """Hash an account identifier so no raw email/username reaches Redis keys.
 
@@ -110,9 +121,7 @@ def _memory_rate_limit(identifier: str, *, limit: int, window_seconds: int) -> b
     if window is None:
         if len(_LOCAL_RATE_WINDOWS) >= _LOCAL_RATE_MAX_BUCKETS:
             cutoff = now - window_seconds
-            for stale in [
-                k for k, w in _LOCAL_RATE_WINDOWS.items() if not w or w[-1] <= cutoff
-            ]:
+            for stale in [k for k, w in _LOCAL_RATE_WINDOWS.items() if not w or w[-1] <= cutoff]:
                 del _LOCAL_RATE_WINDOWS[stale]
             if len(_LOCAL_RATE_WINDOWS) >= _LOCAL_RATE_MAX_BUCKETS:
                 coldest = min(_LOCAL_RATE_WINDOWS, key=lambda k: _LOCAL_RATE_WINDOWS[k][-1])
@@ -218,11 +227,13 @@ async def login(
     Both tokens are set as httpOnly cookies (``nexus_access_token`` and
     ``nexus_refresh_token``). The response body carries no secrets.
     """
-    await _enforce_auth_rate_limit(
-        request, action="login", limit=10, account=form_data.username
-    )
+    await _enforce_auth_rate_limit(request, action="login", limit=10, account=form_data.username)
     try:
-        tokens = await auth_svc.login(form_data.username, form_data.password)
+        tokens = await auth_svc.login(
+            form_data.username,
+            form_data.password,
+            user_agent=_client_user_agent(request),
+        )
     except AuthenticationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -253,9 +264,7 @@ async def refresh_token(
     if not refresh_token and token_in:
         refresh_token = token_in.refresh_token
     if not refresh_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token"
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token")
     try:
         tokens = await auth_svc.refresh(refresh_token)
     except AuthenticationError as exc:
@@ -286,6 +295,52 @@ async def refresh_token(
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.get("/sessions", response_model=list[SessionInfo])
+async def list_sessions(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_optional),
+    current_user: User = Depends(get_current_user),
+    auth_svc: AuthService = Depends(get_auth_service),
+):
+    """List the user's active sign-ins and flag the one making this request.
+
+    The inventory is best-effort Redis state: an empty list during a cache
+    outage is not a security decision, only a missing convenience view.
+    """
+    current_family = ""
+    if credentials and credentials.credentials:
+        try:
+            payload = decode_token(credentials.credentials)
+            if payload.get("type") == "access":
+                current_family = str(payload.get("fam") or "")
+        except Exception:  # nosec B110 - best-effort label, never a gate
+            pass
+    rows = await auth_svc.list_sessions(current_user.id)
+    return [
+        SessionInfo(
+            family_id=str(row["family_id"]),
+            created_at=str(row.get("created_at", "")),
+            last_seen=str(row.get("last_seen", "")),
+            expires_at=int(row.get("expires_at", 0)),
+            user_agent=str(row.get("user_agent", "")),
+            is_current=str(row["family_id"]) == current_family,
+        )
+        for row in rows
+    ]
+
+
+@router.delete("/sessions/{family_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_session(
+    family_id: str,
+    current_user: User = Depends(get_current_user),
+    auth_svc: AuthService = Depends(get_auth_service),
+):
+    """Terminate one sign-in. The family id is scoped to the caller's user."""
+    revoked = await auth_svc.revoke_session(current_user.id, family_id)
+    if not revoked:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
@@ -337,6 +392,7 @@ async def logout(
 
 
 # ─── Two-Factor Authentication (TOTP) ────────────────────────────────────────
+
 
 @router.post("/2fa/setup", response_model=TwoFactorSetupResponse)
 async def two_factor_setup(
@@ -399,11 +455,13 @@ async def two_factor_verify(
     # few codes are valid at any instant. Without this limit the endpoint is an
     # unthrottled oracle: an attacker holding a stolen preauth token could grind
     # codes until one lands.
-    await _enforce_auth_rate_limit(
-        request, action="2fa_verify", limit=10, account=body.preauth_token
-    )
+    await _enforce_auth_rate_limit(request, action="2fa_verify", limit=10, account=body.preauth_token)
     try:
-        tokens = await auth_svc.verify_2fa(body.preauth_token, body.code)
+        tokens = await auth_svc.verify_2fa(
+            body.preauth_token,
+            body.code,
+            user_agent=_client_user_agent(request),
+        )
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.message)
     _set_token_cookies(response, tokens)
@@ -420,6 +478,7 @@ async def two_factor_status(
 
 
 # ─── Email verification & password reset ─────────────────────────────────────
+
 
 @router.post("/verify-email", response_model=UserResponse)
 async def verify_email(
@@ -450,9 +509,7 @@ async def forgot_password(
     auth_svc: AuthService = Depends(get_auth_service),
 ):
     """Issues + emails a reset token. Returns the same envelope for known/unknown emails."""
-    await _enforce_auth_rate_limit(
-        request, action="forgot_password", limit=5, account=body.email
-    )
+    await _enforce_auth_rate_limit(request, action="forgot_password", limit=5, account=body.email)
     result = await auth_svc.initiate_password_reset(body.email)
     return result
 
@@ -463,9 +520,7 @@ async def reset_password(
     request: Request,
     auth_svc: AuthService = Depends(get_auth_service),
 ):
-    await _enforce_auth_rate_limit(
-        request, action="reset_password", limit=5, account=body.token
-    )
+    await _enforce_auth_rate_limit(request, action="reset_password", limit=5, account=body.token)
     try:
         return await auth_svc.reset_password(body.token, body.new_password)
     except AuthenticationError as exc:
@@ -478,6 +533,7 @@ async def reset_password(
 # the code the provider hands back (the frontend proxy performs the exchange
 # and stores the session in httpOnly cookies). Both endpoints 404 while the
 # named provider is unconfigured.
+
 
 # Declared BEFORE `/oauth/{provider}`. FastAPI matches routes in registration
 # order, so a literal path added after a `{provider}` catch-all is unreachable:
@@ -527,7 +583,7 @@ async def oauth_callback(
     await _enforce_auth_rate_limit(request, action="oauth_callback", limit=20)
     try:
         identity = await oauth_svc.complete_login(body.code, body.state)
-        return await auth_svc.oauth_login(identity)
+        return await auth_svc.oauth_login(identity, user_agent=_client_user_agent(request))
     except AuthenticationError as exc:
         raise HTTPException(status_code=400, detail=exc.message)
 
@@ -551,14 +607,12 @@ async def oauth_callback_browser(
     # a deployed instance would send every OAuth user to localhost:3000.
     frontend_origin = (settings.APP_PUBLIC_URL or "http://localhost:3000").rstrip("/")
     if not code or not state:
-        return RedirectResponse(
-            url=f"{frontend_origin}/signin?error=oauth_missing_params", status_code=302
-        )
+        return RedirectResponse(url=f"{frontend_origin}/signin?error=oauth_missing_params", status_code=302)
 
     await _enforce_auth_rate_limit(request, action="oauth_callback", limit=20)
     try:
         identity = await oauth_svc.complete_login(code, state)
-        res = await auth_svc.oauth_login(identity)
+        res = await auth_svc.oauth_login(identity, user_agent=_client_user_agent(request))
         if isinstance(res, TwoFactorChallengeResponse):
             return RedirectResponse(url=f"{frontend_origin}/signin?oauth=2fa", status_code=302)
 
@@ -587,6 +641,4 @@ async def oauth_callback_browser(
     except AuthenticationError as exc:
         # `quote`, not raw interpolation: the message contains spaces and `.`,
         # and a raw space in a Location header is not a valid URI.
-        return RedirectResponse(
-            url=f"{frontend_origin}/signin?error={quote(exc.message)}", status_code=302
-        )
+        return RedirectResponse(url=f"{frontend_origin}/signin?error={quote(exc.message)}", status_code=302)

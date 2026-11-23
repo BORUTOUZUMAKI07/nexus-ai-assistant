@@ -120,8 +120,8 @@ export async function backendFetch(
   const accessToken = options.accessToken ?? cookieStore.get(TOKEN_COOKIE)?.value;
 
   const method = (init?.method ?? "GET").toUpperCase();
+  const requestHeaders = await nextHeaders();
   if (MUTATING_METHODS.has(method)) {
-    const requestHeaders = await nextHeaders();
     if (await isCrossOriginRequest(requestHeaders)) {
       return new Response(
         JSON.stringify({ detail: "cross_origin_request_rejected" }),
@@ -131,6 +131,13 @@ export async function backendFetch(
   }
 
   const headers = new Headers(init?.headers);
+  // The session inventory labels each sign-in with its device. Only this BFF
+  // sees the browser's User-Agent; the backend receives it as a plain header
+  // and stores a bounded, truncated copy alongside the token family.
+  const browserUserAgent = requestHeaders.get("user-agent");
+  if (browserUserAgent && !headers.has("User-Agent")) {
+    headers.set("User-Agent", browserUserAgent);
+  }
   const isFormBody = init?.body instanceof FormData;
   if (!isFormBody && !headers.get("Content-Type")) {
     headers.set("Content-Type", "application/json");

@@ -2,6 +2,7 @@
 Abstract Cache Service Interface.
 Enforces Interface Segregation, Open/Closed, and Dependency Inversion principles for cache and state backends.
 """
+
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -38,6 +39,16 @@ class ICacheService(ABC):
     @abstractmethod
     async def delete(self, key: str) -> int:
         """Delete a key from cache."""
+        pass
+
+    @abstractmethod
+    async def scan(self, prefix: str, limit: int = 1000) -> list[str]:
+        """Return at most ``limit`` keys starting with ``prefix``.
+
+        Used for the bounded session inventory. Implementations must use a
+        server-side incremental scan (Redis SCAN), never KEYS: KEYS blocks the
+        whole Redis instance on large databases.
+        """
         pass
 
     @abstractmethod

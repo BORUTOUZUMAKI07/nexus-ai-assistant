@@ -62,6 +62,27 @@ export const mockAPIKeys = [
   },
 ]
 
+export const mockSessions = [
+  {
+    family_id: "fam-current",
+    created_at: "2026-11-20T09:00:00+00:00",
+    last_seen: "2026-11-23T08:00:00+00:00",
+    expires_at: 1800000000,
+    user_agent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    is_current: true,
+  },
+  {
+    family_id: "fam-phone",
+    created_at: "2026-11-18T12:00:00+00:00",
+    last_seen: "2026-11-22T18:00:00+00:00",
+    expires_at: 1790000000,
+    user_agent:
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1",
+    is_current: false,
+  },
+]
+
 export const mockPlan = {
   id: "plan-1",
   conversation_id: "conv-100",
@@ -411,6 +432,11 @@ export const handlers = [
   http.post("/api/auth/2fa/enable", () => HttpResponse.json({ status: "enabled" })),
   http.post("/api/auth/2fa/disable", () => HttpResponse.json({ status: "disabled" })),
   http.get("/api/auth/2fa/status", () => HttpResponse.json({ enabled: false })),
+
+  // Active sign-ins: the security panel needs both a reachable list and a
+  // reachable revoke, or a component test could only prove an MSW fiction.
+  http.get("/api/auth/sessions", () => HttpResponse.json(mockSessions)),
+  http.delete("/api/auth/sessions/:id", () => new HttpResponse(null, { status: 204 })),
 
   http.post("/api/auth/register", () => HttpResponse.json(mockUser)),
 

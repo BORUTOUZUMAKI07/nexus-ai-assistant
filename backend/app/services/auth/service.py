@@ -3,6 +3,7 @@ Auth Application Service.
 Owns all authentication and user registration use cases (SRP).
 Route handlers depend on this abstraction, not on UserRepository directly (DIP).
 """
+
 import asyncio
 import json
 import secrets
@@ -31,6 +32,7 @@ from backend.app.domain.user.schemas import (
     UserCreate,
 )
 from backend.app.infrastructure.cache.redis_client import get_cache_service
+from backend.app.services.auth import sessions as session_registry
 from backend.app.services.auth.oauth import OAuthIdentity
 from backend.app.services.auth.two_factor import TwoFactorService
 from backend.app.services.notifications.email import build_email_link, email_service, escape_html
@@ -96,13 +98,9 @@ class AuthService:
     async def register(self, user_in: UserCreate) -> User:
         """Register a new user, raising on duplicate email or username."""
         if await self._repo.get_by_email(user_in.email):
-            raise UserAlreadyExistsError(
-                f"A user with email '{user_in.email}' already exists."
-            )
+            raise UserAlreadyExistsError(f"A user with email '{user_in.email}' already exists.")
         if await self._repo.get_by_username(user_in.username):
-            raise UserAlreadyExistsError(
-                f"A user with username '{user_in.username}' already exists."
-            )
+            raise UserAlreadyExistsError(f"A user with username '{user_in.username}' already exists.")
         # First-user bootstrap. Nothing in the application could ever produce an
         # admin (registration hardcoded `role="user"`, and the admin API only
         # *reads* roles), so on a fresh deployment the admin console was
@@ -110,10 +108,7 @@ class AuthService:
         # The founding account is the standard owner bootstrap; it grants
         # exactly one promotion, to the first row this instance ever creates, so
         # it cannot escalate an existing user on a populated database.
-        is_first_user = (
-            bool(getattr(settings, "FIRST_USER_IS_ADMIN", True))
-            and not await self._repo.any_users_exist()
-        )
+        is_first_user = bool(getattr(settings, "FIRST_USER_IS_ADMIN", True)) and not await self._repo.any_users_exist()
         user = await self._repo.create(user_in)
         if is_first_user:
             user.role = "admin"
@@ -124,7 +119,9 @@ class AuthService:
         logger.info("user_registered", user_id=str(user.id))
         return user
 
-    async def login(self, identifier: str, password: str) -> TokenResponse | TwoFactorChallengeResponse:
+    async def login(
+        self, identifier: str, password: str, user_agent: str = ""
+    ) -> TokenResponse | TwoFactorChallengeResponse:
         """Authenticate user by email or username + password, return token pair.
 
         When the user has TOTP 2FA enabled, a short-lived ``preauth`` challenge
@@ -145,11 +142,7 @@ class AuthService:
         if not user:
             user = await self._repo.get_by_username(identifier)
 
-        if (
-            not user
-            or user.hashed_password is None
-            or not verify_password(password, user.hashed_password)
-        ):
+        if not user or user.hashed_password is None or not verify_password(password, user.hashed_password):
             raise AuthenticationError("Incorrect email/username or password.")
         if not user.is_active:
             raise AuthenticationError("User account is inactive.")
@@ -170,9 +163,9 @@ class AuthService:
                 expires_in=settings.TOTP_PREAUTH_MINUTES * 60,
             )
 
-        return await self._issue_token_pair(user)
+        return await self._issue_token_pair(user, user_agent=user_agent)
 
-    async def verify_2fa(self, preauth_token: str, code: str) -> TokenResponse:
+    async def verify_2fa(self, preauth_token: str, code: str, user_agent: str = "") -> TokenResponse:
         """Exchange a preauth challenge + valid TOTP code for a token pair."""
         payload = decode_token(preauth_token)
         if payload.get("type") != "preauth":
@@ -189,11 +182,9 @@ class AuthService:
         if not ok:
             raise AuthenticationError("Invalid two-factor authentication code.")
         logger.info("two_factor_verified", user_id=str(user_id))
-        return await self._issue_token_pair(user)
+        return await self._issue_token_pair(user, user_agent=user_agent)
 
-    async def _issue_token_pair(
-        self, user: User, family_id: str | None = None
-    ) -> TokenResponse:
+    async def _issue_token_pair(self, user: User, family_id: str | None = None, user_agent: str = "") -> TokenResponse:
         # A sign-in starts a new token family. A refresh carries the existing one
         # forward, so every token descended from one sign-in shares a family id and
         # a theft can be traced to the sign-in that leaked rather than to the user
@@ -215,8 +206,14 @@ class AuthService:
             # only an Authorization header (no body, no refresh cookie).
             additional_claims={"email": user.email, "fam": family_id},
         )
-        refresh_token = create_refresh_token(
-            subject=user.id, family_id=family_id
+        refresh_token = create_refresh_token(subject=user.id, family_id=family_id)
+        # The inventory is an index for the user, not an authorization source:
+        # record it best-effort so an offline Redis cannot fail a valid login.
+        await session_registry.record_session(
+            user.id,
+            family_id,
+            int(time.time()) + settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+            user_agent,
         )
         logger.info("user_logged_in", user_id=str(user.id))
         return TokenResponse(
@@ -227,7 +224,9 @@ class AuthService:
             refresh_expires_in=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         )
 
-    async def oauth_login(self, identity: OAuthIdentity) -> TokenResponse | TwoFactorChallengeResponse:
+    async def oauth_login(
+        self, identity: OAuthIdentity, user_agent: str = ""
+    ) -> TokenResponse | TwoFactorChallengeResponse:
         """Sign a user in via a verified OIDC identity.
 
         Identity resolution order is deliberate: the IdP's stable subject id is
@@ -315,7 +314,7 @@ class AuthService:
                 expires_in=settings.TOTP_PREAUTH_MINUTES * 60,
             )
 
-        return await self._issue_token_pair(user)
+        return await self._issue_token_pair(user, user_agent=user_agent)
 
     async def _provision_oauth_user(self, identity: OAuthIdentity, email: str) -> User:
         """Auto-provision a passwordless OAuth account (the IdP vouches for it)."""
@@ -382,20 +381,13 @@ class AuthService:
         result = await email_service.send(
             to=user.email,
             subject="Verify your Nexus account",
-            body_html=(
-                f"<p>Welcome, {escape_html(user.username)}!</p>"
-                f"<p><a href='{link}'>Verify your email</a></p>"
-            ),
+            body_html=(f"<p>Welcome, {escape_html(user.username)}!</p><p><a href='{link}'>Verify your email</a></p>"),
             body_text=f"Verify your email: {link}",
         )
         # The token is surfaced to the caller only behind the explicit,
         # default-off dev-link setting: an HTTP response is not a delivery
         # channel a deployment should hand credentials through.
-        result["dev_link"] = (
-            link
-            if settings.EMAIL_DEV_LINK_ENABLED and result.get("channel") == "dev"
-            else None
-        )
+        result["dev_link"] = link if settings.EMAIL_DEV_LINK_ENABLED and result.get("channel") == "dev" else None
         return result
 
     async def initiate_password_reset(self, email: str) -> dict:
@@ -549,9 +541,7 @@ class AuthService:
                 **({"fam": family_id} if family_id else {}),
             },
         )
-        new_refresh = create_refresh_token(
-            subject=user.id, family_id=family_id or None
-        )
+        new_refresh = create_refresh_token(subject=user.id, family_id=family_id or None)
         response = TokenResponse(
             access_token=access_token,
             refresh_token=new_refresh,
@@ -580,6 +570,9 @@ class AuthService:
 
         if action == "first_use":
             # We won the rotation. Our tokens are the authoritative ones.
+            # Keep the user-visible inventory in step: same family, longer
+            # lifetime, fresh last-seen. Best-effort inside the registry.
+            await session_registry.touch_session(user_id, family_id, int(decode_token(new_refresh)["exp"]))
             return response
 
         if action == "race_replay":
@@ -611,9 +604,7 @@ class AuthService:
             await self._revoke_refresh_family(user_id, family_id=family_id or None)
         raise AuthenticationError("Refresh token has already been used.")
 
-    async def _revoke_refresh_family(
-        self, user_id: UUID, family_id: str | None = None
-    ) -> None:
+    async def _revoke_refresh_family(self, user_id: UUID, family_id: str | None = None) -> None:
         """Revoke a refresh-token family for the refresh-token lifetime.
 
         With a ``family_id`` the blast radius is one sign-in: the sessions that
@@ -626,11 +617,7 @@ class AuthService:
         written, so the replayed token still hits its own single-use rejection
         but sibling sessions survive. Never raises.
         """
-        key = (
-            f"{_REFRESH_REVOKED_PREFIX}{family_id}"
-            if family_id
-            else f"{_REFRESH_REVOKED_PREFIX}{user_id}"
-        )
+        key = f"{_REFRESH_REVOKED_PREFIX}{family_id}" if family_id else f"{_REFRESH_REVOKED_PREFIX}{user_id}"
         try:
             await get_cache_service().set(
                 key,
@@ -644,10 +631,14 @@ class AuthService:
                 family_id=family_id or "user-wide",
                 error=type(exc).__name__,
             )
+        # Drop the matching inventory row(s) so the settings page never lists a
+        # session that this revocation just killed. Registry writes fail open.
+        if family_id:
+            await session_registry.delete_session(user_id, family_id)
+        else:
+            await session_registry.delete_user_sessions(user_id)
 
-    async def _clear_refresh_family_revocation(
-        self, user_id: UUID, family_id: str | None = None
-    ) -> None:
+    async def _clear_refresh_family_revocation(self, user_id: UUID, family_id: str | None = None) -> None:
         """Lift a standing refresh-family revocation on a successful sign-in.
 
         The counterpart to ``_revoke_refresh_family``: a sign-in is proof that the
@@ -674,9 +665,7 @@ class AuthService:
                 error=type(exc).__name__,
             )
 
-    async def _is_refresh_family_revoked(
-        self, user_id: UUID, family_id: str | None = None
-    ) -> bool:
+    async def _is_refresh_family_revoked(self, user_id: UUID, family_id: str | None = None) -> bool:
         """Whether this refresh family was revoked. Fails open.
 
         Checks the family key when there is one, and the older user-wide key
@@ -713,9 +702,7 @@ class AuthService:
             # Best-effort revocation: expired or malformed tokens cannot be re-used anyway
             logger.debug("auth.revoke_refresh_token_failed", error=str(exc))
 
-    async def revoke_refresh_family(
-        self, user_id: UUID, family_id: str | None = None
-    ) -> None:
+    async def revoke_refresh_family(self, user_id: UUID, family_id: str | None = None) -> None:
         """Terminate a sign-in session server-side.
 
         Used by logout: the client may send no refresh token at all (only an
@@ -729,9 +716,28 @@ class AuthService:
         """Revoke every refresh family for a user (used when no family is known)."""
         await self._revoke_refresh_family(user_id, family_id=None)
 
-    async def logout(
-        self, access_token: str | None, refresh_token: str | None
-    ) -> bool:
+    async def list_sessions(self, user_id: UUID) -> list[dict]:
+        """Return the user's sign-ins for the settings page."""
+        return await session_registry.list_sessions(user_id)
+
+    async def revoke_session(self, user_id: UUID, family_id: str) -> bool:
+        """Revoke one sign-in identified by its token-family id.
+
+        The inventory key embeds the caller's user id, so a guessed family id
+        belonging to somebody else is simply not found and returns False.
+        """
+        if not family_id or len(family_id) > 64 or any(c not in "0123456789abcdef" for c in family_id):
+            return False
+        try:
+            raw = await get_cache_service().get(session_registry.session_key(user_id, family_id))
+        except Exception:  # pragma: no cover - defensive
+            return False
+        if not raw:
+            return False
+        await self._revoke_refresh_family(user_id, family_id=family_id)
+        return True
+
+    async def logout(self, access_token: str | None, refresh_token: str | None) -> bool:
         """Terminate the caller's session server-side.
 
         Resolves the refresh family from the refresh token when one is
@@ -754,9 +760,7 @@ class AuthService:
                     if jti and exp:
                         ttl = max(1, int(exp) - int(time.time()))
                         try:
-                            await get_cache_service().set(
-                                f"refresh:used:{jti}", "1", ttl_seconds=ttl
-                            )
+                            await get_cache_service().set(f"refresh:used:{jti}", "1", ttl_seconds=ttl)
                         except Exception as exc:
                             logger.warning(
                                 "logout_refresh_mark_failed",
@@ -794,15 +798,9 @@ class AuthService:
         still bounds its life.
         """
         exp = payload.get("exp")
-        ttl_seconds = (
-            max(1, int(exp) - int(time.time())) if exp else 3600
-        )
+        ttl_seconds = max(1, int(exp) - int(time.time())) if exp else 3600
         try:
-            return await get_cache_service().set_if_absent(
-                f"reset:used:{jti}", "1", ttl_seconds=ttl_seconds
-            )
+            return await get_cache_service().set_if_absent(f"reset:used:{jti}", "1", ttl_seconds=ttl_seconds)
         except Exception as exc:
-            logger.warning(
-                "reset_token_single_use_check_failed", error=type(exc).__name__
-            )
+            logger.warning("reset_token_single_use_check_failed", error=type(exc).__name__)
             return True
