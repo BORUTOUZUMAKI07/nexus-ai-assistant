@@ -47,26 +47,31 @@ jobs:
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
       - name: Smoke check deployed dependency health
-        # Three attempts: a cold Render start can answer 503 once before the
-        # process is warm. A degraded dependency fails the nightly run so this
-        # is an actual alarm, not a log nobody reads. Only statuses are printed;
-        # no credentials are interpolated into the step.
+        # A sleeping free-tier Render instance can answer nothing for 30s+.
+        # The warmup request wakes it and is allowed to fail; the strict loop
+        # then retries long enough to tell a slow cold start from a real outage.
+        # A degraded dependency still fails the nightly run so this is an actual
+        # alarm, not a log nobody reads. Only statuses are printed; no
+        # credentials are interpolated into the step.
         shell: bash
         env:
           SMOKE_BASE_URL: ${{ vars.SMOKE_BASE_URL || 'https://nexus-backend-owq5.onrender.com' }}
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if curl -fsS --max-time 30 "$SMOKE_BASE_URL/health" >/dev/null \
-              && curl -fsS --max-time 30 "$SMOKE_BASE_URL/health/ready" >/dev/null \
-              && curl -fsS --max-time 30 "$SMOKE_BASE_URL/health/dependencies" > /tmp/nightly_dependencies.json; then
+          # Warmup: a sleeping instance may answer nothing for up to 90s. That
+          # is expected, so this request must never fail the step.
+          curl -fsS --max-time 90 "$SMOKE_BASE_URL/health" >/dev/null 2>&1 || true
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS --max-time 60 "$SMOKE_BASE_URL/health" >/dev/null \
+              && curl -fsS --max-time 60 "$SMOKE_BASE_URL/health/ready" >/dev/null \
+              && curl -fsS --max-time 60 "$SMOKE_BASE_URL/health/dependencies" > /tmp/nightly_dependencies.json; then
               break
             fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "deployed health probe failed after 3 attempts"
+            if [ "$attempt" -eq 5 ]; then
+              echo "deployed health probe failed after 5 attempts"
               exit 1
             fi
-            sleep 10
+            sleep 15
           done
           python3 - <<'PY'
           import json
