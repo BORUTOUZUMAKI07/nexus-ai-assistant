@@ -1,10 +1,13 @@
 # Full outage
 
-Alert: `NexusRequestsDown` (scrape `up == 0` for 2m) — worst case, users report
-a dead app.
+Worst case: users report a dead app. In the deployed Render stack there is no
+Prometheus scraper, so `NexusRequestsDown` (`up == 0`) cannot fire; it only
+applies to local scrape configurations. Production starts from New Relic OTLP
+signal loss plus `/api/v1/health`.
 
 ## Symptoms
-- `/metrics` scrape failing (`up{job="nexus-backend"} == 0`).
+- New Relic stops receiving OTLP signals from the backend (prod), or a local
+  `/metrics` scrape fails with `up{job="nexus-backend"} == 0` (local-only).
 - Smoke check `/api/v1/health` returns 5xx or times out.
 - Possibly total loss of traffic (frontend errors on every request).
 
@@ -25,8 +28,9 @@ a dead app.
    `backend/app/main.py` lifespan.
 
 ## Diagnosis
-- Read `/metrics` scrape errors first — a failed scrape says **Prometheus
-  cannot reach the pod**, which is usually network/CI, not code.
+- Check OTLP ingest first in production — silent export failure is the
+  equivalent of a failed scrape, and the deployed stack has no scraper to
+  inspect. For a local scrape setup, read `/metrics` scrape errors next.
 - Then read `nexus_ai_shutting_down` / `unhandled_exception_handler` logs —
   an unhandled exception inside a request turns into a 500 but shouldn't take
   the process down; a panic in a lifecycle worker (`lifespan_graph`) can.
@@ -46,6 +50,6 @@ a dead app.
 
 ## Prevention
 - Migration head check in CI (add to the deployment pipeline).
-- Smoke-test `/api/v1/health` + `/metrics` for 60s in the canary job (see
+- Smoke-test `/api/v1/health` and OTLP ingest in CI (see
   `.github/workflows/ci.yml`).
 - Keep runbooks updated: this page should be < 5 minutes to first mitigation.

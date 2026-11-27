@@ -8,7 +8,10 @@
 # deployed stack the same samples are pushed to New Relic over OTLP (the
 # collector's metrics pipeline is fed by the `otlp` receiver, not a scrape —
 # see docs/observability-deployment.md), so a scrape-based `up{job="nexus-backend"}`
-# alert is only meaningful for a deployment that still scrapes /metrics.
+# alert is only meaningful for a deployment that still scrapes /metrics. There
+# is no Prometheus scraper in the deployed Render stack: `NexusRequestsDown`
+# only applies to a local-only scrape configuration and can never fire in prod.
+# Use New Relic OTLP signal loss plus /api/v1/health for production outages.
 # Families (identical names on both paths):
 #   nexus_requests_total{operation}                     counter
 #   nexus_errors_total{error}                           counter
@@ -21,15 +24,15 @@
 groups:
   - name: nexus-slo-burn
     rules:
-      # Availability / scrape health -------------------------------------------
+      # Scrape health (local-only; no prod scraper) ----------------------------
       - alert: NexusRequestsDown
         expr: up{job="nexus-backend"} == 0
         for: 2m
         labels:
-          severity: page
-          slo: availability
+          severity: ticket
+          slo: scrape-health
         annotations:
-          summary: "Nexus backend is not being scraped"
+          summary: "Nexus backend scrape is down (local Prometheus only)"
           runbook: "docs/runbooks/full-outage.md"
 
       # Error-rate SLI (identified errors as a share of traffic) ---------------

@@ -171,7 +171,8 @@ never assumed from the picker.
 - `GET /health` — liveness
 - `GET /health/ready` — readiness (DB/Redis/Qdrant checks)
 - `GET /` — root banner
-- `GET /metrics` — Prometheus text format (0.0.4), family names
+- `GET /metrics` — token-guarded Prometheus text format (0.0.4), local/debug
+  only; there is no scraper in the deployed stack. Family names:
   `nexus_requests_total`, `nexus_errors_total`, `nexus_latency_seconds`,
   `nexus_latency_avg_seconds`
 

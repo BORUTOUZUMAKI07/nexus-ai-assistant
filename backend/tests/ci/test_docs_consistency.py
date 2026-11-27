@@ -87,3 +87,42 @@ def test_m5_remediation_item_no_longer_asks_for_a_full_path_unification():
 
     assert "unify sync/stream chat paths" not in item_5
     assert "resolved" in item_5.lower()
+
+
+def test_observability_docs_do_not_present_a_prometheus_scrape_as_deployed():
+    """The deployed Render stack pushes OTLP; no service scrapes `/metrics`.
+
+    `NexusRequestsDown` is an `up == 0` alert, so it can never fire in
+    production. Docs that still lead with scrape triage send an on-call engineer
+    to a signal that does not exist while the real outage is a silent OTLP
+    pipeline.
+    """
+    def flat(relative: str) -> str:
+        # Prose is wrapped at 80 columns; phrase checks must not depend on a
+        # line break landing in the middle of the term. Strip Markdown
+        # blockquotes and YAML comment markers first: they are syntax, not prose.
+        text = (_ROOT / relative).read_text(encoding="utf-8")
+        text = re.sub(r"(?m)^\s*>\s?", "", text)
+        text = re.sub(r"(?m)^\s*#\s?", "", text)
+        return " ".join(text.split())
+
+    slo = flat("docs/slo.md")
+    rules = flat("docs/alerting/alert-rules.yml")
+    runbooks = flat("docs/runbooks/README.md")
+    outage = flat("docs/runbooks/full-outage.md")
+    api = flat("docs/api-reference.md")
+
+    assert "no Prometheus scraper" in slo
+    assert "`NexusRequestsDown` only applies" in slo
+    assert "contract only — no instrumentation is implemented" not in slo
+
+    assert "`NexusRequestsDown` only applies" in rules
+    assert "local-only" in rules.lower()
+
+    assert "`NexusRequestsDown` only applies" in runbooks
+    assert "signal loss" in runbooks.lower()
+
+    assert "no Prometheus scraper" in outage
+    assert "Read `/metrics` scrape errors first" not in outage
+
+    assert "local/debug only" in api

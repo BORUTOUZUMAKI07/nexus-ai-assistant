@@ -1,21 +1,23 @@
 # Service Level Objectives (SLOs)
 
 > Applies to the Nexus AI Assistant API (backend). The metric families below
-> are emitted by the in-process `MetricsCollector` and reach the sink one of two
-> ways: **OTLP push** to the Layer-2 collector → New Relic (the deployed path —
-> see `docs/observability-deployment.md`), or a Prometheus **scrape** of
-> `/metrics` (the local/debug path). The alert rules in
-> [`docs/alerting/alert-rules.yml`](alerting/alert-rules.yml) use the same
-> family names on either path.
+> are emitted by the in-process `MetricsCollector` and reach the sink by
+> **OTLP push** to the Layer-2 collector → New Relic (the deployed path —
+> see `docs/observability-deployment.md`). The token-guarded `/metrics` endpoint
+> is a **local/debug view only**: in the deployed Render stack there is no
+> Prometheus scraper. The Prometheus rules in
+> [`docs/alerting/alert-rules.yml`](alerting/alert-rules.yml) use the same family
+> names, but `NexusRequestsDown` only applies where a scrape job is explicitly
+> configured.
 
 ## 1. Objectives and SLI definitions
 
-All SLIs are measured from process-level telemetry exposed by the
-Prometheus `/metrics` endpoint (`backend/app/api/v1/metrics.py`), which renders
-the in-process `MetricsCollector` in text-format v0.0.4. **Caveat:** the
-collector is in-process and per-instance — with more than one API replica you
-must aggregate across instances in Prometheus (each instance carries a
-`job="nexus-backend"` label).
+All SLIs are measured from the in-process `MetricsCollector`, which reaches
+New Relic through the OTLP pipeline in production. The same samples can be
+rendered as Prometheus text-format v0.0.4 by the token-guarded `/metrics`
+endpoint (`backend/app/api/v1/metrics.py`) for local debugging only. **Caveat:**
+the collector is in-process and per-instance — production SLIs must be
+aggregated at the sink (New Relic), not by a nonexistent Prometheus scraper.
 
 | SLI | Definition | Target | Window |
 | --- | --- | --- | --- |
@@ -30,10 +32,11 @@ must aggregate across instances in Prometheus (each instance carries a
 indexing freshness percentiles for the async 202 pattern, and per-tenant SLO
 breakdowns. These need the queue/DB exporters listed in §7.
 
-Per-hop (BFF and proposed background outbox) RED families, their bounded label
-budget and the reserved event-name list are specified in
-[observability-per-stage.md](observability-per-stage.md). That document is a
-contract only — no instrumentation is implemented by this slice.
+Per-hop (BFF and background outbox) RED families, their bounded label budget and
+the reserved event-name list are specified in
+[observability-per-stage.md](observability-per-stage.md). HTTP request and
+outbox-delivery instrumentation is implemented there; the `nexus_stage_*`
+families and BFF hooks remain a contract only.
 
 ## 2. Error budget policy
 
@@ -67,6 +70,10 @@ tickets, not pages.
 
 ## 4. Monitoring configuration
 
+The steps below apply only when you explicitly run a local Prometheus.
+Nothing in the deployed Render stack scrapes `/metrics`; production alerting
+uses the OTLP-backed New Relic signals.
+
 1. Check `METRICS_TOKEN` (and every other secret) is set — never ship the
    scrape endpoint open to the public internet. In `docker-compose`/k8s add a
    Prometheus scrape job:
@@ -92,6 +99,8 @@ tickets, not pages.
 
 ## 5. Known measurement caveats
 
+- **No production scraper:** `NexusRequestsDown` cannot fire in the deployed
+  stack. Use New Relic OTLP signal loss plus `/api/v1/health` for outage triage.
 - **Fail-open seams** (Redis cache, rate limiter): outages produce
   `redis_fail_open` counters and degraded latency, **not** 5xx errors. SLO
   dashboards should graph them alongside — a p95 latency alert during a Redis
@@ -111,7 +120,7 @@ tickets, not pages.
 | `NexusLatencyP95Burn` / `NexusLatencyP99Burn` | Latency SLOs | page |
 | `NexusRateLimitStorm` | Rate-limit health | page |
 | `NexusRedisFailOpenActive` | dependency fail-open visibility | page |
-| `NexusRequestsDown` | Availability / scrape health | page |
+| `NexusRequestsDown` | Scrape health (local-only; no prod scraper) | ticket locally |
 
 ## 7. Roadmap exporters
 

@@ -6,12 +6,16 @@ corresponds to one or more alerts from
 
 | Runbook | When to use | Alert(s) |
 | --- | --- | --- |
-| [Full outage](full-outage.md) | `/metrics` not scraped, app unreachable, 5xx wall | `NexusRequestsDown` |
+| [Full outage](full-outage.md) | App unreachable, OTLP signal loss, 5xx wall (local: scrape down) | `NexusRequestsDown` (local-only) |
 | [High error rate](high-error-rate.md) | Errors above 5% of traffic sustained 10m | `NexusErrorRateHigh` |
 | [Latency SLI burn](latency-sli-burn.md) | p95/p99 latency above budget | `NexusLatencyP95Burn`, `NexusLatencyP99Burn` |
 | [Rate-limit exhaustion](rate-limit-exhaustion.md) | Clients throttled with 429s | `NexusRateLimitStorm` |
 | [Redis fail-open](redis-fail-open.md) | Redis unreachable, seams failing open | `NexusRedisFailOpenActive` |
 | [New Relic empty dashboard](new-relic-empty-dashboard.md) | Collector exports look healthy but the New Relic entity view is empty | operational (ingest verification) |
+
+In the deployed Render stack there is no Prometheus scraper. `NexusRequestsDown`
+only applies to deployments that explicitly configure one; production outage
+triage starts from New Relic OTLP signal loss plus `/api/v1/health`.
 
 ## Operating principles
 
