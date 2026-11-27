@@ -2,7 +2,7 @@
 Nexus Production Logging Infrastructure.
 Implements structured contextual JSON logging for production and human-readable
 colorized console logging for local development.
-Supports correlation IDs (X-Request-ID), user tracking, and exception formatting.
+Supports correlation IDs (X-Correlation-ID), user tracking, and exception formatting.
 """
 import logging
 import sys
@@ -10,22 +10,6 @@ from typing import Any
 
 import structlog
 from backend.app.core.config import settings
-
-try:
-    from asgi_correlation_id import correlation_id
-except ImportError:
-    correlation_id = None
-
-
-def add_correlation_id(
-    logger: logging.Logger, log_method: str, event_dict: dict[str, Any]
-) -> dict[str, Any]:
-    """Injects active request correlation ID into every log event if present."""
-    if correlation_id and hasattr(correlation_id, "get"):
-        cid = correlation_id.get()
-        if cid:
-            event_dict["request_id"] = cid
-    return event_dict
 
 
 def bind_request_context(**kwargs: Any) -> None:
@@ -104,7 +88,6 @@ def setup_logging() -> None:
     log_level = resolve_log_level()
     shared_processors = [
         structlog.contextvars.merge_contextvars,
-        add_correlation_id,
         structlog.stdlib.filter_by_level,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,

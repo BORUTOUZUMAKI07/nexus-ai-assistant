@@ -27,6 +27,7 @@ from backend.app.core.config import settings
 from backend.app.core.db_target import describe_database_target
 from backend.app.core.exceptions import NexusException
 from backend.app.core.logging import get_logger, setup_logging
+from backend.app.core.request_context import CORRELATION_ID_HEADER, CorrelationIdMiddleware
 from backend.app.infrastructure.cache.redis_client import redis_client
 from backend.app.infrastructure.database.engine import check_database_health, close_db, init_db
 from backend.app.infrastructure.resilience.rate_limit import (
@@ -508,6 +509,12 @@ async def otlp_http_span_middleware(request: Request, call_next):
         return response
 
 
+# 1c. Correlation IDs. Added last so this is the outermost user middleware:
+# every response (including those from inner exception handlers) gets the
+# header, and the ID is bound to structlog contextvars for the whole request.
+app.add_middleware(CorrelationIdMiddleware)
+
+
 # 2. Global Exception Handlers (RFC-7807 Problem Details)
 @app.exception_handler(RateLimitError)
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitError):
@@ -604,6 +611,8 @@ def describe_schema_drift(exc: BaseException) -> str | None:
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Catches any unhandled unexpected runtime crashes to prevent raw stack traces leaking."""
+    correlation_id = getattr(request.state, "correlation_id", None)
+    headers = {CORRELATION_ID_HEADER: correlation_id} if correlation_id else {}
     drift = describe_schema_drift(exc)
     if drift is not None:
         logger.error(
@@ -614,6 +623,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         )
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            headers=headers,
             content={
                 "type": "https://nexus-assistant.ai/errors/database-schema-out-of-date",
                 "title": "DATABASE_SCHEMA_OUT_OF_DATE",
@@ -633,6 +643,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        headers=headers,
         content={
             "type": "https://nexus-assistant.ai/errors/internal-server-error",
             "title": "INTERNAL_SERVER_ERROR",

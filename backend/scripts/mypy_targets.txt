@@ -19,6 +19,7 @@ root:backend/app/agents/orchestrator/nodes.py
 
 backend/app/core/config.py
 backend/app/core/exceptions.py
+backend/app/core/request_context.py
 backend/app/domain/org/models.py
 backend/app/domain/user/models.py
 backend/app/domain/user/schemas.py
