@@ -21,10 +21,26 @@ _METER_NAME = "backend.app"
 # One series for every request that did not match a route. An arbitrary URL
 # must never mint a new time series; only the router's template is a label.
 UNMATCHED_ROUTE = "unmatched"
+_UNMATCHED_TASK_TYPE = "unmatched"
 _UUID_PATH_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
 _LONG_NUMERIC_SEGMENT_RE = re.compile(r"/\d{6,}(?:/|$)")
+_TASK_TYPE_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+# Fixed enum from docs/observability-per-stage.md. A value outside this set is
+# collapsed to `dropped` instead of being allowed to become a label.
+OUTBOX_OUTCOMES = frozenset(
+    {
+        "success",
+        "validation_error",
+        "auth_error",
+        "upstream_error",
+        "timeout",
+        "dropped",
+        "retried",
+        "dead_letter",
+    }
+)
 
 
 def route_template(scope: dict[str, Any] | None) -> str:
@@ -198,6 +214,36 @@ def record_http_request(
     active.increment("http_requests_total", 1, labels)
     if status_code >= 500:
         active.record_error(f"http_{status_code}", 1, labels)
+
+
+def record_outbox_outcome(
+    task_type: str,
+    outcome: str,
+    duration_ms: float,
+    collector: "MetricsCollector | None" = None,
+) -> None:
+    """Record one outbox delivery with only bounded OTel label values.
+
+    The outbox state machine, logs and spans keep the full identifiers and
+    error text; a metric label must not. Unknown task types collapse to one
+    value and unrecognised outcomes collapse to ``dropped`` so neither can
+    grow with traffic.
+    """
+    active = collector or metrics_collector
+    safe_type = str(task_type)
+    if not _TASK_TYPE_RE.fullmatch(safe_type):
+        safe_type = _UNMATCHED_TASK_TYPE
+    safe_outcome = outcome if outcome in OUTBOX_OUTCOMES else "dropped"
+    labels: dict[str, Any] = {
+        "stage": "outbox",
+        "task_type": safe_type,
+        "outcome": safe_outcome,
+    }
+    if safe_outcome == "success":
+        active.increment("outbox.deliver", 1, labels)
+    else:
+        active.record_error("outbox.deliver", 1, labels)
+    active.record_latency("outbox.deliver", duration_ms, labels)
 
 
 def _escape_label_value(value: str) -> str:

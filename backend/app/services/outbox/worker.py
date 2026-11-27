@@ -17,12 +17,26 @@ from collections.abc import Callable
 from typing import Any
 
 import structlog
+from backend.app.services.observability.metrics import (
+    metrics_collector,
+    record_outbox_outcome,
+)
 from backend.app.services.observability.tracing import trace_span
 from backend.app.services.outbox.handlers import HANDLERS
 from backend.app.services.outbox.service import claim_next, mark_failed, mark_succeeded
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = structlog.get_logger(__name__)
+
+
+def _record_outcome(task_type: str, outcome: str, duration_ms: float) -> None:
+    """Best-effort RED sample — a broken metric sink must not change a job."""
+    try:
+        record_outbox_outcome(
+            task_type, outcome, duration_ms, collector=metrics_collector
+        )
+    except Exception:  # noqa: BLE001 - observability must not raise
+        logger.debug("outbox_metric_failed", outcome=outcome)
 
 
 def outbox_worker_enabled() -> bool:
@@ -114,6 +128,7 @@ class OutboxWorker:
                 run_id=str(task.run_id),
             )
             await mark_failed(session, task, "unknown task type")
+            _record_outcome(task.task_type, "dropped", 0.0)
             return True
 
         started = time.perf_counter()
@@ -133,15 +148,24 @@ class OutboxWorker:
             # half-delivery as success.
             raise
         except Exception as exc:
+            duration_ms = (time.perf_counter() - started) * 1000
+            outcome = (
+                "dead_letter"
+                if task.attempts >= task.max_attempts
+                else "retried"
+            )
+            _record_outcome(task.task_type, outcome, duration_ms)
             await mark_failed(session, task, str(exc)[:500])
             return True
+        duration_ms = (time.perf_counter() - started) * 1000
         await mark_succeeded(session, task)
+        _record_outcome(task.task_type, "success", duration_ms)
         logger.info(
             "outbox.deliver",
             task_id=str(task.id),
             task_type=task.task_type,
             run_id=str(task.run_id),
-            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            duration_ms=round(duration_ms, 2),
         )
         return True
 

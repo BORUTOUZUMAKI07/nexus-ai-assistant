@@ -3,9 +3,10 @@
 > **Status: mixed.** The `nexus_stage_*` families and the BFF/outbox hooks below
 > are still a contract only — this document fixes their names and label budget
 > before code lands so the series stay bounded; all `outbox.*` names remain
-> proposed, not observed. Separately, the backend's existing request families
+> proposed, not observed. Separately, the backend's existing families
 > (`nexus_requests_total`, `nexus_errors_total`, `nexus_latency_seconds`) now
-> use the same `route` / `method` / `status_class` vocabulary; see §1a.
+> carry this vocabulary for HTTP requests (§1a) and outbox deliveries (§4)
+> without introducing new family names.
 
 ## Why a separate contract
 
@@ -121,31 +122,38 @@ external warmup scheduler is owned outside this repository and should be
 excluded from SLI numerators so a heartbeat storm cannot mask a real traffic
 drop.
 
-## 4. Proposed background outbox event names
+## 4. Background outbox events (partly implemented)
 
-The outbox is **proposed**. These names are reserved so that when it lands its
-telemetry is comparable with the BFF stage from day one. `task_type` is the
-bounded enum; never derive it from a payload string.
+The durable outbox is deployed and its state transitions are logged. Only the
+`outbox.deliver` RED sample is instrumented so far; the other names below remain
+proposed. `task_type` comes from the handler registry, never a payload string,
+and is collapsed to `unmatched` if it is not a safe token. An unrecognised
+outcome is collapsed to `dropped`. The implemented sample uses the existing
+`nexus_requests_total` / `nexus_errors_total` / `nexus_latency_seconds` families
+with `stage=outbox`, `task_type` and `outcome` OTel attributes; the
+`nexus_stage_*` families in §2 are still proposed.
 
-| Event | When | `outcome` values |
+| Event | Status | `outcome` values |
 | --- | --- | --- |
-| `outbox.enqueue` | A row is accepted for later work | `success`, `validation_error` |
-| `outbox.claim` | A worker leases a row | `success`, `dropped` |
-| `outbox.deliver` | A delivery attempt completes | `success`, `upstream_error`, `timeout` |
-| `outbox.retry` | A failed attempt is scheduled again | `retried`, `dropped` |
-| `outbox.dead_letter` | Retry budget exhausted | `dead_letter` |
-| `outbox.mark_done` | Row transitions to complete | `success` |
+| `outbox.enqueue` | log only | `success`, `validation_error` |
+| `outbox.claim` | log only | `success`, `dropped` |
+| `outbox.deliver` | metric + log + span | `success`, `retried`, `dead_letter`, `dropped` |
+| `outbox.retry` | log only | `retried`, `dropped` |
+| `outbox.dead_letter` | log only | `dead_letter` |
+| `outbox.mark_done` | logged as `outbox.deliver` success | `success` |
 
-Reserved `task_type` values (extend this enum deliberately, in the same PR as
-the producer): `message.persist`, `index.upsert`, `webhook.deliver`,
-`usage.record`, `notification.send`.
+Actual `task_type` values today: `semantic_cache_invalidate` and
+`webhook_dispatch`. The earlier reserved names (`message.persist`,
+`index.upsert`, `webhook.deliver`, `usage.record`, `notification.send`) remain
+reserved, not emitted.
 
 ## 5. Ownership and rollout
 
 - **This document** owns the names and the label allow-list. Changing a name or
   adding a label requires updating this file first.
-- **Application instrumentation** (`frontend` BFF route handlers and the
-  backend outbox worker) is owned by another agent. This slice does not add it.
+- **Application instrumentation**: the backend HTTP middleware and outbox
+  delivery worker are instrumented. BFF route handlers remain out of scope for
+  this document.
 - **Collector config** already forwards all three OTLP signals; no new
   exporter or pipeline is needed for these families. They use the existing
   `otlphttp/newrelic` path documented in
