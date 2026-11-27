@@ -1,0 +1,71 @@
+# Nexus AI Assistant — OPTIONAL Grafana Cloud fan-out overlay (second sink).
+#
+# WHY THIS FILE EXISTS SEPARATELY
+# -------------------------------
+# Adding a sink must be a collector change, never an app change. The collector
+# refuses to START when an `otlphttp` exporter has an empty endpoint, and
+# Grafana credentials are optional — so a merged-in, default-on exporter would
+# break `docker compose up` for everyone who does not use Grafana. Keeping the
+# sink in an overlay loaded only on demand makes it genuinely opt-in.
+#
+# HOW TO ENABLE (two steps, zero application change)
+# --------------------------------------------------
+#   1. Set BOTH variables in backend/.env (they must not be committed):
+#        GRAFANA_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
+#        GRAFANA_OTLP_TOKEN=Basic <base64(instance_id:api_token)>
+#      Then add the extra config flag to the collector's `command` in
+#      docker-compose.yml:
+#        command:
+#          - --config=/etc/otelcol-contrib/config.yaml
+#          - --config=/etc/otelcol-contrib/config.grafana.yaml
+#   2. Recreate the collector:  docker compose up -d otel-collector
+#
+# The collector MERGES config files: `exporters:` is a union (New Relic stays),
+# while each `service.pipelines.*` entry below restates its receiver/processor
+# list and replaces the base one so `otlphttp/grafana` joins the exporters. That
+# is why these pipeline blocks repeat the base file rather than appending.
+#
+# Skipping the overlay changes nothing: New Relic remains the sole sink and this
+# file is never parsed.
+exporters:
+  otlphttp/grafana:
+    endpoint: ${env:GRAFANA_OTLP_ENDPOINT}
+    headers:
+      # The token already contains the `Basic ` prefix. Adding it here too would
+      # produce `Basic Basic ...` and a silent 401.
+      authorization: ${env:GRAFANA_OTLP_TOKEN}
+    compression: gzip
+    # Same durability story as the primary sink: buffer to the shared
+    # file_storage queue and retry with backoff, so a Grafana outage cannot
+    # block or drop telemetry destined for New Relic.
+    sending_queue:
+      enabled: true
+      num_consumers: 10
+      queue_size: 5000
+      storage: file_storage
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+service:
+  # `basicauth/server`, `health_check` and `file_storage` come from the base
+  # config; they are restated here only because a merged pipelines block must
+  # name every component it uses.
+  extensions: [health_check, file_storage, basicauth/server]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlphttp/newrelic, otlphttp/grafana, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlphttp/newrelic, otlphttp/grafana, debug]
+    # Traces keep the tail-sampling policy from the base file: the overlay
+    # re-lists it so fan-out never changes *what* is sampled.
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, tail_sampling, batch, resource]
+      exporters: [otlphttp/newrelic, otlphttp/grafana, debug]

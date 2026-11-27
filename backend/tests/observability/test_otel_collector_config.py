@@ -23,7 +23,7 @@ where the rejection happens, and the GARBAGE row is what proves the file
 really was read. A guard built on `validate` would have passed against the
 precise defect it was written for.
 
-Four tests, deliberately different in strength:
+Static guards plus one startup check, deliberately different in strength:
 
 * `test_every_resource_attribute_declares_an_action` — static, needs no
   Docker, and names the missing field. It still guards a machine with no
@@ -59,6 +59,9 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COLLECTOR_CONFIG = REPO_ROOT / "docker" / "otel-collector-config.yaml"
+GRAFANA_OVERLAY = REPO_ROOT / "docker" / "otel-collector-config.grafana.yaml"
+COMPOSE = REPO_ROOT / "docker-compose.yml"
+DOCKERFILE = REPO_ROOT / "docker" / "otel-collector.Dockerfile"
 
 # The tag docker-compose.yml mounts, so the image and the config file move
 # together or not at all.
@@ -370,6 +373,123 @@ def test_tail_sampling_keeps_errors_and_a_sample_of_the_rest() -> None:
             f"{name} has no trace to sample; attaching tail_sampling there is a "
             "configuration error"
         )
+
+
+def test_otlp_receiver_requires_basic_auth_on_both_protocols() -> None:
+    """gRPC is public too; pinning only HTTP left an unauthenticated write path."""
+    config = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    protocols = config["receivers"]["otlp"]["protocols"]
+    for name in ("grpc", "http"):
+        assert (protocols[name].get("auth") or {}).get("authenticator") == "basicauth/server", (
+            f"receivers.otlp.protocols.{name} must use basicauth/server"
+        )
+
+
+def test_three_signals_share_one_receiver_and_no_prometheus_exporter() -> None:
+    """One authenticated OTLP receiver feeds all three signals, as documented."""
+    config = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    pipelines = config["service"]["pipelines"]
+    assert set(pipelines) == {"logs", "metrics", "traces"}
+    for name, pipeline in pipelines.items():
+        assert pipeline.get("receivers") == ["otlp"], (
+            f"{name} must use only the otlp receiver"
+        )
+        assert "otlphttp/newrelic" in pipeline.get("exporters", []), (
+            f"{name} must forward to the primary sink"
+        )
+    prometheus = [key for key in config.get("exporters", {}) if key.startswith("prometheus")]
+    assert prometheus == [], f"a Prometheus exporter would bypass the collector's auth: {prometheus}"
+
+
+def test_primary_sink_queues_to_disk_and_retries() -> None:
+    """A queue without retries (or retries without a queue) is half a guard."""
+    config = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    newrelic = config["exporters"]["otlphttp/newrelic"]
+    retry = newrelic.get("retry_on_failure") or {}
+    assert retry.get("enabled") is True, "a New Relic 503 must be retried"
+    assert retry.get("max_elapsed_time") == "300s", (
+        "bounded retry prevents a quota error from wedging the queue forever"
+    )
+
+
+def test_collector_image_precreates_the_queue_dir_for_its_uid() -> None:
+    """A fresh named volume inherits the uid baked into the image, not root."""
+    config = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    directory = config["extensions"]["file_storage"]["directory"]
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+
+    assert "FROM busybox:stable AS queuedir" in dockerfile
+    assert f"RUN mkdir -p {directory}" in dockerfile
+    assert "COPY --from=queuedir --chown=10001:10001 /var/lib/otelcol /var/lib/otelcol" in dockerfile
+
+
+def test_compose_builds_the_collector_image_and_mounts_the_queue() -> None:
+    """The tested image and the deployed image must be the same thing."""
+    config = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    directory = config["extensions"]["file_storage"]["directory"]
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    collector = compose["services"]["otel-collector"]
+
+    assert collector["build"]["dockerfile"] == "otel-collector.Dockerfile"
+    assert collector["image"] == "nexus-otel-collector:local"
+    volumes = collector.get("volumes") or []
+    assert any(volume.endswith(f":{directory}") for volume in volumes), (
+        f"the durable queue volume must be mounted at {directory}"
+    )
+
+
+def test_grafana_fan_out_is_opt_in_and_complete() -> None:
+    """A second sink must live in an overlay, never in the default pipeline."""
+    assert GRAFANA_OVERLAY.exists(), "the opt-in Grafana overlay file is missing"
+    overlay = yaml.safe_load(GRAFANA_OVERLAY.read_text(encoding="utf-8"))
+    grafana = (overlay.get("exporters") or {}).get("otlphttp/grafana") or {}
+
+    assert grafana.get("endpoint") == "${env:GRAFANA_OTLP_ENDPOINT}"
+    assert (grafana.get("headers") or {}).get("authorization") == "${env:GRAFANA_OTLP_TOKEN}", (
+        "pass the token through as-is (it already contains 'Basic '); wrapping it "
+        "again would produce 'Basic Basic ...' and a silent 401"
+    )
+    assert grafana.get("compression") == "gzip"
+    queue = grafana.get("sending_queue") or {}
+    assert queue.get("enabled") is True
+    assert queue.get("storage") == "file_storage"
+    retry = grafana.get("retry_on_failure") or {}
+    assert retry.get("enabled") is True
+
+    pipelines = (overlay.get("service") or {}).get("pipelines") or {}
+    assert set(pipelines) == {"logs", "metrics", "traces"}
+    for name, pipeline in pipelines.items():
+        assert pipeline.get("receivers") == ["otlp"]
+        assert pipeline.get("exporters") == ["otlphttp/newrelic", "otlphttp/grafana", "debug"], (
+            f"{name} must fan out to both sinks"
+        )
+    assert "tail_sampling" in pipelines["traces"].get("processors", []), (
+        "enabling fan-out must not change what is sampled"
+    )
+
+    base = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    assert "otlphttp/grafana" not in (base.get("exporters") or {})
+    for pipeline in base["service"]["pipelines"].values():
+        assert "otlphttp/grafana" not in pipeline.get("exporters", [])
+
+
+def test_grafana_overlay_is_mounted_but_not_loaded_by_default() -> None:
+    """Compose ships both files, but only the base config is active."""
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    collector = compose["services"]["otel-collector"]
+
+    assert collector.get("command") == ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes = collector.get("volumes") or []
+    assert "./docker/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro" in volumes
+    assert (
+        "./docker/otel-collector-config.grafana.yaml:/etc/otelcol-contrib/config.grafana.yaml:ro"
+        in volumes
+    )
+    environment = collector.get("environment") or []
+    entries = environment.items() if isinstance(environment, dict) else environment
+    assert [str(entry) for entry in entries if str(entry).startswith("GRAFANA_OTLP_")] == [], (
+        "Grafana credentials must come from backend/.env, never docker-compose.yml"
+    )
 
 
 def test_the_collector_really_builds_the_tracked_config() -> None:

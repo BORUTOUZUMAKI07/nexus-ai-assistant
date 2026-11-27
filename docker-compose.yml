@@ -83,6 +83,10 @@ services:
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
       - ./docker/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      # Optional second sink. Mounted (so it is always available) but NOT loaded
+      # by `command` above: adding --config=.../config.grafana.yaml and setting
+      # GRAFANA_OTLP_* in backend/.env is a deliberate, zero-app-change opt-in.
+      - ./docker/otel-collector-config.grafana.yaml:/etc/otelcol-contrib/config.grafana.yaml:ro
       # Durable queue for file_storage. It MUST be the image built from
       # docker/otel-collector.Dockerfile (not the upstream pull): that image
       # pre-creates /var/lib/otelcol/storage owned by the collector uid (10001),

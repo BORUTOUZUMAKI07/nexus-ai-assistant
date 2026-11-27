@@ -132,12 +132,11 @@ exporters:
     verbosity: basic
     sampling_initial: 5
     sampling_thereafter: 20
-  # Grafana fan-out (ready stub — uncomment to mirror events into a second
-  # vendor alongside New Relic; needs GRAFANA_OTLP_ENDPOINT / GRAFANA_OTLP_TOKEN):
-  # otlphttp/grafana:
-  #   endpoint: ${env:GRAFANA_OTLP_ENDPOINT}
-  #   headers:
-  #     Authorization: Basic ${env:GRAFANA_OTLP_TOKEN}
+  # Grafana fan-out lives in otel-collector-config.grafana.yaml, a separate
+  # overlay that docker-compose mounts read-only but does NOT load by default.
+  # An empty Grafana endpoint makes the collector refuse to start, so the second
+  # sink must stay out of the base config until it is actually configured. See
+  # that file for the two-step enable command.
 
 extensions:
   health_check:
