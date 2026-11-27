@@ -1,10 +1,11 @@
 # Per-stage RED metrics and event-name contract
 
-> **Status: contract/proposal only.** No application instrumentation is added by
-> this document. The BFF and background-outbox hooks it describes are owned by
-> another slice; this file fixes the names and label budget *before* code lands
-> so the series stay bounded. The outbox does not exist in the tree yet — all
-> `outbox.*` names below are proposed, not observed.
+> **Status: mixed.** The `nexus_stage_*` families and the BFF/outbox hooks below
+> are still a contract only — this document fixes their names and label budget
+> before code lands so the series stay bounded; all `outbox.*` names remain
+> proposed, not observed. Separately, the backend's existing request families
+> (`nexus_requests_total`, `nexus_errors_total`, `nexus_latency_seconds`) now
+> use the same `route` / `method` / `status_class` vocabulary; see §1a.
 
 ## Why a separate contract
 
@@ -50,6 +51,18 @@ few tens of thousands of series — predictable and cheap on a free-tier sink.
 **Rule of thumb:** before adding a label, write down its maximum possible value
 count. If the count depends on the number of users, requests or documents,
 reject it.
+
+### 1a. Backend HTTP labels (implemented)
+
+The backend's existing request metrics use this vocabulary without introducing
+new family names. The middleware resolves `route` from the matched FastAPI
+route template in `scope["route"]` *after* routing, so
+`/api/v1/conversations/{conversation_id}` is one series even when thousands of
+conversation IDs are requested. Requests that never matched a route (404s and
+pre-routing failures) collapse to the single value `unmatched`. `method` and
+`status_class` are bounded as above; raw paths, UUIDs and long numeric IDs are
+rejected before they can become labels. The raw path stays available as a trace
+attribute (`url.path`) for debugging.
 
 ## 2. RED metric families (proposed)
 

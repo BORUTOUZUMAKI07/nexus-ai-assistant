@@ -36,7 +36,11 @@ from backend.app.infrastructure.resilience.rate_limit import (
 from backend.app.infrastructure.vector.qdrant_client import vector_db
 from backend.app.mcp.server import mcp
 from backend.app.services.health.dependencies import get_dependency_health
-from backend.app.services.observability.metrics import metrics_collector
+from backend.app.services.observability.metrics import (
+    metrics_collector,
+    record_http_request,
+    route_template,
+)
 from backend.app.services.observability.otel import get_tracer, shutdown_otel
 from backend.app.services.observability.startup_verification import verify_startup_telemetry
 from fastapi import FastAPI, HTTPException, Request, status
@@ -464,11 +468,20 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 #     MetricsCollector — the `/metrics` debug surface — and that collector
 #     forwards them to OTel instruments once the meter provider is wired. This is
 #     the infra/ops counterpart to LangSmith's LLM/agent trace view.
-def _record_http_request_metrics(status_code: int, duration_ms: float) -> None:
-    metrics_collector.record_latency("http_request", duration_ms)
-    metrics_collector.increment("http_requests_total")
-    if status_code >= 500:
-        metrics_collector.record_error(f"http_{status_code}")
+def _record_http_request_metrics(
+    status_code: int,
+    duration_ms: float,
+    scope: dict[str, Any] | None = None,
+    method: str | None = None,
+) -> None:
+    """Feed one HTTP sample into the collector with a bounded route label."""
+    record_http_request(
+        method or (scope or {}).get("method") or "GET",
+        route_template(scope),
+        status_code,
+        duration_ms,
+        collector=metrics_collector,
+    )
 
 
 @app.middleware("http")
@@ -476,14 +489,30 @@ async def otlp_http_span_middleware(request: Request, call_next):
     start = time.perf_counter()
     tracer = get_tracer("backend.app.http")
     if tracer is None:
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            # A crashing handler is still a request: record it before re-raising
+            # so the 5xx does not vanish from the RED surface.
+            _record_http_request_metrics(
+                500,
+                (time.perf_counter() - start) * 1000.0,
+                request.scope,
+                request.method,
+            )
+            raise
         _record_http_request_metrics(
-            response.status_code, (time.perf_counter() - start) * 1000.0
+            response.status_code,
+            (time.perf_counter() - start) * 1000.0,
+            request.scope,
+            request.method,
         )
         return response
 
     from opentelemetry.trace import Status, StatusCode
 
+    # The span name keeps the raw path for debugging, but the metric label added
+    # below uses the matched route template so IDs cannot explode cardinality.
     with tracer.start_as_current_span(f"{request.method} {request.url.path}") as span:
         span.set_attribute("http.request.method", request.method)
         span.set_attribute("url.path", request.url.path)
@@ -498,13 +527,25 @@ async def otlp_http_span_middleware(request: Request, call_next):
             span.record_exception(exc)
             span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
             span.set_attribute("http.response.status_code", 500)
-            _record_http_request_metrics(500, (time.perf_counter() - start) * 1000.0)
+            span.set_attribute("http.route", route_template(request.scope))
+            _record_http_request_metrics(
+                500,
+                (time.perf_counter() - start) * 1000.0,
+                request.scope,
+                request.method,
+            )
             raise
         span.set_attribute("http.response.status_code", response.status_code)
+        # The router writes scope["route"] during call_next, so this is the
+        # earliest point at which the template is known.
+        span.set_attribute("http.route", route_template(request.scope))
         if response.status_code >= 500:
             span.set_status(Status(StatusCode.ERROR, str(response.status_code)))
         _record_http_request_metrics(
-            response.status_code, (time.perf_counter() - start) * 1000.0
+            response.status_code,
+            (time.perf_counter() - start) * 1000.0,
+            request.scope,
+            request.method,
         )
         return response
 
