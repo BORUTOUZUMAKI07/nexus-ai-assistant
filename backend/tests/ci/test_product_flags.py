@@ -7,6 +7,15 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 BLUEPRINT = ROOT / "render.yaml"
+EXAMPLE_ENV = ROOT / "backend" / ".env.example"
+
+
+def _example_env_value(key: str) -> str | None:
+    for line in EXAMPLE_ENV.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(f"{key}="):
+            return stripped.split("=", 1)[1].strip()
+    return None
 
 
 def _backend_env() -> dict[str, object]:
@@ -28,3 +37,17 @@ def test_response_cache_is_enabled_in_the_deployment_blueprint():
     assert entry is not None, "the deployed backend must declare the flag explicitly"
     assert str(entry.get("value")).lower() == "true"
     assert entry.get("sync") is not True, "a boolean flag must never be secret-synced"
+
+
+def test_pii_redaction_is_enabled_in_the_deployment_blueprint():
+    """Recursive log redaction must actually be on in production."""
+    entry = _backend_env().get("PII_REDACTION_ENABLED")
+    assert entry is not None, "the deployed backend must declare the flag explicitly"
+    assert str(entry.get("value")).lower() == "true"
+    assert entry.get("sync") is not True, "a boolean flag must never be secret-synced"
+
+
+def test_pii_redaction_is_enabled_in_the_example_environment():
+    # The example is what a fresh deployment copies. A false default here is how
+    # the flag ends up off in production even after the blueprint is fixed.
+    assert _example_env_value("PII_REDACTION_ENABLED") == "true"

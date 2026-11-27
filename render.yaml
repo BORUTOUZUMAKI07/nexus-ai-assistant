@@ -176,6 +176,10 @@ services:
         value: "true"
       - key: LANGSMITH_PROJECT
         value: nexus-ai-assistant
+      # Recursive PII/secret scrubbing of every structured log event. Explicit
+      # here so log hygiene cannot silently fall back to the code default.
+      - key: PII_REDACTION_ENABLED
+        value: "true"
       # Durable post-answer outbox consumer. Enqueueing starts on the run path
       # regardless; the worker polls post_answer_tasks once migration
       # f9a0b1c2d3e4 is applied. Off before the migration exists, on in prod.
