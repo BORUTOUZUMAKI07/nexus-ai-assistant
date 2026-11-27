@@ -6,6 +6,9 @@
   "installCommand": "npm ci --legacy-peer-deps",
   "framework": "nextjs",
   "regions": ["sfo1"],
+  "git": {
+    "deploymentEnabled": false
+  },
   "build": {
     "env": {}
   },

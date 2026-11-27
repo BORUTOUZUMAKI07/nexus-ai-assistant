@@ -1,0 +1,255 @@
+name: Deploy production
+
+# Push-to-main production deployment for Nexus.
+#
+# `workflow_run` (not a second push trigger) makes green CI a hard precondition:
+# a red or cancelled CI run cannot reach any deploy step. The stale-SHA check
+# closes the gap where a newer push lands after CI finishes but before this
+# workflow starts, so an older commit is never promoted instead of a newer one.
+#
+# Required secrets (URLs are credentials and must never be printed or committed):
+#   RENDER_BACKEND_DEPLOY_HOOK_URL     Render -> nexus-backend -> Deploy Hook
+#   RENDER_COLLECTOR_DEPLOY_HOOK_URL   Render -> nexus-otel-collector -> Deploy Hook
+#   VERCEL_DEPLOY_HOOK_URL             Vercel -> nexus-ai-assistant -> Deploy Hooks (main)
+#
+# See docs/deployment-guide.md §11 for setup, verification and rollback.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Operator escape hatch: redeploys the current main tip after a transient
+  # platform failure without requiring a new commit.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One production deployment at a time. A newer run queues; it never cancels a
+# deploy halfway through, because both platforms must accept their hook first.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve main tip
+    # `completed` also fires for failed and cancelled CI runs. Nothing here runs
+    # unless CI actually succeeded, or an operator deliberately dispatched it.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.tip.outputs.sha }}
+      skip: ${{ steps.stale.outputs.skip }}
+    steps:
+      - name: Resolve current main tip
+        id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/$REPO/commits/main" --jq .sha)"
+          if [ -z "$sha" ]; then
+            echo "::error::Could not resolve refs/heads/main"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Current main tip: $sha"
+
+      - name: Skip a CI commit that is no longer main
+        id: stale
+        if: github.event_name == 'workflow_run'
+        env:
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEPLOY_SHA: ${{ steps.tip.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$CI_SHA" != "$DEPLOY_SHA" ]; then
+            echo "::notice::CI validated $CI_SHA, but main now points at $DEPLOY_SHA. Skipping; the newer CI run owns this deploy."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: Deploy Render + Vercel
+    needs: resolve
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && needs.resolve.outputs.skip != 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    env:
+      RENDER_BACKEND_DEPLOY_HOOK_URL: ${{ secrets.RENDER_BACKEND_DEPLOY_HOOK_URL }}
+      RENDER_COLLECTOR_DEPLOY_HOOK_URL: ${{ secrets.RENDER_COLLECTOR_DEPLOY_HOOK_URL }}
+      VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+    steps:
+      - name: Validate deploy SHA
+        id: sha
+        env:
+          DEPLOY_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Resolved main tip is not a 40-character Git SHA."
+            exit 1
+          fi
+          echo "sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Verify deploy secrets are configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in RENDER_BACKEND_DEPLOY_HOOK_URL RENDER_COLLECTOR_DEPLOY_HOOK_URL VERCEL_DEPLOY_HOOK_URL; do
+            if [ -z "$(printenv "$name" 2>/dev/null)" ]; then
+              echo "::error::$name is not configured. Add it under Settings -> Secrets and variables -> Actions (docs/deployment-guide.md §11)."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Production deployment aborted; no platform was contacted."
+            exit 1
+          fi
+          echo "All three deploy hooks are configured."
+
+      - name: Trigger Render backend deploy
+        env:
+          DEPLOY_SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          case "$RENDER_BACKEND_DEPLOY_HOOK_URL" in
+            *\?*) hook="$RENDER_BACKEND_DEPLOY_HOOK_URL&ref=$DEPLOY_SHA" ;;
+            *) hook="$RENDER_BACKEND_DEPLOY_HOOK_URL?ref=$DEPLOY_SHA" ;;
+          esac
+          code="$(curl --silent --show-error --request POST \
+            --output /dev/null --write-out '%{http_code}' "$hook")"
+          case "$code" in
+            2??) echo "Render backend deploy accepted (HTTP $code)." ;;
+            *) echo "::error::Render backend deploy hook failed (HTTP $code)."; exit 1 ;;
+          esac
+
+      - name: Trigger Render collector deploy
+        env:
+          DEPLOY_SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          case "$RENDER_COLLECTOR_DEPLOY_HOOK_URL" in
+            *\?*) hook="$RENDER_COLLECTOR_DEPLOY_HOOK_URL&ref=$DEPLOY_SHA" ;;
+            *) hook="$RENDER_COLLECTOR_DEPLOY_HOOK_URL?ref=$DEPLOY_SHA" ;;
+          esac
+          code="$(curl --silent --show-error --request POST \
+            --output /dev/null --write-out '%{http_code}' "$hook")"
+          case "$code" in
+            2??) echo "Render collector deploy accepted (HTTP $code)." ;;
+            *) echo "::error::Render collector deploy hook failed (HTTP $code)."; exit 1 ;;
+          esac
+
+      - name: Trigger Vercel frontend deploy
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --show-error --request POST \
+            --output /dev/null --write-out '%{http_code}' "$VERCEL_DEPLOY_HOOK_URL")"
+          case "$code" in
+            2??) echo "Vercel production deploy accepted (HTTP $code)." ;;
+            *) echo "::error::Vercel deploy hook failed (HTTP $code)."; exit 1 ;;
+          esac
+
+      - name: Summarize
+        env:
+          DEPLOY_SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          {
+            echo "### Production deployment triggered"
+            echo
+            echo "- Commit: \`$DEPLOY_SHA\`"
+            echo "- Render: \`nexus-backend\` and \`nexus-otel-collector\`, pinned to that commit"
+            echo "- Vercel: \`nexus-ai-assistant\` production branch \`main\`"
+            echo "- Next: wait for both builds to be READY, then check the post-deploy smoke results"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    name: Post-deploy smoke
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SMOKE_BASE_URL: ${{ vars.SMOKE_BASE_URL || 'https://nexus-backend-owq5.onrender.com' }}
+      FRONTEND_SMOKE_URL: ${{ vars.FRONTEND_SMOKE_URL || 'https://nexus-ai-assistant-nexus-ai-c75d.vercel.app' }}
+    steps:
+      - name: Probe deployed backend health
+        shell: bash
+        env:
+          DEPLOY_SHA: ${{ needs.deploy.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # A sleeping free-tier Render instance can answer nothing for 30s+.
+          # This warmup is expected to fail sometimes and must never gate; the
+          # strict loop below also waits for the NEW build, not just any healthy
+          # old instance, by checking /health's Render commit.
+          curl -fsS --max-time 90 "$SMOKE_BASE_URL/health" >/dev/null 2>&1 || true
+          for attempt in 1 2 3 4 5; do
+            ready=0
+            if curl -fsS --max-time 60 "$SMOKE_BASE_URL/health" > /tmp/prod_health.json \
+              && curl -fsS --max-time 60 "$SMOKE_BASE_URL/health/ready" >/dev/null \
+              && curl -fsS --max-time 60 "$SMOKE_BASE_URL/health/dependencies" > /tmp/prod_dependencies.json; then
+              deployed_commit="$(python3 -c 'import json; print(json.load(open("/tmp/prod_health.json"))["commit"])')"
+              if [ "$deployed_commit" = "${DEPLOY_SHA:0:7}" ]; then
+                ready=1
+              fi
+            fi
+            if [ "$ready" -eq 1 ]; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::post-deploy health probe failed after 5 attempts (deployed commit ${deployed_commit:-unknown}, expected ${DEPLOY_SHA:0:7})"
+              exit 1
+            fi
+            echo "Backend is not serving $DEPLOY_SHA yet (attempt $attempt); retrying in 15s"
+            sleep 15
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("/tmp/prod_dependencies.json").read_text())
+          degraded = sorted(k for k, v in data["services"].items() if v["status"] == "degraded")
+          print(f"dependency_status={data['status']}")
+          print(f"degraded={','.join(degraded) or 'none'}")
+          print(f"fallback_counters={data['fallback_counters']}")
+          if data["status"] != "ok":
+              raise SystemExit(1)
+          PY
+
+      - name: Probe Vercel frontend BFF health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            code="$(curl -sS --max-time 30 --output /dev/null --write-out '%{http_code}' "$FRONTEND_SMOKE_URL/api/health")"
+            if [ "$code" = "200" ]; then
+              echo "Frontend BFF health OK (HTTP $code)."
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::frontend health probe failed (HTTP $code) after 5 attempts"
+              exit 1
+            fi
+            echo "Frontend is not ready yet (HTTP $code, attempt $attempt); retrying in 15s"
+            sleep 15
+          done
+
+      - name: Summarize smoke
+        run: |
+          {
+            echo "### Post-deploy smoke passed"
+            echo
+            echo "- Backend: \`/health\`, \`/health/ready\`, \`/health/dependencies\` at the deployed commit"
+            echo "- Dependencies: no degraded services"
+            echo "- Frontend: \`/api/health\` on the production Vercel alias"
+          } >> "$GITHUB_STEP_SUMMARY"

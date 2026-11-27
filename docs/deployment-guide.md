@@ -31,6 +31,9 @@ CI/CD artifacts:
   npm audit, mypy allowlist), frontend (typegen, tsc, eslint, vitest, build),
   and the live LLM-judge gates (always on; the job sets
   `RUN_LLM_EVAL_GATES=1`).
+- `.github/workflows/production-deploy.yml` — only automatic production deploy
+  path: waits for green CI on `main`, then triggers Render and Vercel hooks and
+  runs a post-deploy smoke. See §11.
 - `.github/workflows/nightly.yml` — nightly security scans (bandit + pip-audit),
   full backend suite (unit + integration + e2e), npm audit, frontend vitest.
 
@@ -255,6 +258,73 @@ Upstash Redis (`rediss://`), Qdrant Cloud — so only two things are deployed:
 | Backend API | **Render** (web service, Docker) | `render.yaml` → `nexus-backend`, `backend/Dockerfile` |
 | OTel collector (Layer 2) | **Render** (web service, Docker) | `render.yaml` → `nexus-otel-collector`, `docker/otel-collector.Dockerfile` |
 | Frontend | **Vercel** | `frontend/`, server-side `BACKEND_URL` → the Render backend URL |
+
+### CI-gated deploys
+
+`.github/workflows/production-deploy.yml` is the only automatic production
+deploy path:
+
+```text
+push to main → CI (all gates green) → Deploy production → Render + Vercel
+```
+
+It uses `workflow_run`, not a second `push` trigger, so a red or cancelled CI
+run can never deploy. The job resolves the current `main` tip and skips a CI
+commit that is no longer that tip (the **stale-SHA guard**), leaving the deploy
+to the newer CI run. Deploys are serialized with
+`concurrency.group: production-deploy` and `cancel-in-progress: false`: a newer
+run queues instead of cancelling a deploy halfway through. Render hooks are
+pinned with `?ref=<sha>` (or `&ref=<sha>` when the hook already has a query), so
+both services build the exact commit CI validated.
+
+Required repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Where it comes from |
+|---|---|
+| `RENDER_BACKEND_DEPLOY_HOOK_URL` | Render → `nexus-backend` → Settings → Deploy Hook |
+| `RENDER_COLLECTOR_DEPLOY_HOOK_URL` | Render → `nexus-otel-collector` → Settings → Deploy Hook |
+| `VERCEL_DEPLOY_HOOK_URL` | Vercel → `nexus-ai-assistant` → Settings → Git → Deploy Hooks, branch `main` |
+
+These URLs are credentials. The workflow checks all three before contacting
+either platform, never prints their values, and treats any HTTP 2xx as accepted
+(Vercel returns `201` for a pending build). Do not paste them into issues or
+commit them.
+
+**Platform toggles (already set; do not undo).** Render **Auto Deploy** is Off
+on both services — one GitHub push must start exactly one deploy, from the
+workflow. `frontend/vercel.json` sets `git.deploymentEnabled: false` to disable
+Vercel Git auto-deploy while still allowing deploy hooks. Do **not** use the
+deprecated `github.enabled: false`: it blocks deploy hooks too. The Vercel hook
+is branch-scoped to `main`; the stale-SHA guard is what protects it from a
+push landing between CI finishing and the hook firing.
+
+**Manual re-trigger.** Actions → **Deploy production** → Run workflow
+(`workflow_dispatch`) redeploys the current `main` tip after a transient hook
+failure. This is an operator escape hatch, not a way around green CI: the
+automatic path still requires CI success. There is no staging target.
+
+**Post-deploy smoke.** After the hooks are accepted, the `smoke` job retries
+five times with an ignored cold-start warmup and checks:
+
+- Render backend `GET /health`, `/health/ready`, `/health/dependencies`
+  (fails on any degraded service), and that `/health`'s `commit` matches the
+  deployed SHA — a healthy old build must not pass;
+- Vercel production alias `GET /api/health` → 200, proving the BFF can reach the
+  backend.
+
+Override the targets with repository variables `SMOKE_BASE_URL` and
+`FRONTEND_SMOKE_URL`; they default to the deployed Render backend and the
+`nexus-ai-assistant-nexus-ai-c75d.vercel.app` production alias.
+
+**Rollback.** No automatic rollback is attempted: an accepted hook can still
+be building a bad commit, and only a human knows which deploy was last good.
+On Render, open the service → **Deploys** → the last known-good deploy →
+**Redeploy**. On Vercel, open **Deployments** → the last READY production
+deployment → **Promote to Production**. Then check `/health`, `/health/ready`,
+`/health/dependencies` and `/api/health` by hand; the workflow smoke verifies
+the commit that triggered *that* run, so it is not a rollback verifier. To
+return CI-gated deploys to normal, push a revert commit to `main` and let the
+gate promote it.
 
 Steps:
 
