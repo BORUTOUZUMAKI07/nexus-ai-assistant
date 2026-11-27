@@ -105,6 +105,57 @@ describe("backendFetch bearer-forwarding", () => {
   })
 })
 
+describe("backendFetch correlation IDs", () => {
+  const CALLER_ID = "44444444-4444-4444-8444-444444444444"
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+  beforeEach(() => {
+    getCookie.mockReturnValue({ value: "abc.def.ghi" })
+    getHeader.mockReturnValue(undefined)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it("preserves a valid caller-supplied correlation ID", async () => {
+    const fetchMock = stubFetch(200)
+    getHeader.mockImplementation((name: string) =>
+      name.toLowerCase() === "x-correlation-id" ? CALLER_ID : undefined
+    )
+
+    await backendFetch("/usage/summary")
+
+    expect(fetchMock.mock.calls[0][1].headers.get("X-Correlation-ID")).toBe(
+      CALLER_ID
+    )
+  })
+
+  it("generates a correlation ID when the browser supplies none", async () => {
+    const fetchMock = stubFetch(200)
+
+    await backendFetch("/usage/summary")
+
+    const sent = fetchMock.mock.calls[0][1].headers.get("X-Correlation-ID")
+    expect(sent).not.toBeNull()
+    expect(UUID_RE.test(sent ?? "")).toBe(true)
+  })
+
+  it("replaces a malformed caller-supplied correlation ID", async () => {
+    const fetchMock = stubFetch(200)
+    getHeader.mockImplementation((name: string) =>
+      name.toLowerCase() === "x-correlation-id" ? "not-a-uuid" : undefined
+    )
+
+    await backendFetch("/usage/summary")
+
+    const sent = fetchMock.mock.calls[0][1].headers.get("X-Correlation-ID")
+    expect(sent).not.toBe("not-a-uuid")
+    expect(UUID_RE.test(sent ?? "")).toBe(true)
+  })
+})
+
 describe("backendFetch cross-origin rejection (CSRF)", () => {
   beforeEach(() => {
     getCookie.mockReturnValue({ value: "abc.def.ghi" })

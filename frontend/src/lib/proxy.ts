@@ -10,6 +10,7 @@ import "server-only";
 import { cookies, headers as nextHeaders } from "next/headers";
 import { NextResponse } from "next/server";
 import { TOKEN_COOKIE } from "@/lib/auth";
+import { CORRELATION_ID_HEADER, resolveCorrelationId } from "@/lib/correlation";
 
 // Server-only backend address. Do NOT use a NEXT_PUBLIC_ variable here: this
 // value must never reach the client bundle (it exposes the internal host/port
@@ -131,6 +132,7 @@ export async function backendFetch(
   }
 
   const headers = new Headers(init?.headers);
+  headers.set(CORRELATION_ID_HEADER, resolveCorrelationId(requestHeaders));
   // The session inventory labels each sign-in with its device. Only this BFF
   // sees the browser's User-Agent; the backend receives it as a plain header
   // and stores a bounded, truncated copy alongside the token family.

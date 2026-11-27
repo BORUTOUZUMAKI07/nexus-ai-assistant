@@ -34,6 +34,7 @@ const RUN = "11111111-1111-4111-8111-111111111111"
 // a non-UUID here would be rejected at the edge and this test would pass for the
 // wrong reason.
 const MSG = "33333333-3333-4333-8333-333333333333"
+const CID = "55555555-5555-4555-8555-555555555555"
 
 /** Load the route fresh so the `server-only` import guard does not trip. */
 async function chatRoute(): Promise<{ POST: Handler; GET: Handler }> {
@@ -70,8 +71,14 @@ function stubBackend(
   }
 }
 
-function getReq(search = `?runId=${RUN}&conversationId=${CONV}`) {
-  return new NextRequest(`http://localhost/api/chat${search}`, { method: "GET" })
+function getReq(
+  search = `?runId=${RUN}&conversationId=${CONV}`,
+  headers?: Record<string, string>,
+) {
+  return new NextRequest(`http://localhost/api/chat${search}`, {
+    method: "GET",
+    headers,
+  })
 }
 
 async function frames(res: Response): Promise<string[]> {
@@ -166,6 +173,45 @@ describe("GET /api/chat — rejoin to a run already in flight", () => {
 
       await GET(getReq(`?runId=${RUN}&conversationId=${CONV}&lastEventId=42`), {})
       expect(new Headers(stub.seen[1].init?.headers).get("Last-Event-ID")).toBe("42")
+    } finally {
+      stub.restore()
+    }
+  })
+
+  it("keeps the correlation ID alongside Last-Event-ID on a rejoin", async () => {
+    // A refresh is a new BFF request, so the ID must be carried on the upstream
+    // rejoin too. Dropping it here would leave the original stream and the
+    // replay in different backend logs while the user sees one continuous answer.
+    const stub = stubBackend("")
+    try {
+      const { GET } = await chatRoute()
+      await GET(
+        getReq(`?runId=${RUN}&conversationId=${CONV}&lastEventId=42`, {
+          "X-Correlation-ID": CID,
+        }),
+        {},
+      )
+
+      const headers = new Headers(stub.seen[0].init?.headers)
+      expect(headers.get("Last-Event-ID")).toBe("42")
+      expect(headers.get("X-Correlation-ID")).toBe(CID)
+    } finally {
+      stub.restore()
+    }
+  })
+
+  it("keeps the SSE response headers the client depends on", async () => {
+    // Guardrail: the correlation work must not disturb the stream contract.
+    // The client reads the run id from these headers and relies on the open
+    // connection to keep replayed frames flowing.
+    const stub = stubBackend("")
+    try {
+      const { GET } = await chatRoute()
+      const res = await GET(getReq(), {})
+
+      expect(res.headers.get("Connection")).toBe("keep-alive")
+      expect(res.headers.get("Cache-Control")).toBe("no-cache, no-transform")
+      expect(res.headers.get("X-Vercel-AI-Data-Stream")).toBe("v1")
     } finally {
       stub.restore()
     }

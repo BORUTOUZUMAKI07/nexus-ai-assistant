@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { TOKEN_COOKIE } from "@/lib/auth";
+import { correlationHeaders } from "@/lib/correlation";
 
 // Server-only backend address (see lib/proxy.ts — never a NEXT_PUBLIC_ var).
 const BACKEND_URL =
@@ -52,6 +53,7 @@ export async function POST(req: NextRequest) {
       {
         method: "POST",
         headers: {
+          ...correlationHeaders(req.headers),
           "Content-Type": "application/json",
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },

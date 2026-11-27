@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { TOKEN_COOKIE } from "@/lib/auth";
+import { correlationHeaders } from "@/lib/correlation";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -37,6 +38,7 @@ export async function GET(req: NextRequest) {
   try {
     const res = await fetch(`${BACKEND_URL}/api/v1/audio/speech?${params}`, {
       headers: {
+        ...correlationHeaders(req.headers),
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
       signal: AbortSignal.timeout(60_000),

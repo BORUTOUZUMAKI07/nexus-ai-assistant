@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { TOKEN_COOKIE } from "@/lib/auth";
+import { correlationHeaders } from "@/lib/correlation";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -37,6 +38,7 @@ export async function POST(req: NextRequest) {
     const res = await fetch(`${BACKEND_URL}/api/v1/images/generate`, {
       method: "POST",
       headers: {
+        ...correlationHeaders(req.headers),
         "Content-Type": "application/json",
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },

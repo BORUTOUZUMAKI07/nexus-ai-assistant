@@ -372,13 +372,19 @@ describe("every route forwards to the backend under the correct path", () => {
     route: string,
     method: string,
     invoke: (req: unknown) => Promise<unknown>,
+    requestOverrides: { headers?: Record<string, string> } = {},
   ): Promise<BackendCall[]> {
     proxyJson.mockClear()
     backendFetch.mockClear()
     const direct = isDirect(route) ? captureDirectFetch() : null
     try {
       await invoke(
-        nextRequest(route, SAMPLE_SEARCHES[route] ?? "", SAMPLE_BODIES[route] ?? { probe: "body" }),
+        nextRequest(
+          route,
+          SAMPLE_SEARCHES[route] ?? "",
+          SAMPLE_BODIES[route] ?? { probe: "body" },
+          requestOverrides,
+        ),
       )
     } finally {
       direct?.restore()
@@ -567,6 +573,99 @@ describe("every route forwards to the backend under the correct path", () => {
           }
           if (!c.path.startsWith("/")) {
             problems.push(`${route}: ${method} sent an unresolvable path "${c.path}"`)
+          }
+        }
+      }
+    }
+
+    expect(problems).toEqual([])
+  })
+
+  it("routes that bypass the proxy propagate a valid caller correlation ID", async () => {
+    // The raw-fetch routes cannot rely on backendFetch's header wiring. If one
+    // of them drops the ID, browser -> BFF -> backend is no longer one request
+    // chain and logs on either side cannot be joined.
+    const callerId = "55555555-5555-4555-8555-555555555555"
+    const problems: string[] = []
+
+    for (const { route, file } of ROUTES) {
+      if (!isDirect(route)) continue
+      const mod = await loadRoute(file)
+
+      for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"] as const) {
+        if (typeof mod[method] !== "function") continue
+        const calls = await callsFor(
+          route,
+          method,
+          (req) =>
+            (mod[method] as (a: unknown, b: unknown) => Promise<unknown>)(
+              req,
+              routeContext(route),
+            ),
+          { headers: { "X-Correlation-ID": callerId } },
+        )
+        if (calls.length === 0) {
+          problems.push(`${route}: ${method} never reached the backend`)
+          continue
+        }
+        for (const c of calls) {
+          if (c.headers.get("X-Correlation-ID") !== callerId) {
+            problems.push(
+              `${route}: ${method} sent correlation ID "${c.headers.get("X-Correlation-ID") ?? "(none)"}"`,
+            )
+          }
+          // Adding one header must not make the multipart route set a
+          // Content-Type; the generated boundary has to survive.
+          if (route === "/api/audio/transcribe" && c.headers.has("Content-Type")) {
+            problems.push(`${route}: ${method} set a Content-Type on the multipart body`)
+          }
+        }
+      }
+    }
+
+    expect(problems).toEqual([])
+  })
+
+  it("routes that bypass the proxy replace invalid or absent correlation IDs", async () => {
+    const uuidRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    const cases = [
+      { name: "malformed", header: "not-a-uuid" },
+      { name: "absent", header: undefined },
+    ]
+    const problems: string[] = []
+
+    for (const { route, file } of ROUTES) {
+      if (!isDirect(route)) continue
+      const mod = await loadRoute(file)
+
+      for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"] as const) {
+        if (typeof mod[method] !== "function") continue
+        for (const testCase of cases) {
+          const overrides = testCase.header
+            ? { headers: { "X-Correlation-ID": testCase.header } }
+            : {}
+          const calls = await callsFor(
+            route,
+            method,
+            (req) =>
+              (mod[method] as (a: unknown, b: unknown) => Promise<unknown>)(
+                req,
+                routeContext(route),
+              ),
+            overrides,
+          )
+          if (calls.length === 0) {
+            problems.push(`${route}: ${method} (${testCase.name}) never reached the backend`)
+            continue
+          }
+          for (const c of calls) {
+            const sent = c.headers.get("X-Correlation-ID")
+            if (!sent || !uuidRe.test(sent)) {
+              problems.push(
+                `${route}: ${method} (${testCase.name}) sent "${sent ?? "(none)"}"`,
+              )
+            }
           }
         }
       }

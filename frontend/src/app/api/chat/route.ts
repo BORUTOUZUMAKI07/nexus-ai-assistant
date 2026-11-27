@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { TOKEN_COOKIE } from "@/lib/auth";
 import { TERMINAL_ANNOTATION_TYPE } from "@/lib/chatStream";
+import { correlationHeaders } from "@/lib/correlation";
 
 // Server-only backend address (see lib/proxy.ts — never a NEXT_PUBLIC_ var).
 const BACKEND_URL =
@@ -437,6 +438,7 @@ export async function POST(req: NextRequest) {
     backendRes = await fetch(backendStreamUrl(conversationId), {
       method: "POST",
       headers: {
+        ...correlationHeaders(req.headers),
         "Content-Type": "application/json",
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
@@ -534,6 +536,7 @@ export async function GET(req: NextRequest) {
     backendRes = await fetch(backendRunStreamUrl(conversationId, runId), {
       method: "GET",
       headers: {
+        ...correlationHeaders(req.headers),
         // The standard SSE resume header. Sent only when the client has a real
         // cursor: sending `Last-Event-ID: 0` would be harmless, but sending a
         // stale one would silently drop the front of the answer, and an empty
