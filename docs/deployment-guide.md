@@ -296,15 +296,19 @@ workflow. `frontend/vercel.json` sets `git.deploymentEnabled: false` to disable
 Vercel Git auto-deploy while still allowing deploy hooks. Do **not** use the
 deprecated `github.enabled: false`: it blocks deploy hooks too. The Vercel hook
 is branch-scoped to `main`; the stale-SHA guard is what protects it from a
-push landing between CI finishing and the hook firing.
+push landing between CI finishing and the hook firing. Vercel Authentication
+(SSO protection) is Off on this project: it would redirect `/api/health` to a
+Vercel login page, so the public smoke probe could never see the BFF's 200.
 
 **Manual re-trigger.** Actions → **Deploy production** → Run workflow
 (`workflow_dispatch`) redeploys the current `main` tip after a transient hook
 failure. This is an operator escape hatch, not a way around green CI: the
 automatic path still requires CI success. There is no staging target.
 
-**Post-deploy smoke.** After the hooks are accepted, the `smoke` job retries
-five times with an ignored cold-start warmup and checks:
+**Post-deploy smoke.** After the hooks are accepted, the `smoke` job makes up
+to twelve attempts, 20 seconds apart, after an ignored cold-start warmup.
+A Render build takes minutes on the free tier, so a short loop reports a false
+failure while the new commit is still building. It checks:
 
 - Render backend `GET /health`, `/health/ready`, `/health/dependencies`
   (fails on any degraded service), and that `/health`'s `commit` matches the

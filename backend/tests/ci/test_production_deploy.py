@@ -123,8 +123,9 @@ def test_post_deploy_smoke_verifies_the_deployed_commit_and_health_endpoints():
     for endpoint in ("/health", "/health/ready", "/health/dependencies"):
         assert endpoint in script
     assert "--max-time 90" in script and "|| true" in script, "Render needs an ignored warmup"
-    assert "for attempt in 1 2 3 4 5" in script
-    assert "after 5 attempts" in script
+    assert "for attempt in 1 2 3 4 5 6 7 8 9 10 11 12" in script
+    assert "--max-time 20" in script and "sleep 20" in script, "a Render build takes longer than a cold start"
+    assert "after 12 attempts" in script
     assert "${DEPLOY_SHA:0:7}" in script, "a healthy old build must not pass the smoke"
     assert "degraded" in script
 
@@ -136,8 +137,9 @@ def test_post_deploy_smoke_probes_the_vercel_bff_health():
     frontend = next(s for s in steps if s.get("name") == "Probe Vercel frontend BFF health")
     script = frontend["run"]
     assert '"$FRONTEND_SMOKE_URL/api/health"' in script
-    assert "for attempt in 1 2 3 4 5" in script
-    assert '"200"' in script and "after 5 attempts" in script
+    assert "for attempt in 1 2 3 4 5 6 7 8 9 10 11 12" in script
+    assert "--max-time 20" in script and "sleep 20" in script
+    assert '"200"' in script and "after 12 attempts" in script
 
 
 def test_vercel_git_auto_deploy_is_disabled_without_blocking_deploy_hooks():
@@ -172,6 +174,8 @@ def test_deployment_guide_documents_toggles_smoke_and_rollback():
     assert "deploymentenabled" in section
     assert "github.enabled" in section
     assert "stale" in section
+    assert "vercel authentication" in section, "SSO protection would redirect the smoke probe"
+    assert "twelve attempts" in section
     assert "/health/dependencies" in section
     assert "smoke_base_url" in section
     assert "frontend_smoke_url" in section

@@ -177,7 +177,7 @@ jobs:
     name: Post-deploy smoke
     needs: deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       SMOKE_BASE_URL: ${{ vars.SMOKE_BASE_URL || 'https://nexus-backend-owq5.onrender.com' }}
       FRONTEND_SMOKE_URL: ${{ vars.FRONTEND_SMOKE_URL || 'https://nexus-ai-assistant-nexus-ai-c75d.vercel.app' }}
@@ -189,15 +189,16 @@ jobs:
         run: |
           set -euo pipefail
           # A sleeping free-tier Render instance can answer nothing for 30s+.
-          # This warmup is expected to fail sometimes and must never gate; the
-          # strict loop below also waits for the NEW build, not just any healthy
-          # old instance, by checking /health's Render commit.
+          # This warmup is expected to fail sometimes and must never gate. The
+          # strict loop also waits for the NEW build, not just any healthy old
+          # instance, by checking /health's Render commit. A Render build took
+          # 2m20s on the first run, so this waits minutes, not one cold start.
           curl -fsS --max-time 90 "$SMOKE_BASE_URL/health" >/dev/null 2>&1 || true
-          for attempt in 1 2 3 4 5; do
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             ready=0
-            if curl -fsS --max-time 60 "$SMOKE_BASE_URL/health" > /tmp/prod_health.json \
-              && curl -fsS --max-time 60 "$SMOKE_BASE_URL/health/ready" >/dev/null \
-              && curl -fsS --max-time 60 "$SMOKE_BASE_URL/health/dependencies" > /tmp/prod_dependencies.json; then
+            if curl -fsS --max-time 20 "$SMOKE_BASE_URL/health" > /tmp/prod_health.json \
+              && curl -fsS --max-time 20 "$SMOKE_BASE_URL/health/ready" >/dev/null \
+              && curl -fsS --max-time 20 "$SMOKE_BASE_URL/health/dependencies" > /tmp/prod_dependencies.json; then
               deployed_commit="$(python3 -c 'import json; print(json.load(open("/tmp/prod_health.json"))["commit"])')"
               if [ "$deployed_commit" = "${DEPLOY_SHA:0:7}" ]; then
                 ready=1
@@ -206,12 +207,12 @@ jobs:
             if [ "$ready" -eq 1 ]; then
               break
             fi
-            if [ "$attempt" -eq 5 ]; then
-              echo "::error::post-deploy health probe failed after 5 attempts (deployed commit ${deployed_commit:-unknown}, expected ${DEPLOY_SHA:0:7})"
+            if [ "$attempt" -eq 12 ]; then
+              echo "::error::post-deploy health probe failed after 12 attempts (deployed commit ${deployed_commit:-unknown}, expected ${DEPLOY_SHA:0:7})"
               exit 1
             fi
-            echo "Backend is not serving $DEPLOY_SHA yet (attempt $attempt); retrying in 15s"
-            sleep 15
+            echo "Backend is not serving $DEPLOY_SHA yet (attempt $attempt); retrying in 20s"
+            sleep 20
           done
           python3 - <<'PY'
           import json
@@ -230,18 +231,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in 1 2 3 4 5; do
-            code="$(curl -sS --max-time 30 --output /dev/null --write-out '%{http_code}' "$FRONTEND_SMOKE_URL/api/health")"
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            code="$(curl -sS --max-time 20 --output /dev/null --write-out '%{http_code}' "$FRONTEND_SMOKE_URL/api/health")"
             if [ "$code" = "200" ]; then
               echo "Frontend BFF health OK (HTTP $code)."
               exit 0
             fi
-            if [ "$attempt" -eq 5 ]; then
-              echo "::error::frontend health probe failed (HTTP $code) after 5 attempts"
+            if [ "$attempt" -eq 12 ]; then
+              echo "::error::frontend health probe failed (HTTP $code) after 12 attempts"
               exit 1
             fi
-            echo "Frontend is not ready yet (HTTP $code, attempt $attempt); retrying in 15s"
-            sleep 15
+            echo "Frontend is not ready yet (HTTP $code, attempt $attempt); retrying in 20s"
+            sleep 20
           done
 
       - name: Summarize smoke
